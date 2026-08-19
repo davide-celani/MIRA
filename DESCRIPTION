@@ -1,0 +1,30 @@
+Package: MIRA
+Type: Package
+Title: Multilevel Inference and Regression Analysis
+Version: 0.0.1
+Authors@R:
+    person(
+        given = "Davide",
+        family = "Celani",
+        email = "davide.celani.00@gmail.com",
+        role = c("aut", "cre")
+    )
+Description:
+    A framework for accessible Bayesian multilevel, longitudinal, and
+    probabilistic inference. MIRA provides an explicit and inspectable
+    interface for hierarchical Bayesian models, posterior estimands,
+    contrasts, probabilities, and scientifically interpretable quantities.
+    The framework is designed to simplify the use of Bayesian models
+    without hiding their statistical structure.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.2.0)
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Imports:
+    cmdstanr,
+    tibble
+Config/roxygen2/version: 8.1.0

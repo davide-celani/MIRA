@@ -30,7 +30,6 @@
 
 warnings()
 
-devtools::install()
 
 
 devtools::load_all()

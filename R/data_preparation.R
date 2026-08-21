@@ -14,9 +14,9 @@
 #' by the MIRA Stan model:
 #'
 #' \itemize{
-#'   \item observations at `t0` for subjects 1, ..., S;
-#'   \item observations at `t1` for subjects 1, ..., S;
-#'   \item observations at `t2` for subjects 1, ..., S.
+#' \item observations at `t0` for subjects 1, ..., S;
+#' \item observations at `t1` for subjects 1, ..., S;
+#' \item observations at `t2` for subjects 1, ..., S.
 #' }
 #'
 #' Subject identifiers are internally represented using consecutive
@@ -29,14 +29,14 @@
 #'
 #' @param data A data frame containing one row per subject. The data frame
 #'   must contain the following columns:
-#'   \describe{
-#'     \item{patient}{A unique subject identifier. Missing and duplicated
-#'       identifiers are not allowed.}
-#'     \item{t0}{Numeric outcome measurement at the baseline time point.}
-#'     \item{t1}{Numeric outcome measurement at the first follow-up time
-#'       point.}
-#'     \item{t2}{Numeric outcome measurement at the second follow-up time
-#'       point.}
+#'   \itemize{
+#'     \item \code{patient} : A unique subject identifier. Missing and duplicated
+#'     identifiers are not allowed.
+#'     \item \code{t0} : Numeric outcome measurement at the baseline time point.
+#'     \item \code{t1} : Numeric outcome measurement at the first follow-up time
+#'       point.
+#'     \item \code{t2} : Numeric outcome measurement at the second follow-up time
+#'       point.
 #'   }
 #'
 #' @param time_value A numeric vector of length three containing the

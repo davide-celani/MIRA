@@ -9,14 +9,14 @@ mira_prepare_data(data, time_value = c(0, 6, 12), meaningful_change = 5)
 \arguments{
 \item{data}{A data frame containing one row per subject. The data frame
 must contain the following columns:
-\describe{
-\item{patient}{A unique subject identifier. Missing and duplicated
-identifiers are not allowed.}
-\item{t0}{Numeric outcome measurement at the baseline time point.}
-\item{t1}{Numeric outcome measurement at the first follow-up time
-point.}
-\item{t2}{Numeric outcome measurement at the second follow-up time
-point.}
+\itemize{
+\item \code{patient} : A unique subject identifier. Missing and duplicated
+identifiers are not allowed.
+\item \code{t0} : Numeric outcome measurement at the baseline time point.
+\item \code{t1} : Numeric outcome measurement at the first follow-up time
+point.
+\item \code{t2} : Numeric outcome measurement at the second follow-up time
+point.
 }}
 
 \item{time_value}{A numeric vector of length three containing the

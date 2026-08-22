@@ -97,6 +97,39 @@ data$t2 <- rnorm(
 )
 
 
+
+
+
+
+res <- mira_info(
+  data = data,
+  id = "patient",
+  time_vars = c("t0", "t1", "t2"),
+  time_labels = c(
+    "Baseline",
+    "Time 1",
+    "Time 2"
+  ),
+  plots = TRUE,
+  model = TRUE,
+  outliers = TRUE,
+  correlations = TRUE,
+  verbose = TRUE
+)
+
+
+res$descriptives
+res$change
+res$variability
+res$trajectories
+res$long_data
+res$call
+res$overview
+res$missing
+res$correlations
+res$plots
+res$outliers
+res$model
 # ------------------------------------------------------------
 # Prepare data for Stan
 # ------------------------------------------------------------

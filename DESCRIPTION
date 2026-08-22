@@ -26,5 +26,7 @@ Suggests:
 Config/testthat/edition: 3
 Imports:
     cmdstanr,
+    ggplot2,
+    lme4,
     tibble
 Config/roxygen2/version: 8.1.0

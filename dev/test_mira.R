@@ -128,6 +128,7 @@ res$overview
 res$missing
 res$correlations
 res$plots
+res$plots$spaghetti
 res$outliers
 res$model
 # ------------------------------------------------------------

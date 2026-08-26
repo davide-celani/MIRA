@@ -1569,86 +1569,435 @@ mira_info <- function(data,
       # ------------------------------------------------------
       # BOXPLOT
       # ------------------------------------------------------
+      #
+      # Distribution at each timepoint
+      # + individual observations
+      # + population mean
+      # + 95% CI
+      # + median
+      # + N per timepoint
+      # ------------------------------------------------------
+
+
+      # ------------------------------------------------------
+      # SUMMARY PER TIMEPOINT
+      # ------------------------------------------------------
+
+      boxplot_summary <-
+
+        long_data |>
+
+        dplyr::filter(
+
+          !is.na(value),
+
+          !is.na(time_label)
+
+        ) |>
+
+        dplyr::group_by(
+
+          time,
+
+          time_label
+
+        ) |>
+
+        dplyr::summarise(
+
+          n =
+            dplyr::n_distinct(patient),
+
+          mean =
+            mean(
+              value,
+              na.rm = TRUE
+            ),
+
+          se =
+            stats::sd(
+              value,
+              na.rm = TRUE
+            ) /
+            sqrt(
+              sum(
+                !is.na(value)
+              )
+            ),
+
+          ci_lower =
+            mean -
+            stats::qt(
+              0.975,
+              df =
+                sum(
+                  !is.na(value)
+                ) - 1
+            ) *
+            se,
+
+          ci_upper =
+            mean +
+            stats::qt(
+              0.975,
+              df =
+                sum(
+                  !is.na(value)
+                ) - 1
+            ) *
+            se,
+
+          median =
+            stats::median(
+              value,
+              na.rm = TRUE
+            ),
+
+          .groups = "drop"
+
+        )
+
+
+      # ------------------------------------------------------
+      # LABEL CON N
+      # ------------------------------------------------------
+
+      boxplot_summary$time_label_n <-
+
+        paste0(
+
+          boxplot_summary$time_label,
+
+          "\n(N = ",
+
+          boxplot_summary$n,
+
+          ")"
+
+        )
+
+
+      # ------------------------------------------------------
+      # ORDINE DEI TIMEPOINT
+      # ------------------------------------------------------
+
+      long_data_boxplot <-
+
+        long_data |>
+
+        dplyr::mutate(
+
+          time_label = factor(
+
+            time_label,
+
+            levels =
+              boxplot_summary$time_label
+
+          )
+
+        )
+
+
+      boxplot_summary$time_label <-
+
+        factor(
+
+          boxplot_summary$time_label,
+
+          levels =
+            boxplot_summary$time_label
+
+        )
+
+
+      # ------------------------------------------------------
+      # BOXPLOT
+      # ------------------------------------------------------
 
       plots_list$boxplot <-
 
         ggplot2::ggplot(
 
-          long_data,
+          long_data_boxplot,
 
           ggplot2::aes(
+
             x = time_label,
+
             y = value
+
           )
+
         ) +
 
-        ggplot2::geom_boxplot(
-          fill = "#4C78A8",
-          alpha = 0.7,
-          na.rm = TRUE
-        ) +
+        # ----------------------------------------------------
+      # 1. BOXPLOT
+      #
+      # IQR + median
+      # ----------------------------------------------------
 
-        ggplot2::geom_jitter(
-          width = 0.08,
-          alpha = 0.25,
-          na.rm = TRUE
-        ) +
+      ggplot2::geom_boxplot(
 
-        ggplot2::labs(
+        width = 0.55,
 
-          x = "Time",
+        fill = "grey92",
 
-          y = "Value",
+        color = "grey30",
 
-          title =
-            "Distribution by timepoint"
-        ) +
+        linewidth = 0.7,
 
-        ggplot2::theme_minimal()
+        outlier.shape = NA,
 
+        na.rm = TRUE
 
-      # ------------------------------------------------------
-      # SPAGHETTI PLOT
-      # ------------------------------------------------------
+      ) +
 
-      # ------------------------------------------------------
-      # Variabile numerica per la posizione temporale
-      # ------------------------------------------------------
+        # ----------------------------------------------------
+      # 2. INDIVIDUAL OBSERVATIONS
+      #
+      # Jitter trasparente per mostrare la distribuzione
+      # ----------------------------------------------------
 
-      long_data_spaghetti <- long_data
+      ggplot2::geom_jitter(
 
-      long_data_spaghetti$time_index <-
-        match(
-          long_data_spaghetti$time,
-          time_vars
-        )
+        width = 0.10,
 
+        height = 0,
 
-      # ------------------------------------------------------
-      # Summary per timepoint
-      # ------------------------------------------------------
+        alpha = 0.22,
 
-      trajectory_summary_plot <- data.frame(
+        size = 1.5,
 
-        time = time_vars,
+        color = "grey35",
 
-        time_index = seq_along(time_vars),
+        na.rm = TRUE
 
-        time_label = unname(
-          time_labels[time_vars]
+      ) +
+
+        # ----------------------------------------------------
+      # 3. 95% CONFIDENCE INTERVAL DELLA MEDIA
+      # ----------------------------------------------------
+
+      ggplot2::geom_errorbar(
+
+        data =
+          boxplot_summary,
+
+        ggplot2::aes(
+
+          x = time_label,
+
+          ymin = ci_lower,
+
+          ymax = ci_upper
+
         ),
 
-        mean = descriptives$mean,
+        inherit.aes = FALSE,
 
-        se = descriptives$se,
+        width = 0.10,
 
-        ci_lower = descriptives$ci_lower,
+        linewidth = 1.0,
 
-        ci_upper = descriptives$ci_upper,
+        color = "#2C7BB6",
 
-        stringsAsFactors = FALSE
+        na.rm = TRUE
 
-      )
+      ) +
+
+        # ----------------------------------------------------
+      # 4. POPULATION MEAN
+      # ----------------------------------------------------
+
+      ggplot2::geom_point(
+
+        data =
+          boxplot_summary,
+
+        ggplot2::aes(
+
+          x = time_label,
+
+          y = mean
+
+        ),
+
+        inherit.aes = FALSE,
+
+        shape = 21,
+
+        size = 3.8,
+
+        stroke = 1.1,
+
+        fill = "white",
+
+        color = "#2C7BB6",
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 5. MEDIAN
+      #
+      # Punto piccolo per rendere la mediana facilmente
+      # identificabile anche quando il box è compatto
+      # ----------------------------------------------------
+
+      ggplot2::geom_point(
+
+        data =
+          boxplot_summary,
+
+        ggplot2::aes(
+
+          x = time_label,
+
+          y = median
+
+        ),
+
+        inherit.aes = FALSE,
+
+        shape = 95,
+
+        size = 7,
+
+        color = "grey20",
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 6. X AXIS
+      # ----------------------------------------------------
+
+      ggplot2::scale_x_discrete(
+
+        labels =
+          boxplot_summary$time_label_n
+
+      ) +
+
+        # ----------------------------------------------------
+      # 7. LABELS
+      # ----------------------------------------------------
+
+      ggplot2::labs(
+
+        x = NULL,
+
+        y = "Value",
+
+        title =
+          "Distribution of Values Across Timepoints",
+
+        subtitle =
+          "Individual observations, interquartile range, population mean and 95% confidence interval"
+
+      ) +
+
+        # ----------------------------------------------------
+      # 8. THEME
+      # ----------------------------------------------------
+
+      ggplot2::theme_minimal(
+
+        base_size = 12
+
+      ) +
+
+        ggplot2::theme(
+
+          plot.title =
+
+            ggplot2::element_text(
+
+              face = "bold",
+
+              size = 15
+
+            ),
+
+          plot.subtitle =
+
+            ggplot2::element_text(
+
+              size = 10,
+
+              color = "grey35"
+
+            ),
+
+          axis.title.y =
+
+            ggplot2::element_text(
+
+              face = "bold"
+
+            ),
+
+          axis.text.x =
+
+            ggplot2::element_text(
+
+              angle = 0,
+
+              hjust = 0.5,
+
+              lineheight = 0.9
+
+            ),
+
+          axis.text.y =
+
+            ggplot2::element_text(
+
+              color = "grey25"
+
+            ),
+
+          panel.grid.minor =
+
+            ggplot2::element_blank(),
+
+          panel.grid.major.x =
+
+            ggplot2::element_blank(),
+
+          panel.grid.major.y =
+
+            ggplot2::element_line(
+
+              color = "grey90",
+
+              linewidth = 0.4
+
+            ),
+
+          legend.position =
+
+            "none",
+
+          plot.margin =
+
+            ggplot2::margin(
+
+              12,
+
+              18,
+
+              12,
+
+              12
+
+            )
+
+        )
+
 
 
       # ------------------------------------------------------

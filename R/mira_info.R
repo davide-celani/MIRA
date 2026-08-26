@@ -1,6 +1,32 @@
 # ============================================================
 # MIRA_INFO
-# Comprehensive longitudinal data analysis
+# Comprehensive Longitudinal Data Analysis
+#
+# Automatic outcome detection
+#
+# Expected column structure:
+#
+#   BCVA_t0
+#   BCVA_t1
+#   BCVA_t2
+#
+# or:
+#
+#   CMT_t0
+#   CMT_t1
+#   CMT_t2
+#
+# or:
+#
+#   IOP_t0
+#   IOP_t1
+#   IOP_t2
+#
+# The function automatically detects:
+#
+#   outcome = BCVA / CMT / IOP / ...
+#   timepoints = t0 / t1 / t2 / ...
+#
 # ============================================================
 
 
@@ -19,23 +45,38 @@ mira_info <- function(data,
                       correlations = TRUE,
                       verbose = TRUE) {
 
+
   # ----------------------------------------------------------
   # 0. CHECK INPUT
   # ----------------------------------------------------------
 
   if (!is.data.frame(data)) {
-    stop("data deve essere un data.frame.")
+
+    stop(
+      "data deve essere un data.frame."
+    )
   }
+
 
   if (nrow(data) == 0) {
-    stop("Il dataset non contiene osservazioni.")
+
+    stop(
+      "Il dataset non contiene osservazioni."
+    )
   }
 
-  if (!is.character(id) || length(id) != 1) {
-    stop("id deve essere il nome di una sola variabile.")
+
+  if (!is.character(id) ||
+      length(id) != 1) {
+
+    stop(
+      "id deve essere il nome di una sola variabile."
+    )
   }
+
 
   if (!id %in% names(data)) {
+
     stop(
       sprintf(
         "La variabile ID '%s' non esiste nel dataset.",
@@ -44,59 +85,287 @@ mira_info <- function(data,
     )
   }
 
+
   if (!is.numeric(alpha) ||
       length(alpha) != 1 ||
       is.na(alpha) ||
       alpha <= 0 ||
       alpha >= 1) {
 
-    stop("alpha deve essere un numero compreso tra 0 e 1.")
+    stop(
+      "alpha deve essere un numero compreso tra 0 e 1."
+    )
   }
 
 
   # ----------------------------------------------------------
-  # 1. IDENTIFICAZIONE TIMEPOINT
+  # 1. IDENTIFICAZIONE AUTOMATICA OUTCOME + TIMEPOINT
   # ----------------------------------------------------------
+
+  #
+  # La struttura attesa è:
+  #
+  # OUTCOME_t0
+  # OUTCOME_t1
+  # OUTCOME_t2
+  #
+  # ecc.
+  #
 
   if (is.null(time_vars)) {
 
-    # Prima cerca t0, t1, t2, ...
-    time_vars <- grep(
-      "^t[0-9]+$",
+
+    # --------------------------------------------------------
+    # Cerca tutte le colonne che rispettano:
+    #
+    # qualcosa_tnumero
+    #
+    # Esempi:
+    # BCVA_t0
+    # CMT_t1
+    # IOP_t2
+    # --------------------------------------------------------
+
+    matched <- grep(
+      "^(.+)_t([0-9]+)$",
       names(data),
       value = TRUE
     )
 
-    # Se non trova t0/t1/t2...
-    # cerca variabili numeriche
-    if (length(time_vars) == 0) {
 
-      numeric_vars <- names(data)[
-        vapply(
-          data,
-          is.numeric,
-          logical(1)
+    if (length(matched) == 0) {
+
+      stop(
+        paste0(
+          "Non sono state trovate variabili longitudinali.\n\n",
+          "Il dataset deve contenere colonne con struttura:\n\n",
+          "  BCVA_t0\n",
+          "  BCVA_t1\n",
+          "  BCVA_t2\n\n",
+          "oppure:\n\n",
+          "  CMT_t0\n",
+          "  CMT_t1\n",
+          "  CMT_t2\n\n",
+          "oppure qualsiasi altro OUTCOME_tTIME."
         )
-      ]
-
-      time_vars <- setdiff(
-        numeric_vars,
-        id
       )
     }
-  }
 
-  if (!is.character(time_vars) ||
-      length(time_vars) < 2) {
 
-    stop(
-      paste0(
-        "Sono necessarie almeno due variabili longitudinali.\n",
-        "Variabili trovate: ",
-        paste(time_vars, collapse = ", ")
+    # --------------------------------------------------------
+    # Estrae il nome dell'outcome
+    # --------------------------------------------------------
+
+    outcome_names <- sub(
+      "_t[0-9]+$",
+      "",
+      matched
+    )
+
+
+    unique_outcomes <- unique(
+      outcome_names
+    )
+
+
+    # --------------------------------------------------------
+    # Deve esserci un solo outcome
+    # --------------------------------------------------------
+
+    if (length(unique_outcomes) > 1) {
+
+      stop(
+        paste0(
+          "Sono stati rilevati più outcome nello stesso dataset:\n\n",
+          paste(
+            unique_outcomes,
+            collapse = ", "
+          ),
+          "\n\n",
+          "mira_info() analizza un outcome alla volta.\n",
+          "Usa un dataset contenente un solo outcome longitudinale ",
+          "oppure seleziona esplicitamente le colonne tramite ",
+          "time_vars."
+        )
+      )
+    }
+
+
+    outcome_name <- unique_outcomes[1]
+
+
+    # --------------------------------------------------------
+    # Estrae il numero del timepoint
+    # --------------------------------------------------------
+
+    time_numbers <- as.numeric(
+      sub(
+        "^.+_t([0-9]+)$",
+        "\\1",
+        matched
       )
     )
+
+
+    # --------------------------------------------------------
+    # Ordina cronologicamente
+    #
+    # t0, t1, t2, ..., t10
+    #
+    # --------------------------------------------------------
+
+    time_vars <- matched[
+      order(time_numbers)
+    ]
+
+
+  } else {
+
+
+    # --------------------------------------------------------
+    # TIME_VARS FORNITO MANUALMENTE
+    # --------------------------------------------------------
+
+    if (!is.character(time_vars) ||
+        length(time_vars) < 2) {
+
+      stop(
+        "time_vars deve contenere almeno due variabili longitudinali."
+      )
+    }
+
+
+    # --------------------------------------------------------
+    # Controlla che le variabili esistano
+    # --------------------------------------------------------
+
+    missing_vars <- setdiff(
+      time_vars,
+      names(data)
+    )
+
+
+    if (length(missing_vars) > 0) {
+
+      stop(
+        paste0(
+          "Le seguenti variabili non esistono nel dataset: ",
+          paste(
+            missing_vars,
+            collapse = ", "
+          )
+        )
+      )
+    }
+
+
+    # --------------------------------------------------------
+    # Controlla formato OUTCOME_tTIME
+    # --------------------------------------------------------
+
+    invalid_time_vars <- time_vars[
+      !grepl(
+        "^(.+)_t([0-9]+)$",
+        time_vars
+      )
+    ]
+
+
+    if (length(invalid_time_vars) > 0) {
+
+      stop(
+        paste0(
+          "Le seguenti variabili non rispettano il formato ",
+          "'OUTCOME_tTIME': ",
+          paste(
+            invalid_time_vars,
+            collapse = ", "
+          )
+        )
+      )
+    }
+
+
+    # --------------------------------------------------------
+    # Estrae outcome
+    # --------------------------------------------------------
+
+    outcome_names <- sub(
+      "_t[0-9]+$",
+      "",
+      time_vars
+    )
+
+
+    unique_outcomes <- unique(
+      outcome_names
+    )
+
+
+    if (length(unique_outcomes) > 1) {
+
+      stop(
+        paste0(
+          "time_vars contiene più outcome:\n\n",
+          paste(
+            unique_outcomes,
+            collapse = ", "
+          ),
+          "\n\n",
+          "mira_info() analizza un solo outcome alla volta."
+        )
+      )
+    }
+
+
+    outcome_name <- unique_outcomes[1]
+
+
+    # --------------------------------------------------------
+    # Ordina timepoint
+    # --------------------------------------------------------
+
+    time_numbers <- as.numeric(
+      sub(
+        "^.+_t([0-9]+)$",
+        "\\1",
+        time_vars
+      )
+    )
+
+
+    time_vars <- time_vars[
+      order(time_numbers)
+    ]
   }
+
+
+  # ----------------------------------------------------------
+  # Nome visualizzato
+  #
+  # BCVA -> BCVA
+  # cmt  -> CMT
+  # iop  -> IOP
+  # ----------------------------------------------------------
+
+  outcome_display <- toupper(
+    outcome_name
+  )
+
+
+  # ----------------------------------------------------------
+  # Timepoint names
+  #
+  # BCVA_t0 -> t0
+  # BCVA_t1 -> t1
+  # BCVA_t2 -> t2
+  # ----------------------------------------------------------
+
+  detected_time_labels <- sub(
+    "^.+_(t[0-9]+)$",
+    "\\1",
+    time_vars
+  )
 
 
   # ----------------------------------------------------------
@@ -108,15 +377,20 @@ mira_info <- function(data,
     names(data)
   )
 
+
   if (length(missing_vars) > 0) {
 
     stop(
       paste0(
         "Le seguenti variabili non esistono nel dataset: ",
-        paste(missing_vars, collapse = ", ")
+        paste(
+          missing_vars,
+          collapse = ", "
+        )
       )
     )
   }
+
 
   non_numeric <- time_vars[
     !vapply(
@@ -126,12 +400,16 @@ mira_info <- function(data,
     )
   ]
 
+
   if (length(non_numeric) > 0) {
 
     stop(
       paste0(
         "Le variabili longitudinali devono essere numeriche: ",
-        paste(non_numeric, collapse = ", ")
+        paste(
+          non_numeric,
+          collapse = ", "
+        )
       )
     )
   }
@@ -143,7 +421,7 @@ mira_info <- function(data,
 
   if (is.null(time_labels)) {
 
-    time_labels <- time_vars
+    time_labels <- detected_time_labels
 
   } else {
 
@@ -154,10 +432,15 @@ mira_info <- function(data,
       )
     }
 
+
     if (!is.character(time_labels)) {
-      time_labels <- as.character(time_labels)
+
+      time_labels <- as.character(
+        time_labels
+      )
     }
   }
+
 
   names(time_labels) <- time_vars
 
@@ -166,13 +449,15 @@ mira_info <- function(data,
   # 4. HELPER FUNCTIONS
   # ----------------------------------------------------------
 
-  mean_ci <- function(x, alpha = 0.05) {
+  mean_ci <- function(x,
+                      alpha = 0.05) {
 
     x <- x[
       is.finite(x)
     ]
 
     n <- length(x)
+
 
     if (n == 0) {
 
@@ -186,7 +471,9 @@ mira_info <- function(data,
       )
     }
 
+
     m <- mean(x)
+
 
     if (n < 2) {
 
@@ -200,14 +487,17 @@ mira_info <- function(data,
       )
     }
 
+
     s <- sd(x)
 
     se <- s / sqrt(n)
+
 
     crit <- qt(
       1 - alpha / 2,
       df = n - 1
     )
+
 
     c(
       mean = m,
@@ -220,11 +510,18 @@ mira_info <- function(data,
 
   safe_mean <- function(x) {
 
-    x <- x[is.finite(x)]
+    x <- x[
+      is.finite(x)
+    ]
+
 
     if (length(x) == 0) {
-      return(NA_real_)
+
+      return(
+        NA_real_
+      )
     }
+
 
     mean(x)
   }
@@ -232,11 +529,18 @@ mira_info <- function(data,
 
   safe_sd <- function(x) {
 
-    x <- x[is.finite(x)]
+    x <- x[
+      is.finite(x)
+    ]
+
 
     if (length(x) < 2) {
-      return(NA_real_)
+
+      return(
+        NA_real_
+      )
     }
+
 
     sd(x)
   }
@@ -244,23 +548,38 @@ mira_info <- function(data,
 
   safe_median <- function(x) {
 
-    x <- x[is.finite(x)]
+    x <- x[
+      is.finite(x)
+    ]
+
 
     if (length(x) == 0) {
-      return(NA_real_)
+
+      return(
+        NA_real_
+      )
     }
+
 
     median(x)
   }
 
 
-  safe_quantile <- function(x, p) {
+  safe_quantile <- function(x,
+                            p) {
 
-    x <- x[is.finite(x)]
+    x <- x[
+      is.finite(x)
+    ]
+
 
     if (length(x) == 0) {
-      return(NA_real_)
+
+      return(
+        NA_real_
+      )
     }
+
 
     as.numeric(
       quantile(
@@ -274,11 +593,18 @@ mira_info <- function(data,
 
   safe_var <- function(x) {
 
-    x <- x[is.finite(x)]
+    x <- x[
+      is.finite(x)
+    ]
+
 
     if (length(x) < 2) {
-      return(NA_real_)
+
+      return(
+        NA_real_
+      )
     }
+
 
     var(x)
   }
@@ -290,7 +616,9 @@ mira_info <- function(data,
 
   n_rows <- nrow(data)
 
+
   patient_values <- data[[id]]
+
 
   n_patients <- length(
     unique(
@@ -299,6 +627,7 @@ mira_info <- function(data,
       ]
     )
   )
+
 
   duplicated_ids <- sum(
     duplicated(
@@ -309,8 +638,9 @@ mira_info <- function(data,
   )
 
 
-  # Complete profile:
-  # il paziente deve avere tutte le misure disponibili
+  # ----------------------------------------------------------
+  # Complete profile
+  # ----------------------------------------------------------
 
   complete_cases <- sum(
     complete.cases(
@@ -324,30 +654,41 @@ mira_info <- function(data,
   # ----------------------------------------------------------
 
   descriptive_list <- lapply(
+
     time_vars,
+
     function(v) {
 
+
       x <- data[[v]]
+
 
       finite_x <- x[
         is.finite(x)
       ]
 
-      n <- length(finite_x)
+
+      n <- length(
+        finite_x
+      )
+
 
       missing_n <- sum(
         is.na(x)
       )
+
 
       non_finite_n <- sum(
         !is.na(x) &
           !is.finite(x)
       )
 
+
       ci <- mean_ci(
         x,
         alpha = alpha
       )
+
 
       m <- safe_mean(x)
 
@@ -355,15 +696,18 @@ mira_info <- function(data,
 
       variance <- safe_var(x)
 
+
       q1 <- safe_quantile(
         x,
         0.25
       )
 
+
       q3 <- safe_quantile(
         x,
         0.75
       )
+
 
       cv <- if (
         !is.na(m) &&
@@ -378,6 +722,7 @@ mira_info <- function(data,
         NA_real_
       }
 
+
       data.frame(
 
         time = v,
@@ -391,9 +736,12 @@ mira_info <- function(data,
         missing = missing_n,
 
         missing_pct =
-          missing_n / n_rows * 100,
+          missing_n /
+          n_rows *
+          100,
 
-        non_finite = non_finite_n,
+        non_finite =
+          non_finite_n,
 
         mean = m,
 
@@ -401,19 +749,23 @@ mira_info <- function(data,
 
         variance = variance,
 
-        se = unname(
-          ci["se"]
-        ),
+        se =
+          unname(
+            ci["se"]
+          ),
 
-        ci_lower = unname(
-          ci["lower"]
-        ),
+        ci_lower =
+          unname(
+            ci["lower"]
+          ),
 
-        ci_upper = unname(
-          ci["upper"]
-        ),
+        ci_upper =
+          unname(
+            ci["upper"]
+          ),
 
-        median = safe_median(x),
+        median =
+          safe_median(x),
 
         q1 = q1,
 
@@ -424,22 +776,31 @@ mira_info <- function(data,
             !is.na(q1) &&
             !is.na(q3)
           ) {
+
             q3 - q1
+
           } else {
+
             NA_real_
           },
 
         min =
           if (n > 0) {
+
             min(finite_x)
+
           } else {
+
             NA_real_
           },
 
         max =
           if (n > 0) {
+
             max(finite_x)
+
           } else {
+
             NA_real_
           },
 
@@ -450,12 +811,60 @@ mira_info <- function(data,
     }
   )
 
+
   descriptives <- do.call(
     rbind,
     descriptive_list
   )
 
-  rownames(descriptives) <- NULL
+
+  rownames(
+    descriptives
+  ) <- NULL
+
+
+  # ----------------------------------------------------------
+  # Outcome-specific descriptive column names
+  #
+  # BCVA_mean
+  # BCVA_sd
+  # BCVA_median
+  # ...
+  # ----------------------------------------------------------
+
+  descriptives[[paste0(
+    outcome_name,
+    "_mean"
+  )]] <-
+    descriptives$mean
+
+
+  descriptives[[paste0(
+    outcome_name,
+    "_sd"
+  )]] <-
+    descriptives$sd
+
+
+  descriptives[[paste0(
+    outcome_name,
+    "_median"
+  )]] <-
+    descriptives$median
+
+
+  descriptives[[paste0(
+    outcome_name,
+    "_ci_lower"
+  )]] <-
+    descriptives$ci_lower
+
+
+  descriptives[[paste0(
+    outcome_name,
+    "_ci_upper"
+  )]] <-
+    descriptives$ci_upper
 
 
   # ----------------------------------------------------------
@@ -464,7 +873,8 @@ mira_info <- function(data,
 
   missing_by_patient <- data.frame(
 
-    patient = data[[id]],
+    patient =
+      data[[id]],
 
     missing_n =
       rowSums(
@@ -488,25 +898,28 @@ mira_info <- function(data,
 
     time = time_vars,
 
-    label = unname(
-      time_labels[time_vars]
-    ),
+    label =
+      unname(
+        time_labels[time_vars]
+      ),
 
-    missing_n = vapply(
-      data[time_vars],
-      function(x) {
-        sum(is.na(x))
-      },
-      numeric(1)
-    ),
+    missing_n =
+      vapply(
+        data[time_vars],
+        function(x) {
+          sum(is.na(x))
+        },
+        numeric(1)
+      ),
 
-    missing_pct = vapply(
-      data[time_vars],
-      function(x) {
-        mean(is.na(x)) * 100
-      },
-      numeric(1)
-    ),
+    missing_pct =
+      vapply(
+        data[time_vars],
+        function(x) {
+          mean(is.na(x)) * 100
+        },
+        numeric(1)
+      ),
 
     stringsAsFactors = FALSE
   )
@@ -520,56 +933,96 @@ mira_info <- function(data,
 
   counter <- 1
 
+
   for (i in seq_len(
     length(time_vars) - 1
   )) {
 
+
     for (j in (i + 1):length(time_vars)) {
+
 
       v1 <- time_vars[i]
 
       v2 <- time_vars[j]
 
+
       x <- data[[v1]]
 
       y <- data[[v2]]
 
-      keep <- complete.cases(x, y)
 
-      x_complete <- x[keep]
+      keep <- complete.cases(
+        x,
+        y
+      )
 
-      y_complete <- y[keep]
 
-      delta <- y_complete - x_complete
+      x_complete <- x[
+        keep
+      ]
 
-      # Elimina eventuali Inf
-      finite <- is.finite(delta)
 
-      delta <- delta[finite]
+      y_complete <- y[
+        keep
+      ]
 
-      x_complete <- x_complete[finite]
 
-      y_complete <- y_complete[finite]
+      delta <- y_complete -
+        x_complete
+
+
+      finite <- is.finite(
+        delta
+      )
+
+
+      delta <-
+        delta[finite]
+
+
+      x_complete <-
+        x_complete[finite]
+
+
+      y_complete <-
+        y_complete[finite]
+
 
       n <- length(delta)
 
+
       if (n == 0) {
+
         next
       }
 
-      delta_mean <- mean(delta)
+
+      delta_mean <-
+        mean(delta)
+
 
       delta_sd <-
+
         if (n >= 2) {
+
           sd(delta)
+
         } else {
+
           NA_real_
         }
 
+
       delta_se <-
+
         if (n >= 2) {
-          delta_sd / sqrt(n)
+
+          delta_sd /
+            sqrt(n)
+
         } else {
+
           NA_real_
         }
 
@@ -581,13 +1034,17 @@ mira_info <- function(data,
           df = n - 1
         )
 
+
         ci_low <-
           delta_mean -
-          tcrit * delta_se
+          tcrit *
+          delta_se
+
 
         ci_high <-
           delta_mean +
-          tcrit * delta_se
+          tcrit *
+          delta_se
 
       } else {
 
@@ -597,16 +1054,20 @@ mira_info <- function(data,
       }
 
 
+      # ------------------------------------------------------
       # Cohen's dz
+      # ------------------------------------------------------
 
       effect_size <-
+
         if (
           n >= 2 &&
           !is.na(delta_sd) &&
           delta_sd > 0
         ) {
 
-          delta_mean / delta_sd
+          delta_mean /
+            delta_sd
 
         } else {
 
@@ -614,7 +1075,9 @@ mira_info <- function(data,
         }
 
 
+      # ------------------------------------------------------
       # Paired t-test
+      # ------------------------------------------------------
 
       ttest <- tryCatch(
 
@@ -632,18 +1095,25 @@ mira_info <- function(data,
 
 
       p_value <-
+
         if (!is.null(ttest)) {
+
           ttest$p.value
+
         } else {
+
           NA_real_
         }
 
 
+      # ------------------------------------------------------
       # Wilcoxon
+      # ------------------------------------------------------
 
       wilcox <- tryCatch(
 
         suppressWarnings(
+
           wilcox.test(
             y_complete,
             x_complete,
@@ -659,32 +1129,57 @@ mira_info <- function(data,
 
 
       wilcox_p <-
+
         if (!is.null(wilcox)) {
+
           wilcox$p.value
+
         } else {
+
           NA_real_
         }
 
+
+      # ------------------------------------------------------
+      # Direction
+      # ------------------------------------------------------
 
       improved <- sum(
         delta > 0
       )
 
+
       worsened <- sum(
         delta < 0
       )
+
 
       unchanged <- sum(
         delta == 0
       )
 
 
+      # ------------------------------------------------------
+      # Store result
+      # ------------------------------------------------------
+
       change_list[[counter]] <-
+
         data.frame(
 
           from = v1,
 
           to = v2,
+
+          from_label =
+            unname(
+              time_labels[v1]
+            ),
+
+          to_label =
+            unname(
+              time_labels[v2]
+            ),
 
           n = n,
 
@@ -716,19 +1211,25 @@ mira_info <- function(data,
             improved,
 
           improved_pct =
-            improved / n * 100,
+            improved /
+            n *
+            100,
 
           worsened_n =
             worsened,
 
           worsened_pct =
-            worsened / n * 100,
+            worsened /
+            n *
+            100,
 
           unchanged_n =
             unchanged,
 
           unchanged_pct =
-            unchanged / n * 100,
+            unchanged /
+            n *
+            100,
 
           paired_t_p =
             p_value,
@@ -739,10 +1240,15 @@ mira_info <- function(data,
           stringsAsFactors = FALSE
         )
 
+
       counter <- counter + 1
     }
   }
 
+
+  # ----------------------------------------------------------
+  # Combine change results
+  # ----------------------------------------------------------
 
   if (length(change_list) > 0) {
 
@@ -751,32 +1257,85 @@ mira_info <- function(data,
       change_list
     )
 
+
     rownames(change) <- NULL
 
   } else {
 
     change <- data.frame(
+
       from = character(0),
+
       to = character(0),
+
+      from_label = character(0),
+
+      to_label = character(0),
+
       n = numeric(0),
+
       mean_from = numeric(0),
+
       mean_to = numeric(0),
+
       mean_change = numeric(0),
+
       sd_change = numeric(0),
+
       se_change = numeric(0),
+
       ci_lower = numeric(0),
+
       ci_upper = numeric(0),
+
       cohens_dz = numeric(0),
+
       improved_n = numeric(0),
+
       improved_pct = numeric(0),
+
       worsened_n = numeric(0),
+
       worsened_pct = numeric(0),
+
       unchanged_n = numeric(0),
+
       unchanged_pct = numeric(0),
+
       paired_t_p = numeric(0),
+
       wilcoxon_p = numeric(0),
+
       stringsAsFactors = FALSE
     )
+  }
+
+
+  # ----------------------------------------------------------
+  # Outcome-specific change columns
+  # ----------------------------------------------------------
+
+  if (nrow(change) > 0) {
+
+    change[[paste0(
+      outcome_name,
+      "_change"
+    )]] <-
+      change$mean_change
+
+
+    change[[paste0(
+      outcome_name,
+      "_mean_from"
+    )]] <-
+      change$mean_from
+
+
+    change[[paste0(
+      outcome_name,
+      "_mean_to"
+    )]] <-
+      change$mean_to
   }
 
 
@@ -790,6 +1349,7 @@ mira_info <- function(data,
 
 
   if (correlations) {
+
 
     correlation_pearson <- tryCatch(
 
@@ -825,35 +1385,55 @@ mira_info <- function(data,
   # ----------------------------------------------------------
 
   long_list <- lapply(
+
     time_vars,
+
     function(v) {
 
       data.frame(
 
-        patient = data[[id]],
+        patient =
+          data[[id]],
+
+        outcome =
+          outcome_name,
 
         time = v,
 
-        value = data[[v]],
+        time_label =
+          unname(
+            time_labels[v]
+          ),
+
+        value =
+          data[[v]],
 
         stringsAsFactors = FALSE
       )
     }
   )
 
+
   long_data <- do.call(
     rbind,
     long_list
   )
 
+
   rownames(long_data) <- NULL
 
 
-  long_data$time_label <- factor(
-    long_data$time,
-    levels = time_vars,
-    labels = time_labels
-  )
+  long_data$time_label <-
+
+    factor(
+
+      long_data$time_label,
+
+      levels =
+        unname(
+          time_labels[time_vars]
+        )
+    )
 
 
   # ----------------------------------------------------------
@@ -861,17 +1441,25 @@ mira_info <- function(data,
   # ----------------------------------------------------------
 
   individual_means <- apply(
+
     data[time_vars],
+
     1,
+
     function(x) {
 
       x <- x[
         is.finite(x)
       ]
 
+
       if (length(x) == 0) {
-        return(NA_real_)
+
+        return(
+          NA_real_
+        )
       }
+
 
       mean(x)
     }
@@ -888,22 +1476,27 @@ mira_info <- function(data,
   )
 
 
+  # ----------------------------------------------------------
   # Patient means
+  # ----------------------------------------------------------
 
   patient_means <- tapply(
+
     long_data$value,
+
     long_data$patient,
+
     safe_mean
   )
 
-
-  # Match patient means back to long data
 
   patient_key <- as.character(
     long_data$patient
   )
 
+
   long_data$patient_mean <-
+
     unname(
       patient_means[
         patient_key
@@ -912,6 +1505,7 @@ mira_info <- function(data,
 
 
   residuals_within <-
+
     long_data$value -
     long_data$patient_mean
 
@@ -935,10 +1529,21 @@ mira_info <- function(data,
 
   df_within <- NA_real_
 
+
   complete_long <- long_data[
-    is.finite(long_data$value) &
-      !is.na(long_data$patient_mean) &
-      !is.na(long_data$patient),
+
+    is.finite(
+      long_data$value
+    ) &
+
+      !is.na(
+        long_data$patient_mean
+      ) &
+
+      !is.na(
+        long_data$patient
+      ),
+
   ]
 
 
@@ -946,78 +1551,112 @@ mira_info <- function(data,
     nrow(complete_long) > 1
   ) {
 
+
     patient_counts <- table(
       complete_long$patient
     )
 
-    # ICC classico ANOVA:
-    # richiede dati bilanciati
 
     if (
-      length(unique(patient_counts)) == 1 &&
-      length(patient_counts) > 1
+
+      length(
+        unique(
+          patient_counts
+        )
+      ) == 1 &&
+
+      length(
+        patient_counts
+      ) > 1
+
     ) {
 
+
       k_actual <-
+
         as.numeric(
-          unique(patient_counts)
+          unique(
+            patient_counts
+          )
         )
 
+
       means2 <- tapply(
+
         complete_long$value,
+
         complete_long$patient,
+
         mean
       )
+
 
       grand_mean2 <-
         mean(
           complete_long$value
         )
 
+
       ss_between <-
+
         k_actual *
+
         sum(
+
           (
             means2 -
               grand_mean2
           )^2
         )
 
+
       ss_within <- sum(
+
         (
           complete_long$value -
+
             means2[
               as.character(
                 complete_long$patient
               )
             ]
+
         )^2
       )
+
 
       df_between <-
         length(means2) - 1
 
+
       df_within <-
         nrow(complete_long) -
         length(means2)
+
 
       if (
         df_between > 0 &&
         df_within > 0
       ) {
 
+
         ms_between <-
           ss_between /
           df_between
+
 
         ms_within <-
           ss_within /
           df_within
 
+
         denominator <-
+
           ms_between +
+
           (k_actual - 1) *
           ms_within
+
 
         if (
           is.finite(denominator) &&
@@ -1025,10 +1664,12 @@ mira_info <- function(data,
         ) {
 
           icc <-
+
             (
               ms_between -
                 ms_within
             ) /
+
             denominator
         }
       }
@@ -1036,7 +1677,14 @@ mira_info <- function(data,
   }
 
 
+  # ----------------------------------------------------------
+  # Variability output
+  # ----------------------------------------------------------
+
   variability <- data.frame(
+
+    outcome =
+      outcome_name,
 
     grand_mean =
       grand_mean,
@@ -1066,6 +1714,27 @@ mira_info <- function(data,
   )
 
 
+  variability[[paste0(
+    outcome_name,
+    "_grand_mean"
+  )]] <-
+    variability$grand_mean
+
+
+  variability[[paste0(
+    outcome_name,
+    "_between_subject_sd"
+  )]] <-
+    variability$between_subject_sd
+
+
+  variability[[paste0(
+    outcome_name,
+    "_within_subject_sd"
+  )]] <-
+    variability$within_subject_sd
+
+
   # ----------------------------------------------------------
   # 13. MIXED MODEL
   # ----------------------------------------------------------
@@ -1081,6 +1750,7 @@ mira_info <- function(data,
 
   if (model) {
 
+
     if (
       requireNamespace(
         "lme4",
@@ -1088,28 +1758,43 @@ mira_info <- function(data,
       )
     ) {
 
+
       model_data <- long_data
 
+
       model_data$time_factor <-
+
         factor(
+
           model_data$time,
-          levels = time_vars,
-          labels = time_labels
+
+          levels =
+            time_vars,
+
+          labels =
+            unname(
+              time_labels[time_vars]
+            )
         )
 
+
       model_data$patient_factor <-
+
         factor(
           model_data$patient
         )
 
 
       model_formula <-
-        value ~ time_factor +
+
+        value ~
+        time_factor +
         (1 | patient_factor)
 
 
-      # Se lmerTest è disponibile,
-      # utilizziamo direttamente lmerTest
+      # ------------------------------------------------------
+      # lmerTest
+      # ------------------------------------------------------
 
       if (
         requireNamespace(
@@ -1118,12 +1803,17 @@ mira_info <- function(data,
         )
       ) {
 
+
         mixed_model <- tryCatch(
 
           lmerTest::lmer(
+
             model_formula,
+
             data = model_data,
+
             REML = TRUE,
+
             na.action = na.omit
           ),
 
@@ -1136,14 +1826,20 @@ mira_info <- function(data,
           }
         )
 
+
       } else {
+
 
         mixed_model <- tryCatch(
 
           lme4::lmer(
+
             model_formula,
+
             data = model_data,
+
             REML = TRUE,
+
             na.action = na.omit
           ),
 
@@ -1158,12 +1854,19 @@ mira_info <- function(data,
       }
 
 
+      # ------------------------------------------------------
+      # Model summary
+      # ------------------------------------------------------
+
       if (!is.null(mixed_model)) {
 
+
         model_summary <-
+
           summary(
             mixed_model
           )
+
 
         model_anova <- tryCatch(
 
@@ -1177,9 +1880,12 @@ mira_info <- function(data,
         )
       }
 
+
     } else {
 
+
       model_error <-
+
         paste(
           "Il pacchetto 'lme4' non è installato."
         )
@@ -1198,21 +1904,27 @@ mira_info <- function(data,
 
   if (outliers) {
 
+
     # --------------------------------------------------------
     # OUTLIERS PER TIMEPOINT
     # --------------------------------------------------------
 
     for (v in time_vars) {
 
+
       x <- data[[v]]
+
 
       finite_x <- x[
         is.finite(x)
       ]
 
+
       if (length(finite_x) < 4) {
 
+
         outlier_results[[v]] <-
+
           data.frame(
 
             row = integer(0),
@@ -1224,39 +1936,55 @@ mira_info <- function(data,
 
             value = numeric(0),
 
-            lower_bound = numeric(0),
+            lower_bound =
+              numeric(0),
 
-            upper_bound = numeric(0),
+            upper_bound =
+              numeric(0),
 
-            stringsAsFactors = FALSE
+            stringsAsFactors =
+              FALSE
           )
+
 
         next
       }
 
 
       q1 <- quantile(
+
         finite_x,
+
         0.25,
+
         names = FALSE
       )
 
+
       q3 <- quantile(
+
         finite_x,
+
         0.75,
+
         names = FALSE
       )
+
 
       iqr_value <-
         q3 - q1
 
+
       lower <-
         q1 -
-        1.5 * iqr_value
+        1.5 *
+        iqr_value
+
 
       upper <-
         q3 +
-        1.5 * iqr_value
+        1.5 *
+        iqr_value
 
 
       idx <- which(
@@ -1274,7 +2002,9 @@ mira_info <- function(data,
 
       if (length(idx) == 0) {
 
+
         outlier_results[[v]] <-
+
           data.frame(
 
             row = integer(0),
@@ -1286,16 +2016,22 @@ mira_info <- function(data,
 
             value = numeric(0),
 
-            lower_bound = numeric(0),
+            lower_bound =
+              numeric(0),
 
-            upper_bound = numeric(0),
+            upper_bound =
+              numeric(0),
 
-            stringsAsFactors = FALSE
+            stringsAsFactors =
+              FALSE
           )
+
 
       } else {
 
+
         outlier_results[[v]] <-
+
           data.frame(
 
             row = idx,
@@ -1318,7 +2054,8 @@ mira_info <- function(data,
                 length(idx)
               ),
 
-            stringsAsFactors = FALSE
+            stringsAsFactors =
+              FALSE
           )
       }
     }
@@ -1332,9 +2069,11 @@ mira_info <- function(data,
       nrow(change) > 0
     ) {
 
+
       for (i in seq_len(
         nrow(change)
       )) {
+
 
         v1 <- change$from[i]
 
@@ -1355,6 +2094,7 @@ mira_info <- function(data,
         delta <- y[keep] -
           x[keep]
 
+
         patients <-
           data[[id]][keep]
 
@@ -1363,23 +2103,30 @@ mira_info <- function(data,
           delta
         )
 
+
         delta <-
           delta[finite]
+
 
         patients <-
           patients[finite]
 
 
         name <- paste(
+
           v1,
+
           v2,
+
           sep = "_to_"
         )
 
 
         if (length(delta) < 4) {
 
+
           change_outliers[[name]] <-
+
             data.frame(
 
               patient =
@@ -1400,21 +2147,30 @@ mira_info <- function(data,
                 FALSE
             )
 
+
           next
         }
 
 
         q1 <- quantile(
+
           delta,
+
           0.25,
+
           names = FALSE
         )
 
+
         q3 <- quantile(
+
           delta,
+
           0.75,
+
           names = FALSE
         )
+
 
         iqr_value <-
           q3 - q1
@@ -1422,11 +2178,14 @@ mira_info <- function(data,
 
         lower <-
           q1 -
-          1.5 * iqr_value
+          1.5 *
+          iqr_value
+
 
         upper <-
           q3 +
-          1.5 * iqr_value
+          1.5 *
+          iqr_value
 
 
         idx <- which(
@@ -1442,7 +2201,9 @@ mira_info <- function(data,
 
         if (length(idx) == 0) {
 
+
           change_outliers[[name]] <-
+
             data.frame(
 
               patient =
@@ -1463,9 +2224,12 @@ mira_info <- function(data,
                 FALSE
             )
 
+
         } else {
 
+
           change_outliers[[name]] <-
+
             data.frame(
 
               patient =
@@ -1499,15 +2263,25 @@ mira_info <- function(data,
   # 15. PATIENT TRAJECTORIES
   # ----------------------------------------------------------
 
-  baseline <- data[[time_vars[1]]]
+  baseline <- data[[
+    time_vars[1]
+  ]]
 
-  final <- data[[time_vars[length(time_vars)]]]
+
+  final <- data[[
+    time_vars[
+      length(time_vars)
+    ]
+  ]]
 
 
   trajectory_summary <- data.frame(
 
     patient =
       data[[id]],
+
+    outcome =
+      outcome_name,
 
     baseline =
       baseline,
@@ -1521,7 +2295,9 @@ mira_info <- function(data,
 
 
   trajectory_summary$absolute_change <-
+
     trajectory_summary$final -
+
     trajectory_summary$baseline
 
 
@@ -1536,8 +2312,11 @@ mira_info <- function(data,
         trajectory_summary$baseline != 0,
 
       (
+
         trajectory_summary$final -
+
           trajectory_summary$baseline
+
       ) /
 
         abs(
@@ -1551,6 +2330,38 @@ mira_info <- function(data,
 
 
   # ----------------------------------------------------------
+  # Outcome-specific trajectory columns
+  # ----------------------------------------------------------
+
+  trajectory_summary[[paste0(
+    outcome_name,
+    "_baseline"
+  )]] <-
+    trajectory_summary$baseline
+
+
+  trajectory_summary[[paste0(
+    outcome_name,
+    "_final"
+  )]] <-
+    trajectory_summary$final
+
+
+  trajectory_summary[[paste0(
+    outcome_name,
+    "_change"
+  )]] <-
+    trajectory_summary$absolute_change
+
+
+  trajectory_summary[[paste0(
+    outcome_name,
+    "_relative_change_percent"
+  )]] <-
+    trajectory_summary$relative_change_percent
+
+
+  # ----------------------------------------------------------
   # 16. PLOTS
   # ----------------------------------------------------------
 
@@ -1559,6 +2370,7 @@ mira_info <- function(data,
 
   if (plots) {
 
+
     if (
       requireNamespace(
         "ggplot2",
@@ -1566,22 +2378,10 @@ mira_info <- function(data,
       )
     ) {
 
-      # ------------------------------------------------------
+
+      # ======================================================
       # BOXPLOT
-      # ------------------------------------------------------
-      #
-      # Distribution at each timepoint
-      # + individual observations
-      # + population mean
-      # + 95% CI
-      # + median
-      # + N per timepoint
-      # ------------------------------------------------------
-
-
-      # ------------------------------------------------------
-      # SUMMARY PER TIMEPOINT
-      # ------------------------------------------------------
+      # ======================================================
 
       boxplot_summary <-
 
@@ -1606,7 +2406,9 @@ mira_info <- function(data,
         dplyr::summarise(
 
           n =
-            dplyr::n_distinct(patient),
+            dplyr::n_distinct(
+              patient
+            ),
 
           mean =
             mean(
@@ -1619,6 +2421,7 @@ mira_info <- function(data,
               value,
               na.rm = TRUE
             ) /
+
             sqrt(
               sum(
                 !is.na(value)
@@ -1626,25 +2429,37 @@ mira_info <- function(data,
             ),
 
           ci_lower =
+
             mean -
+
             stats::qt(
-              0.975,
+
+              1 - alpha / 2,
+
               df =
                 sum(
                   !is.na(value)
                 ) - 1
+
             ) *
+
             se,
 
           ci_upper =
+
             mean +
+
             stats::qt(
-              0.975,
+
+              1 - alpha / 2,
+
               df =
                 sum(
                   !is.na(value)
                 ) - 1
+
             ) *
+
             se,
 
           median =
@@ -1654,12 +2469,11 @@ mira_info <- function(data,
             ),
 
           .groups = "drop"
-
         )
 
 
       # ------------------------------------------------------
-      # LABEL CON N
+      # Label con N
       # ------------------------------------------------------
 
       boxplot_summary$time_label_n <-
@@ -1673,12 +2487,11 @@ mira_info <- function(data,
           boxplot_summary$n,
 
           ")"
-
         )
 
 
       # ------------------------------------------------------
-      # ORDINE DEI TIMEPOINT
+      # Ordine timepoint
       # ------------------------------------------------------
 
       long_data_boxplot <-
@@ -1693,9 +2506,7 @@ mira_info <- function(data,
 
             levels =
               boxplot_summary$time_label
-
           )
-
         )
 
 
@@ -1707,12 +2518,11 @@ mira_info <- function(data,
 
           levels =
             boxplot_summary$time_label
-
         )
 
 
       # ------------------------------------------------------
-      # BOXPLOT
+      # BOXplot
       # ------------------------------------------------------
 
       plots_list$boxplot <-
@@ -1726,189 +2536,158 @@ mira_info <- function(data,
             x = time_label,
 
             y = value
-
           )
-
         ) +
 
-        # ----------------------------------------------------
-      # 1. BOXPLOT
-      #
-      # IQR + median
-      # ----------------------------------------------------
 
-      ggplot2::geom_boxplot(
+        ggplot2::geom_boxplot(
 
-        width = 0.55,
+          width = 0.55,
 
-        fill = "grey92",
+          fill = "grey92",
 
-        color = "grey30",
+          color = "grey30",
 
-        linewidth = 0.7,
+          linewidth = 0.7,
 
-        outlier.shape = NA,
+          outlier.shape = NA,
 
-        na.rm = TRUE
+          na.rm = TRUE
+        ) +
 
-      ) +
 
-        # ----------------------------------------------------
-      # 2. INDIVIDUAL OBSERVATIONS
-      #
-      # Jitter trasparente per mostrare la distribuzione
-      # ----------------------------------------------------
+        ggplot2::geom_jitter(
 
-      ggplot2::geom_jitter(
+          width = 0.10,
 
-        width = 0.10,
+          height = 0,
 
-        height = 0,
+          alpha = 0.22,
 
-        alpha = 0.22,
+          size = 1.5,
 
-        size = 1.5,
+          color = "grey35",
 
-        color = "grey35",
+          na.rm = TRUE
+        ) +
 
-        na.rm = TRUE
 
-      ) +
+        ggplot2::geom_errorbar(
 
-        # ----------------------------------------------------
-      # 3. 95% CONFIDENCE INTERVAL DELLA MEDIA
-      # ----------------------------------------------------
+          data =
+            boxplot_summary,
 
-      ggplot2::geom_errorbar(
+          ggplot2::aes(
 
-        data =
-          boxplot_summary,
+            x = time_label,
 
-        ggplot2::aes(
+            ymin = ci_lower,
 
-          x = time_label,
+            ymax = ci_upper
+          ),
 
-          ymin = ci_lower,
+          inherit.aes = FALSE,
 
-          ymax = ci_upper
+          width = 0.10,
 
-        ),
+          linewidth = 1.0,
 
-        inherit.aes = FALSE,
+          color = "#2C7BB6",
 
-        width = 0.10,
+          na.rm = TRUE
+        ) +
 
-        linewidth = 1.0,
 
-        color = "#2C7BB6",
+        ggplot2::geom_point(
 
-        na.rm = TRUE
+          data =
+            boxplot_summary,
 
-      ) +
+          ggplot2::aes(
 
-        # ----------------------------------------------------
-      # 4. POPULATION MEAN
-      # ----------------------------------------------------
+            x = time_label,
 
-      ggplot2::geom_point(
+            y = mean
+          ),
 
-        data =
-          boxplot_summary,
+          inherit.aes = FALSE,
 
-        ggplot2::aes(
+          shape = 21,
 
-          x = time_label,
+          size = 3.8,
 
-          y = mean
+          stroke = 1.1,
 
-        ),
+          fill = "white",
 
-        inherit.aes = FALSE,
+          color = "#2C7BB6",
 
-        shape = 21,
+          na.rm = TRUE
+        ) +
 
-        size = 3.8,
 
-        stroke = 1.1,
+        ggplot2::geom_point(
 
-        fill = "white",
+          data =
+            boxplot_summary,
 
-        color = "#2C7BB6",
+          ggplot2::aes(
 
-        na.rm = TRUE
+            x = time_label,
 
-      ) +
+            y = median
+          ),
 
-        # ----------------------------------------------------
-      # 5. MEDIAN
-      #
-      # Punto piccolo per rendere la mediana facilmente
-      # identificabile anche quando il box è compatto
-      # ----------------------------------------------------
+          inherit.aes = FALSE,
 
-      ggplot2::geom_point(
+          shape = 95,
 
-        data =
-          boxplot_summary,
+          size = 7,
 
-        ggplot2::aes(
+          color = "grey20",
 
-          x = time_label,
+          na.rm = TRUE
+        ) +
 
-          y = median
 
-        ),
+        ggplot2::scale_x_discrete(
 
-        inherit.aes = FALSE,
+          labels =
+            boxplot_summary$time_label_n
+        ) +
 
-        shape = 95,
 
-        size = 7,
+        ggplot2::labs(
 
-        color = "grey20",
+          x = NULL,
 
-        na.rm = TRUE
+          y = outcome_display,
 
-      ) +
+          title = paste(
 
-        # ----------------------------------------------------
-      # 6. X AXIS
-      # ----------------------------------------------------
+            "Distribution of",
 
-      ggplot2::scale_x_discrete(
+            outcome_display,
 
-        labels =
-          boxplot_summary$time_label_n
+            "Across Timepoints"
+          ),
 
-      ) +
+          subtitle = paste(
 
-        # ----------------------------------------------------
-      # 7. LABELS
-      # ----------------------------------------------------
+            "Individual observations, interquartile range,",
 
-      ggplot2::labs(
+            "population mean and",
 
-        x = NULL,
+            "95% confidence interval"
+          )
+        ) +
 
-        y = "Value",
 
-        title =
-          "Distribution of Values Across Timepoints",
+        ggplot2::theme_minimal(
 
-        subtitle =
-          "Individual observations, interquartile range, population mean and 95% confidence interval"
+          base_size = 12
+        ) +
 
-      ) +
-
-        # ----------------------------------------------------
-      # 8. THEME
-      # ----------------------------------------------------
-
-      ggplot2::theme_minimal(
-
-        base_size = 12
-
-      ) +
 
         ggplot2::theme(
 
@@ -1919,7 +2698,6 @@ mira_info <- function(data,
               face = "bold",
 
               size = 15
-
             ),
 
           plot.subtitle =
@@ -1929,7 +2707,6 @@ mira_info <- function(data,
               size = 10,
 
               color = "grey35"
-
             ),
 
           axis.title.y =
@@ -1937,7 +2714,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               face = "bold"
-
             ),
 
           axis.text.x =
@@ -1949,7 +2725,6 @@ mira_info <- function(data,
               hjust = 0.5,
 
               lineheight = 0.9
-
             ),
 
           axis.text.y =
@@ -1957,7 +2732,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               color = "grey25"
-
             ),
 
           panel.grid.minor =
@@ -1975,12 +2749,9 @@ mira_info <- function(data,
               color = "grey90",
 
               linewidth = 0.4
-
             ),
 
-          legend.position =
-
-            "none",
+          legend.position = "none",
 
           plot.margin =
 
@@ -1993,81 +2764,57 @@ mira_info <- function(data,
               12,
 
               12
-
             )
-
         )
 
 
-
-      # ------------------------------------------------------
+      # ======================================================
       # SPAGHETTI PLOT
-      # ------------------------------------------------------
-
-      # ------------------------------------------------------
-      # PARAMETRO PER LA SOGLIA DI STABILITÀ
-      #
-      # 0 = qualsiasi variazione > 0 o < 0 viene considerata
-      #     rispettivamente Increase o Decrease
-      #
-      # Esempio:
-      # stable_threshold <- 0.2
-      #
-      # In quel caso:
-      #   - change > +0.2  = Increase
-      #   - change < -0.2  = Decrease
-      #   - -0.2 <= change <= +0.2 = Stable
-      # ------------------------------------------------------
+      # ======================================================
 
       stable_threshold <- 0
 
 
-      # ------------------------------------------------------
-      # Variabile numerica per la posizione temporale
-      # ------------------------------------------------------
-
       long_data_spaghetti <- long_data
 
+
       long_data_spaghetti$time_index <-
+
         match(
+
           long_data_spaghetti$time,
+
           time_vars
         )
 
-
-      # ------------------------------------------------------
-      # Summary per timepoint
-      # ------------------------------------------------------
 
       trajectory_summary_plot <- data.frame(
 
         time = time_vars,
 
-        time_index = seq_along(time_vars),
+        time_index =
+          seq_along(time_vars),
 
-        time_label = unname(
-          time_labels[time_vars]
-        ),
+        time_label =
+          unname(
+            time_labels[time_vars]
+          ),
 
-        mean = descriptives$mean,
+        mean =
+          descriptives$mean,
 
-        se = descriptives$se,
+        se =
+          descriptives$se,
 
-        ci_lower = descriptives$ci_lower,
+        ci_lower =
+          descriptives$ci_lower,
 
-        ci_upper = descriptives$ci_upper,
+        ci_upper =
+          descriptives$ci_upper,
 
         stringsAsFactors = FALSE
-
       )
 
-
-      # ------------------------------------------------------
-      # N PER TIMEPOINT
-      #
-      # Numero di soggetti con un valore disponibile
-      # a ciascun timepoint
-      # ------------------------------------------------------
 
       n_per_timepoint <-
 
@@ -2078,27 +2825,23 @@ mira_info <- function(data,
           !is.na(value),
 
           !is.na(time_index)
-
         ) |>
 
         dplyr::group_by(
 
           time_index
-
         ) |>
 
         dplyr::summarise(
 
-          n = dplyr::n_distinct(patient),
+          n =
+            dplyr::n_distinct(
+              patient
+            ),
 
           .groups = "drop"
-
         )
 
-
-      # ------------------------------------------------------
-      # AGGIUNTA N AL SUMMARY
-      # ------------------------------------------------------
 
       trajectory_summary_plot <-
 
@@ -2109,13 +2852,8 @@ mira_info <- function(data,
           n_per_timepoint,
 
           by = "time_index"
-
         )
 
-
-      # ------------------------------------------------------
-      # LABEL DELL'ASSE X CON N
-      # ------------------------------------------------------
 
       trajectory_summary_plot$time_label_n <-
 
@@ -2128,19 +2866,11 @@ mira_info <- function(data,
           trajectory_summary_plot$n,
 
           ")"
-
         )
 
 
       # ------------------------------------------------------
-      # DIREZIONE DEL CAMBIAMENTO
-      #
-      # Calcoliamo la direzione tra ogni coppia di
-      # timepoint consecutivi per ogni paziente.
-      #
-      # Increase = aumento
-      # Decrease = diminuzione
-      # Stable   = variazione entro la soglia
+      # Direction
       # ------------------------------------------------------
 
       trajectory_segments <-
@@ -2152,7 +2882,6 @@ mira_info <- function(data,
           !is.na(value),
 
           !is.na(time_index)
-
         ) |>
 
         dplyr::arrange(
@@ -2160,304 +2889,276 @@ mira_info <- function(data,
           patient,
 
           time_index
-
         ) |>
 
         dplyr::group_by(
 
           patient
-
         ) |>
 
         dplyr::mutate(
 
           next_time_index =
-            dplyr::lead(time_index),
+            dplyr::lead(
+              time_index
+            ),
 
           next_value =
-            dplyr::lead(value),
+            dplyr::lead(
+              value
+            ),
 
           change =
-            next_value - value,
+            next_value -
+            value,
 
           trajectory_direction =
 
             dplyr::case_when(
 
-              is.na(next_value) ~ NA_character_,
+              is.na(next_value) ~
+                NA_character_,
 
-              change > stable_threshold ~ "Increase",
+              change >
+                stable_threshold ~
+                "Increase",
 
-              change < -stable_threshold ~ "Decrease",
+              change <
+                -stable_threshold ~
+                "Decrease",
 
-              TRUE ~ "Stable"
-
+              TRUE ~
+                "Stable"
             )
-
         ) |>
 
         dplyr::ungroup()
 
 
       # ------------------------------------------------------
-      # SPAGHETTI PLOT
-      #
-      # Individual longitudinal trajectories
-      # + segment direction
-      # + individual observations
-      # + population mean
-      # + 95% CI
-      # + N per timepoint
+      # Spaghetti
       # ------------------------------------------------------
 
       plots_list$spaghetti <-
 
         ggplot2::ggplot() +
 
-        # ----------------------------------------------------
-      # 1. 95% CONFIDENCE INTERVAL
-      # ----------------------------------------------------
 
-      ggplot2::geom_ribbon(
+        ggplot2::geom_ribbon(
 
-        data =
-          trajectory_summary_plot,
+          data =
+            trajectory_summary_plot,
 
-        ggplot2::aes(
+          ggplot2::aes(
 
-          x = time_index,
+            x = time_index,
 
-          ymin = ci_lower,
+            ymin = ci_lower,
 
-          ymax = ci_upper,
+            ymax = ci_upper,
 
-          group = 1
+            group = 1
+          ),
 
-        ),
+          inherit.aes = FALSE,
 
-        inherit.aes = FALSE,
+          alpha = 0.20,
 
-        alpha = 0.20,
+          na.rm = TRUE
+        ) +
 
-        na.rm = TRUE
 
-      ) +
+        ggplot2::geom_segment(
 
-        # ----------------------------------------------------
-      # 2. INDIVIDUAL TRAJECTORIES
-      #
-      # Ogni segmento è colorato in base alla direzione
-      # del cambiamento verso il timepoint successivo
-      # ----------------------------------------------------
+          data =
+            trajectory_segments,
 
-      ggplot2::geom_segment(
+          ggplot2::aes(
 
-        data =
-          trajectory_segments,
+            x = time_index,
 
-        ggplot2::aes(
+            xend =
+              next_time_index,
 
-          x = time_index,
+            y = value,
 
-          xend = next_time_index,
+            yend =
+              next_value,
 
-          y = value,
+            group = patient,
 
-          yend = next_value,
+            color =
+              trajectory_direction
+          ),
 
-          group = patient,
+          alpha = 0.20,
 
-          color = trajectory_direction
+          linewidth = 0.6,
 
-        ),
+          na.rm = TRUE
+        ) +
 
-        alpha = 0.20,
 
-        linewidth = 0.6,
+        ggplot2::geom_point(
 
-        na.rm = TRUE
+          data =
+            long_data_spaghetti,
 
-      ) +
+          ggplot2::aes(
 
-        # ----------------------------------------------------
-      # 3. INDIVIDUAL OBSERVATIONS
-      # ----------------------------------------------------
+            x = time_index,
 
-      ggplot2::geom_point(
+            y = value
+          ),
 
-        data =
-          long_data_spaghetti,
+          color = "grey40",
 
-        ggplot2::aes(
+          alpha = 0.20,
 
-          x = time_index,
+          size = 1.5,
 
-          y = value
+          na.rm = TRUE
+        ) +
 
-        ),
 
-        color = "grey40",
+        ggplot2::geom_line(
 
-        alpha = 0.20,
+          data =
+            trajectory_summary_plot,
 
-        size = 1.5,
+          ggplot2::aes(
 
-        na.rm = TRUE
+            x = time_index,
 
-      ) +
+            y = mean,
 
-        # ----------------------------------------------------
-      # 4. POPULATION MEAN TRAJECTORY
-      # ----------------------------------------------------
+            group = 1
+          ),
 
-      ggplot2::geom_line(
+          inherit.aes = FALSE,
 
-        data =
-          trajectory_summary_plot,
+          linewidth = 1.5,
 
-        ggplot2::aes(
+          color = "black",
 
-          x = time_index,
+          na.rm = TRUE
+        ) +
 
-          y = mean,
 
-          group = 1
+        ggplot2::geom_point(
 
-        ),
+          data =
+            trajectory_summary_plot,
 
-        inherit.aes = FALSE,
+          ggplot2::aes(
 
-        linewidth = 1.5,
+            x = time_index,
 
-        color = "black",
+            y = mean
+          ),
 
-        na.rm = TRUE
+          inherit.aes = FALSE,
 
-      ) +
+          shape = 21,
 
-        # ----------------------------------------------------
-      # 5. POPULATION MEAN POINTS
-      # ----------------------------------------------------
+          size = 4,
 
-      ggplot2::geom_point(
+          stroke = 1.2,
 
-        data =
-          trajectory_summary_plot,
+          fill = "white",
 
-        ggplot2::aes(
+          color = "black",
 
-          x = time_index,
+          na.rm = TRUE
+        ) +
 
-          y = mean
 
-        ),
+        ggplot2::scale_color_manual(
 
-        inherit.aes = FALSE,
+          values = c(
 
-        shape = 21,
+            "Increase" =
+              "#2C7BB6",
 
-        size = 4,
+            "Decrease" =
+              "#D7191C",
 
-        stroke = 1.2,
+            "Stable" =
+              "grey60"
+          ),
 
-        fill = "white",
+          breaks = c(
 
-        color = "black",
+            "Increase",
 
-        na.rm = TRUE
+            "Decrease",
 
-      ) +
+            "Stable"
+          ),
 
-        # ----------------------------------------------------
-      # 6. COLOR PALETTE
-      # ----------------------------------------------------
+          labels = c(
 
-      ggplot2::scale_color_manual(
+            "↑ Increase",
 
-        values = c(
+            "↓ Decrease",
 
-          "Increase" = "#2C7BB6",
+            "→ Stable"
+          ),
 
-          "Decrease" = "#D7191C",
+          name =
+            "Change between consecutive timepoints"
+        ) +
 
-          "Stable" = "grey60"
 
-        ),
+        ggplot2::scale_x_continuous(
 
-        breaks = c(
+          breaks =
+            trajectory_summary_plot$time_index,
 
-          "Increase",
+          labels =
+            trajectory_summary_plot$time_label_n,
 
-          "Decrease",
+          expand =
+            ggplot2::expansion(
 
-          "Stable"
+              mult =
+                c(
+                  0.03,
+                  0.03
+                )
+            )
+        ) +
 
-        ),
 
-        labels = c(
+        ggplot2::labs(
 
-          "↑ Increase",
+          x = NULL,
 
-          "↓ Decrease",
+          y = outcome_display,
 
-          "→ Stable"
+          title = paste(
 
-        ),
+            "Individual",
 
-        name = "Change between consecutive timepoints"
+            outcome_display,
 
-      ) +
+            "Longitudinal Trajectories"
+          ),
 
-        # ----------------------------------------------------
-      # 7. X AXIS
-      #
-      # Timepoint + numero di soggetti
-      # ----------------------------------------------------
+          subtitle = paste(
 
-      ggplot2::scale_x_continuous(
+            "Subject-level changes between consecutive timepoints,",
 
-        breaks =
-          trajectory_summary_plot$time_index,
-
-        labels =
-          trajectory_summary_plot$time_label_n,
-
-        expand =
-          ggplot2::expansion(
-
-            mult = c(0.03, 0.03)
-
+            "with population mean and 95% confidence interval"
           )
+        ) +
 
-      ) +
 
-        # ----------------------------------------------------
-      # 8. LABELS
-      # ----------------------------------------------------
+        ggplot2::theme_minimal(
 
-      ggplot2::labs(
+          base_size = 12
+        ) +
 
-        x = NULL,
-
-        y = "Value",
-
-        title =
-          "Individual Longitudinal Trajectories",
-
-        subtitle =
-          "Subject-level changes between consecutive timepoints, with population mean and 95% confidence interval"
-
-      ) +
-
-        # ----------------------------------------------------
-      # 9. PUBLICATION THEME
-      # ----------------------------------------------------
-
-      ggplot2::theme_minimal(
-
-        base_size = 12
-
-      ) +
 
         ggplot2::theme(
 
@@ -2468,7 +3169,6 @@ mira_info <- function(data,
               face = "bold",
 
               size = 15
-
             ),
 
           plot.subtitle =
@@ -2476,7 +3176,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               size = 10
-
             ),
 
           axis.title =
@@ -2484,7 +3183,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               face = "bold"
-
             ),
 
           axis.text.x =
@@ -2496,7 +3194,6 @@ mira_info <- function(data,
               hjust = 0.5,
 
               lineheight = 0.9
-
             ),
 
           panel.grid.minor =
@@ -2508,7 +3205,6 @@ mira_info <- function(data,
             ggplot2::element_blank(),
 
           legend.position =
-
             "bottom",
 
           legend.title =
@@ -2516,7 +3212,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               face = "bold"
-
             ),
 
           legend.text =
@@ -2524,7 +3219,6 @@ mira_info <- function(data,
             ggplot2::element_text(
 
               size = 10
-
             ),
 
           plot.margin =
@@ -2538,14 +3232,13 @@ mira_info <- function(data,
               12,
 
               12
-
             )
-
         )
 
-      # ------------------------------------------------------
+
+      # ======================================================
       # MEAN + CI
-      # ------------------------------------------------------
+      # ======================================================
 
       plots_list$mean_ci <-
 
@@ -2563,12 +3256,16 @@ mira_info <- function(data,
           )
         ) +
 
+
         ggplot2::geom_line(
 
           color = "#2C7FB8",
 
+          linewidth = 0.8,
+
           na.rm = TRUE
         ) +
+
 
         ggplot2::geom_point(
 
@@ -2578,6 +3275,7 @@ mira_info <- function(data,
 
           na.rm = TRUE
         ) +
+
 
         ggplot2::geom_errorbar(
 
@@ -2593,22 +3291,33 @@ mira_info <- function(data,
           na.rm = TRUE
         ) +
 
+
         ggplot2::labs(
 
           x = "Time",
 
-          y = "Mean",
+          y = paste(
+            "Mean",
+            outcome_display
+          ),
 
-          title =
-            "Mean and 95% CI"
+          title = paste(
+
+            "Mean",
+
+            outcome_display,
+
+            "and 95% CI"
+          )
         ) +
+
 
         ggplot2::theme_minimal()
 
 
-      # ------------------------------------------------------
+      # ======================================================
       # INDIVIDUAL CHANGE
-      # ------------------------------------------------------
+      # ======================================================
 
       plots_list$change <-
 
@@ -2624,6 +3333,7 @@ mira_info <- function(data,
           )
         ) +
 
+
         ggplot2::geom_boxplot(
 
           fill = "#59A14F",
@@ -2632,6 +3342,7 @@ mira_info <- function(data,
 
           na.rm = TRUE
         ) +
+
 
         ggplot2::geom_jitter(
 
@@ -2642,6 +3353,7 @@ mira_info <- function(data,
           na.rm = TRUE
         ) +
 
+
         ggplot2::geom_hline(
 
           yintercept = 0,
@@ -2649,15 +3361,28 @@ mira_info <- function(data,
           linetype = "dashed"
         ) +
 
+
         ggplot2::labs(
 
           x = NULL,
 
-          y = "Final - Baseline",
+          y = paste(
 
-          title =
-            "Individual change"
+            "Final - Baseline",
+
+            outcome_display
+          ),
+
+          title = paste(
+
+            "Individual",
+
+            outcome_display,
+
+            "Change"
+          )
         ) +
+
 
         ggplot2::theme_minimal()
     }
@@ -2668,7 +3393,8 @@ mira_info <- function(data,
   # 17. GLOBAL TEST OF TIME
   # ----------------------------------------------------------
 
-  global_time_test <- model_anova
+  global_time_test <-
+    model_anova
 
 
   # ----------------------------------------------------------
@@ -2676,6 +3402,12 @@ mira_info <- function(data,
   # ----------------------------------------------------------
 
   overview <- list(
+
+    outcome =
+      outcome_name,
+
+    outcome_display =
+      outcome_display,
 
     n_rows =
       n_rows,
@@ -2699,6 +3431,7 @@ mira_info <- function(data,
       complete_cases,
 
     complete_profiles_pct =
+
       complete_cases /
       n_rows *
       100
@@ -2714,11 +3447,30 @@ mira_info <- function(data,
     call =
       match.call(),
 
+
     overview =
       overview,
 
+
+    outcome =
+      outcome_name,
+
+
+    outcome_display =
+      outcome_display,
+
+
+    time_vars =
+      time_vars,
+
+
+    time_labels =
+      time_labels,
+
+
     descriptives =
       descriptives,
+
 
     missing =
       list(
@@ -2730,8 +3482,10 @@ mira_info <- function(data,
           missing_by_patient
       ),
 
+
     change =
       change,
+
 
     correlations =
       list(
@@ -2743,11 +3497,14 @@ mira_info <- function(data,
           correlation_spearman
       ),
 
+
     variability =
       variability,
 
+
     trajectories =
       trajectory_summary,
+
 
     model =
       list(
@@ -2768,24 +3525,36 @@ mira_info <- function(data,
           model_error
       ),
 
+
     outliers =
       list(
 
         by_time =
+
           if (outliers)
+
             outlier_results
+
         else
+
           NULL,
 
+
         change =
+
           if (outliers)
+
             change_outliers
+
         else
+
           NULL
       ),
 
+
     plots =
       plots_list,
+
 
     long_data =
       long_data
@@ -2801,11 +3570,16 @@ mira_info <- function(data,
   # ----------------------------------------------------------
 
   if (verbose) {
-    print(result)
+
+    print(
+      result
+    )
   }
 
 
-  invisible(result)
+  invisible(
+    result
+  )
 }
 
 
@@ -2822,484 +3596,1044 @@ print.mira_info <- function(x,
                             outliers = TRUE,
                             ...) {
 
-  line <- function(char = "-", n = 72) {
-    cat(paste0(strrep(char, n), "\n"))
-  }
 
-  fmt_num <- function(z, digits = 3) {
-    ifelse(
-      is.na(z),
-      "NA",
-      formatC(z, format = "f", digits = digits)
-    )
-  }
+  # ----------------------------------------------------------
+  # Helper
+  # ----------------------------------------------------------
 
-  fmt_pct <- function(z, digits = 1) {
-    ifelse(
-      is.na(z),
-      "NA",
-      paste0(formatC(z, format = "f", digits = digits), "%")
-    )
-  }
+  line <- function(
+    char = "-",
+    n = 72
+  ) {
 
-  fmt_p <- function(p) {
-    ifelse(
-      is.na(p),
-      "NA",
-      ifelse(
-        p < 0.001,
-        "<0.001",
-        formatC(p, format = "f", digits = 3)
+    cat(
+      paste0(
+        strrep(
+          char,
+          n
+        ),
+        "\n"
       )
     )
   }
 
+
+  fmt_num <- function(
+    z,
+    digits = 3
+  ) {
+
+    ifelse(
+
+      is.na(z),
+
+      "NA",
+
+      formatC(
+
+        z,
+
+        format = "f",
+
+        digits = digits
+      )
+    )
+  }
+
+
+  fmt_pct <- function(
+    z,
+    digits = 1
+  ) {
+
+    ifelse(
+
+      is.na(z),
+
+      "NA",
+
+      paste0(
+
+        formatC(
+
+          z,
+
+          format = "f",
+
+          digits = digits
+        ),
+
+        "%"
+      )
+    )
+  }
+
+
+  fmt_p <- function(p) {
+
+    ifelse(
+
+      is.na(p),
+
+      "NA",
+
+      ifelse(
+
+        p < 0.001,
+
+        "<0.001",
+
+        formatC(
+
+          p,
+
+          format = "f",
+
+          digits = 3
+        )
+      )
+    )
+  }
+
+
   effect_label <- function(d) {
 
     if (is.na(d)) {
-      return(NA_character_)
+
+      return(
+        NA_character_
+      )
     }
+
 
     a <- abs(d)
 
+
     if (a < 0.20) {
+
       "negligible"
+
     } else if (a < 0.50) {
+
       "small"
+
     } else if (a < 0.80) {
+
       "moderate"
+
     } else {
+
       "large"
     }
   }
 
 
+  # ----------------------------------------------------------
+  # Extract automatic outcome
+  # ----------------------------------------------------------
+
+  outcome_display <-
+
+    if (!is.null(x$overview$outcome_display)) {
+
+      x$overview$outcome_display
+
+    } else if (!is.null(x$outcome_display)) {
+
+      x$outcome_display
+
+    } else {
+
+      "OUTCOME"
+    }
+
+
+  # ----------------------------------------------------------
+  # HEADER
+  # ----------------------------------------------------------
+
   cat("\n")
-  line("=")
-
-  cat("                         MIRA INFO\n")
-  cat("        Comprehensive Longitudinal Dataset Snapshot\n")
 
   line("=")
 
 
-  # ============================================================
+  cat(
+
+    sprintf(
+
+      "                         MIRA INFO — %s\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
+    "        Comprehensive Longitudinal Dataset Snapshot\n"
+  )
+
+
+  line("=")
+
+
+  # ==========================================================
   # DATASET OVERVIEW
-  # ============================================================
+  # ==========================================================
 
-  cat("\nDATASET OVERVIEW\n")
+  cat(
+
+    sprintf(
+
+      "\nDATASET OVERVIEW — %s\n",
+
+      outcome_display
+    )
+  )
+
+
   line()
+
 
   ov <- x$overview
+
   d <- x$descriptives
 
-  total_cells <- ov$n_rows * ov$n_timepoints
 
-  observed_cells <- sum(d$n)
+  total_cells <-
 
-  missing_cells <- sum(d$missing)
+    ov$n_rows *
+    ov$n_timepoints
 
-  non_finite_cells <- sum(d$non_finite)
 
-  complete_profiles <- ov$complete_profiles
+  observed_cells <-
 
-  incomplete_profiles <- ov$n_rows - complete_profiles
+    sum(
+      d$n
+    )
+
+
+  missing_cells <-
+
+    sum(
+      d$missing
+    )
+
+
+  non_finite_cells <-
+
+    sum(
+      d$non_finite
+    )
+
+
+  complete_profiles <-
+
+    ov$complete_profiles
+
+
+  incomplete_profiles <-
+
+    ov$n_rows -
+    complete_profiles
+
+
+  # ----------------------------------------------------------
+  # Outcome
+  # ----------------------------------------------------------
+
+  cat(
+
+    sprintf(
+
+      "Outcome:                     %s\n",
+
+      outcome_display
+    )
+  )
 
 
   cat(
+
     sprintf(
+
       "ID variable:                 %s\n",
-      as.character(x$call$id)
-    )
-  )
 
-  cat(
-    sprintf(
-      "Rows:                        %s\n",
-      ov$n_rows
-    )
-  )
-
-  cat(
-    sprintf(
-      "Unique subjects:             %s\n",
-      ov$n_patients
-    )
-  )
-
-  cat(
-    sprintf(
-      "Timepoints:                  %s\n",
-      ov$n_timepoints
-    )
-  )
-
-  cat(
-    sprintf(
-      "Time variables:              %s\n",
-      paste(ov$timepoints, collapse = ", ")
-    )
-  )
-
-  cat(
-    sprintf(
-      "Time labels:                 %s\n",
-      paste(unname(ov$time_labels), collapse = ", ")
-    )
-  )
-
-  cat(
-    sprintf(
-      "Duplicated IDs:              %s\n",
-      ov$duplicated_ids
-    )
-  )
-
-
-  # ============================================================
-  # DATA QUALITY
-  # ============================================================
-
-  cat("\nDATA QUALITY\n")
-  line()
-
-  cat(
-    sprintf(
-      "Total longitudinal cells:    %s\n",
-      total_cells
-    )
-  )
-
-  cat(
-    sprintf(
-      "Finite observations:         %s (%s)\n",
-      observed_cells,
-      fmt_pct(observed_cells / total_cells * 100)
-    )
-  )
-
-  cat(
-    sprintf(
-      "Missing values:              %s (%s)\n",
-      missing_cells,
-      fmt_pct(missing_cells / total_cells * 100)
-    )
-  )
-
-  cat(
-    sprintf(
-      "Non-finite values:           %s (%s)\n",
-      non_finite_cells,
-      fmt_pct(non_finite_cells / total_cells * 100)
-    )
-  )
-
-  cat(
-    sprintf(
-      "Complete profiles:           %s (%s)\n",
-      complete_profiles,
-      fmt_pct(ov$complete_profiles_pct)
-    )
-  )
-
-  cat(
-    sprintf(
-      "Incomplete profiles:         %s (%s)\n",
-      incomplete_profiles,
-      fmt_pct(
-        incomplete_profiles /
-          ov$n_rows * 100
+      as.character(
+        x$call$id
       )
     )
   )
 
 
-  # ============================================================
-  # DESCRIPTIVE STATISTICS
-  # ============================================================
+  cat(
 
-  cat("\nDESCRIPTIVE STATISTICS BY TIMEPOINT\n")
+    sprintf(
+
+      "Rows:                        %s\n",
+
+      ov$n_rows
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Unique subjects:             %s\n",
+
+      ov$n_patients
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Timepoints:                  %s\n",
+
+      ov$n_timepoints
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Time variables:              %s\n",
+
+      paste(
+
+        ov$timepoints,
+
+        collapse = ", "
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Time labels:                 %s\n",
+
+      paste(
+
+        unname(
+          ov$time_labels
+        ),
+
+        collapse = ", "
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Duplicated IDs:              %s\n",
+
+      ov$duplicated_ids
+    )
+  )
+
+
+  # ==========================================================
+  # DATA QUALITY
+  # ==========================================================
+
+  cat(
+
+    sprintf(
+
+      "\nDATA QUALITY — %s\n",
+
+      outcome_display
+    )
+  )
+
+
   line()
+
+
+  cat(
+
+    sprintf(
+
+      "Total longitudinal cells:    %s\n",
+
+      total_cells
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Finite observations:         %s (%s)\n",
+
+      observed_cells,
+
+      fmt_pct(
+
+        observed_cells /
+          total_cells *
+          100
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Missing values:              %s (%s)\n",
+
+      missing_cells,
+
+      fmt_pct(
+
+        missing_cells /
+          total_cells *
+          100
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Non-finite values:           %s (%s)\n",
+
+      non_finite_cells,
+
+      fmt_pct(
+
+        non_finite_cells /
+          total_cells *
+          100
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Complete profiles:           %s (%s)\n",
+
+      complete_profiles,
+
+      fmt_pct(
+        ov$complete_profiles_pct
+      )
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "Incomplete profiles:         %s (%s)\n",
+
+      incomplete_profiles,
+
+      fmt_pct(
+
+        incomplete_profiles /
+          ov$n_rows *
+          100
+      )
+    )
+  )
+
+
+  # ==========================================================
+  # DESCRIPTIVE STATISTICS
+  # ==========================================================
+
+  cat(
+
+    sprintf(
+
+      "\nDESCRIPTIVE STATISTICS FOR %s BY TIMEPOINT\n",
+
+      outcome_display
+    )
+  )
+
+
+  line()
+
 
   desc_print <- data.frame(
 
-    Time = d$label,
+    Time =
+      d$label,
 
-    N = d$n,
+    N =
+      d$n,
 
-    Missing = paste0(
-      d$missing,
-      " (",
-      formatC(
-        d$missing_pct,
-        format = "f",
-        digits = 1
+    Missing =
+
+      paste0(
+
+        d$missing,
+
+        " (",
+
+        formatC(
+
+          d$missing_pct,
+
+          format = "f",
+
+          digits = 1
+        ),
+
+        "%)"
       ),
-      "%)"
-    ),
 
-    Mean = round(d$mean, digits),
+    Mean =
+      round(
+        d$mean,
+        digits
+      ),
 
-    SD = round(d$sd, digits),
+    SD =
+      round(
+        d$sd,
+        digits
+      ),
 
-    Median = round(d$median, digits),
+    Median =
+      round(
+        d$median,
+        digits
+      ),
 
-    IQR = round(d$iqr, digits),
+    IQR =
+      round(
+        d$iqr,
+        digits
+      ),
 
-    Min = round(d$min, digits),
+    Min =
+      round(
+        d$min,
+        digits
+      ),
 
-    Max = round(d$max, digits),
+    Max =
+      round(
+        d$max,
+        digits
+      ),
 
-    CV_pct = round(d$cv_percent, 1),
+    CV_pct =
+      round(
+        d$cv_percent,
+        1
+      ),
 
-    CI_lower = round(d$ci_lower, digits),
+    CI_lower =
+      round(
+        d$ci_lower,
+        digits
+      ),
 
-    CI_upper = round(d$ci_upper, digits),
+    CI_upper =
+      round(
+        d$ci_upper,
+        digits
+      ),
 
     check.names = FALSE
   )
 
+
   print(
+
     desc_print,
+
     row.names = FALSE
   )
 
 
-  # ============================================================
+  # ==========================================================
   # MISSING DATA
-  # ============================================================
+  # ==========================================================
 
-  cat("\nMISSING DATA BY TIMEPOINT\n")
+  cat(
+
+    sprintf(
+
+      "\nMISSING DATA FOR %s BY TIMEPOINT\n",
+
+      outcome_display
+    )
+  )
+
+
   line()
+
 
   miss <- x$missing$by_time
 
+
   miss_print <- data.frame(
 
-    Time = miss$label,
+    Time =
+      miss$label,
 
-    Missing_n = miss$missing_n,
+    Missing_n =
+      miss$missing_n,
 
-    Missing_pct = round(
-      miss$missing_pct,
-      1
-    )
-
+    Missing_pct =
+      round(
+        miss$missing_pct,
+        1
+      )
   )
 
+
   print(
+
     miss_print,
+
     row.names = FALSE
   )
 
 
-  # ============================================================
+  # ==========================================================
   # LONGITUDINAL CHANGE
-  # ============================================================
+  # ==========================================================
 
-  cat("\nLONGITUDINAL CHANGE\n")
+  cat(
+
+    sprintf(
+
+      "\nLONGITUDINAL CHANGE — %s\n",
+
+      outcome_display
+    )
+  )
+
+
   line()
+
 
   if (nrow(x$change) > 0) {
 
+
     ch <- x$change
 
-    # Main comparison:
-    # baseline -> final
+
+    # --------------------------------------------------------
+    # Baseline -> Final
+    # --------------------------------------------------------
 
     baseline_final <-
+
       ch[
-        ch$from == ov$timepoints[1] &
-          ch$to == ov$timepoints[length(ov$timepoints)],
+
+        ch$from ==
+          ov$timepoints[1] &
+
+          ch$to ==
+          ov$timepoints[
+            length(
+              ov$timepoints
+            )
+          ],
+
         ,
+
         drop = FALSE
       ]
 
 
     if (nrow(baseline_final) == 1) {
 
-      bf <- baseline_final[1, ]
+
+      bf <-
+        baseline_final[1, ]
+
 
       cat(
+
         sprintf(
+
           "Baseline -> Final:          %s -> %s\n",
-          bf$from,
-          bf$to
+
+          bf$from_label,
+
+          bf$to_label
         )
       )
 
+
       cat(
+
         sprintf(
+
           "Paired observations:        %s\n",
+
           bf$n
         )
       )
 
+
       cat(
+
         sprintf(
-          "Mean change:                %s\n",
-          fmt_num(bf$mean_change, digits)
+
+          "Mean %s change:             %s\n",
+
+          outcome_display,
+
+          fmt_num(
+
+            bf$mean_change,
+
+            digits
+          )
         )
       )
 
+
       cat(
+
         sprintf(
+
           "%s%% CI:                     [%s, %s]\n",
+
           100 * (1 - 0.05),
-          fmt_num(bf$ci_lower, digits),
-          fmt_num(bf$ci_upper, digits)
+
+          fmt_num(
+
+            bf$ci_lower,
+
+            digits
+          ),
+
+          fmt_num(
+
+            bf$ci_upper,
+
+            digits
+          )
         )
       )
 
+
       cat(
+
         sprintf(
+
           "Cohen's dz:                 %s (%s)\n",
-          fmt_num(bf$cohens_dz, digits),
-          effect_label(bf$cohens_dz)
+
+          fmt_num(
+
+            bf$cohens_dz,
+
+            digits
+          ),
+
+          effect_label(
+            bf$cohens_dz
+          )
         )
       )
 
+
       cat(
+
         sprintf(
+
           "Improved / worsened / same: %s / %s / %s\n",
-          fmt_pct(bf$improved_pct),
-          fmt_pct(bf$worsened_pct),
-          fmt_pct(bf$unchanged_pct)
+
+          fmt_pct(
+            bf$improved_pct
+          ),
+
+          fmt_pct(
+            bf$worsened_pct
+          ),
+
+          fmt_pct(
+            bf$unchanged_pct
+          )
         )
       )
 
+
       cat(
+
         sprintf(
+
           "Paired t-test p:            %s\n",
-          fmt_p(bf$paired_t_p)
+
+          fmt_p(
+            bf$paired_t_p
+          )
         )
       )
 
+
       cat(
+
         sprintf(
+
           "Wilcoxon p:                 %s\n",
-          fmt_p(bf$wilcoxon_p)
+
+          fmt_p(
+            bf$wilcoxon_p
+          )
         )
       )
     }
 
 
-    cat("\nPAIRWISE TIMEPOINT COMPARISONS\n")
+    # --------------------------------------------------------
+    # Pairwise comparisons
+    # --------------------------------------------------------
+
+    cat(
+
+      sprintf(
+
+        "\nPAIRWISE %s TIMEPOINT COMPARISONS\n",
+
+        outcome_display
+      )
+    )
+
 
     change_print <- data.frame(
 
-      From = ch$from,
+      From =
+        ch$from_label,
 
-      To = ch$to,
+      To =
+        ch$to_label,
 
-      N = ch$n,
+      N =
+        ch$n,
 
       Mean_change =
-        round(ch$mean_change, digits),
+        round(
+          ch$mean_change,
+          digits
+        ),
 
       CI_lower =
-        round(ch$ci_lower, digits),
+        round(
+          ch$ci_lower,
+          digits
+        ),
 
       CI_upper =
-        round(ch$ci_upper, digits),
+        round(
+          ch$ci_upper,
+          digits
+        ),
 
       Cohen_dz =
-        round(ch$cohens_dz, digits),
+        round(
+          ch$cohens_dz,
+          digits
+        ),
 
       Improved_pct =
-        round(ch$improved_pct, 1),
+        round(
+          ch$improved_pct,
+          1
+        ),
 
       Worsened_pct =
-        round(ch$worsened_pct, 1),
+        round(
+          ch$worsened_pct,
+          1
+        ),
 
       t_p =
+
         vapply(
+
           ch$paired_t_p,
+
           fmt_p,
+
           character(1)
         ),
 
       Wilcoxon_p =
+
         vapply(
+
           ch$wilcoxon_p,
+
           fmt_p,
+
           character(1)
         ),
 
       check.names = FALSE
     )
 
-    if (nrow(change_print) > max_rows) {
+
+    if (
+      nrow(change_print) >
+      max_rows
+    ) {
+
 
       cat(
+
         sprintf(
+
           "\nShowing first %s of %s comparisons.\n",
+
           max_rows,
+
           nrow(change_print)
         )
       )
 
+
       change_print <-
+
         head(
+
           change_print,
+
           max_rows
         )
     }
 
+
     print(
+
       change_print,
+
       row.names = FALSE
     )
 
+
   } else {
 
+
     cat(
+
       "No longitudinal comparisons available.\n"
     )
   }
 
 
-  # ============================================================
+  # ==========================================================
   # CORRELATIONS
-  # ============================================================
+  # ==========================================================
 
   if (
+
     correlations &&
-    !is.null(x$correlations$pearson)
+
+    !is.null(
+      x$correlations$pearson
+    )
+
   ) {
 
-    cat("\nCORRELATIONS\n")
+
+    cat(
+
+      sprintf(
+
+        "\nCORRELATIONS — %s\n",
+
+        outcome_display
+      )
+    )
+
+
     line()
 
-    cor_mat <- x$correlations$pearson
+
+    cor_mat <-
+
+      x$correlations$pearson
+
 
     if (ncol(cor_mat) >= 2) {
 
+
       upper_values <-
+
         cor_mat[
           upper.tri(cor_mat)
         ]
 
+
       finite_cor <-
+
         upper_values[
-          is.finite(upper_values)
+          is.finite(
+            upper_values
+          )
         ]
+
 
       if (length(finite_cor) > 0) {
 
+
         cat(
+
           sprintf(
+
             "Pearson correlation range: %s to %s\n",
-            fmt_num(min(finite_cor), digits),
-            fmt_num(max(finite_cor), digits)
+
+            fmt_num(
+              min(
+                finite_cor
+              ),
+              digits
+            ),
+
+            fmt_num(
+              max(
+                finite_cor
+              ),
+              digits
+            )
           )
         )
 
+
         cat(
+
           sprintf(
+
             "Median correlation:        %s\n",
+
             fmt_num(
-              median(finite_cor),
+
+              median(
+                finite_cor
+              ),
+
               digits
             )
           )
@@ -3307,9 +4641,20 @@ print.mira_info <- function(x,
       }
     }
 
-    cat("\nPearson correlation matrix:\n")
+
+    cat(
+
+      sprintf(
+
+        "\nPearson correlation matrix for %s:\n",
+
+        outcome_display
+      )
+    )
+
 
     print(
+
       round(
         cor_mat,
         digits
@@ -3318,235 +4663,467 @@ print.mira_info <- function(x,
   }
 
 
-  # ============================================================
+  # ==========================================================
   # VARIABILITY
-  # ============================================================
+  # ==========================================================
 
-  cat("\nVARIABILITY AND SUBJECT DEPENDENCE\n")
+  cat(
+
+    sprintf(
+
+      "\nVARIABILITY AND SUBJECT DEPENDENCE — %s\n",
+
+      outcome_display
+    )
+  )
+
+
   line()
+
 
   v <- x$variability
 
+
   ratio <-
+
     if (
-      !is.na(v$between_subject_sd) &&
+
+      !is.na(
+        v$between_subject_sd
+      ) &&
+
       v$between_subject_sd != 0
+
     ) {
+
 
       v$within_subject_sd /
         v$between_subject_sd
 
+
     } else {
+
 
       NA_real_
     }
 
+
   cat(
+
     sprintf(
-      "Grand mean:                  %s\n",
-      fmt_num(v$grand_mean, digits)
+
+      "Grand mean %s:              %s\n",
+
+      outcome_display,
+
+      fmt_num(
+
+        v$grand_mean,
+
+        digits
+      )
     )
   )
 
+
   cat(
+
     sprintf(
+
       "Between-subject SD:          %s\n",
+
       fmt_num(
+
         v$between_subject_sd,
+
         digits
       )
     )
   )
 
+
   cat(
+
     sprintf(
+
       "Within-subject SD:           %s\n",
+
       fmt_num(
+
         v$within_subject_sd,
+
         digits
       )
     )
   )
 
+
   cat(
+
     sprintf(
+
       "Within / Between ratio:      %s\n",
+
       fmt_num(
+
         ratio,
+
         digits
       )
     )
   )
+
 
   cat(
+
     sprintf(
+
       "ICC:                         %s\n",
+
       fmt_num(
+
         v$ICC,
+
         digits
       )
     )
   )
 
 
-  # ============================================================
+  # ==========================================================
   # MIXED MODEL
-  # ============================================================
+  # ==========================================================
 
   if (model) {
 
-    cat("\nMIXED-EFFECTS MODEL\n")
+
+    cat(
+
+      sprintf(
+
+        "\nMIXED-EFFECTS MODEL — %s\n",
+
+        outcome_display
+      )
+    )
+
+
     line()
 
-    if (!is.null(x$model$fitted_model)) {
+
+    if (
+      !is.null(
+        x$model$fitted_model
+      )
+    ) {
+
 
       cat(
-        "Model: value ~ time + (1 | subject)\n"
+
+        sprintf(
+
+          "Model: %s ~ time + (1 | subject)\n",
+
+          outcome_display
+        )
       )
 
-      if (!is.null(x$model$anova)) {
 
-        cat("\nGlobal test of time:\n")
+      if (
+        !is.null(
+          x$model$anova
+        )
+      ) {
+
+
+        cat(
+
+          sprintf(
+
+            "\nGlobal test of %s over time:\n",
+
+            outcome_display
+          )
+        )
+
 
         print(
           x$model$anova
         )
       }
 
+
       cat(
+
         "\nFull model output available in:\n"
       )
 
+
       cat(
+
         "  result$model$summary\n"
       )
 
-    } else if (!is.null(x$model$error)) {
+
+    } else if (
+      !is.null(
+        x$model$error
+      )
+    ) {
+
 
       cat(
+
         "Model not estimated: ",
+
         x$model$error,
+
         "\n",
+
         sep = ""
       )
     }
   }
 
 
-  # ============================================================
+  # ==========================================================
   # OUTLIERS
-  # ============================================================
+  # ==========================================================
 
   if (
+
     outliers &&
-    !is.null(x$outliers$by_time)
+
+    !is.null(
+      x$outliers$by_time
+    )
+
   ) {
 
-    cat("\nOUTLIER SUMMARY\n")
+
+    cat(
+
+      sprintf(
+
+        "\nOUTLIER SUMMARY — %s\n",
+
+        outcome_display
+      )
+    )
+
+
     line()
 
+
     outlier_counts <-
+
       vapply(
+
         x$outliers$by_time,
+
         nrow,
+
         integer(1)
       )
 
+
     total_outliers <-
-      sum(outlier_counts)
+
+      sum(
+        outlier_counts
+      )
+
 
     cat(
+
       sprintf(
-        "Total timepoint outliers:   %s\n",
+
+        "Total %s timepoint outliers: %s\n",
+
+        outcome_display,
+
         total_outliers
       )
     )
 
-    for (nm in names(outlier_counts)) {
+
+    for (
+      nm in names(
+        outlier_counts
+      )
+    ) {
+
 
       cat(
+
         sprintf(
+
           "  %-25s %s\n",
+
           nm,
+
           outlier_counts[nm]
         )
       )
     }
 
 
-    if (!is.null(x$outliers$change)) {
+    if (
+      !is.null(
+        x$outliers$change
+      )
+    ) {
+
 
       change_outlier_counts <-
+
         vapply(
+
           x$outliers$change,
+
           nrow,
+
           integer(1)
         )
 
+
       cat(
+
         sprintf(
-          "Total change outliers:      %s\n",
-          sum(change_outlier_counts)
+
+          "Total %s change outliers:    %s\n",
+
+          outcome_display,
+
+          sum(
+            change_outlier_counts
+          )
         )
       )
     }
   }
 
 
-  # ============================================================
+  # ==========================================================
   # TRAJECTORIES
-  # ============================================================
+  # ==========================================================
 
-  if (!is.null(x$trajectories)) {
+  if (
+    !is.null(
+      x$trajectories
+    )
+  ) {
 
-    tr <- x$trajectories
+
+    tr <-
+      x$trajectories
+
 
     finite_change <-
+
       tr$absolute_change[
-        is.finite(tr$absolute_change)
+
+        is.finite(
+          tr$absolute_change
+        )
       ]
 
-    if (length(finite_change) > 0) {
 
-      cat("\nINDIVIDUAL TRAJECTORIES\n")
+    if (
+      length(finite_change) > 0
+    ) {
+
+
+      cat(
+
+        sprintf(
+
+          "\nINDIVIDUAL %s TRAJECTORIES\n",
+
+          outcome_display
+        )
+      )
+
+
       line()
 
+
       cat(
+
         sprintf(
+
           "Subjects with baseline-final data: %s\n",
-          length(finite_change)
+
+          length(
+            finite_change
+          )
         )
       )
 
+
       cat(
+
         sprintf(
-          "Mean individual change:           %s\n",
+
+          "Mean individual %s change:           %s\n",
+
+          outcome_display,
+
           fmt_num(
-            mean(finite_change),
+
+            mean(
+              finite_change
+            ),
+
             digits
           )
         )
       )
 
+
       cat(
+
         sprintf(
-          "Median individual change:         %s\n",
+
+          "Median individual %s change:         %s\n",
+
+          outcome_display,
+
           fmt_num(
-            median(finite_change),
+
+            median(
+              finite_change
+            ),
+
             digits
           )
         )
       )
 
+
       cat(
+
         sprintf(
-          "Range of individual change:       [%s, %s]\n",
+
+          "Range of individual %s change:       [%s, %s]\n",
+
+          outcome_display,
+
           fmt_num(
-            min(finite_change),
+
+            min(
+              finite_change
+            ),
+
             digits
           ),
+
           fmt_num(
-            max(finite_change),
+
+            max(
+              finite_change
+            ),
+
             digits
           )
         )
@@ -3555,69 +5132,163 @@ print.mira_info <- function(x,
   }
 
 
-  # ============================================================
+  # ==========================================================
   # OUTPUT GUIDE
-  # ============================================================
+  # ==========================================================
 
   cat("\n")
+
   line("=")
 
-  cat("COMPLETE OUTPUT\n")
-  line()
 
   cat(
+
+    sprintf(
+
+      "COMPLETE OUTPUT — %s\n",
+
+      outcome_display
+    )
+  )
+
+
+  line()
+
+
+  cat(
+
     "Use names(result) to inspect all available components.\n\n"
   )
 
-  cat("Key components:\n")
 
   cat(
+
+    "Key components:\n"
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "  outcome        Automatically detected outcome (%s)\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
     "  overview       Dataset structure and completeness\n"
   )
 
-  cat(
-    "  descriptives   Detailed statistics by timepoint\n"
-  )
 
   cat(
+
+    sprintf(
+
+      "  descriptives   Detailed %s statistics by timepoint\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
     "  missing        Missingness by timepoint and subject\n"
   )
 
-  cat(
-    "  change         All longitudinal pairwise comparisons\n"
-  )
 
   cat(
-    "  correlations   Pearson and Spearman correlation matrices\n"
+
+    sprintf(
+
+      "  change         All %s longitudinal pairwise comparisons\n",
+
+      outcome_display
+    )
   )
 
-  cat(
-    "  variability    Within/between-subject variability and ICC\n"
-  )
 
   cat(
-    "  trajectories   Subject-level baseline-to-final changes\n"
+
+    sprintf(
+
+      "  correlations   %s Pearson and Spearman correlation matrices\n",
+
+      outcome_display
+    )
   )
 
-  cat(
-    "  model          Mixed-effects model and global time test\n"
-  )
 
   cat(
-    "  outliers       Detected value and change outliers\n"
+
+    sprintf(
+
+      "  variability    %s within/between-subject variability and ICC\n",
+
+      outcome_display
+    )
   )
 
+
   cat(
+
+    sprintf(
+
+      "  trajectories    %s subject-level baseline-to-final changes\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "  model          %s mixed-effects model and global time test\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
+    sprintf(
+
+      "  outliers       Detected %s value and change outliers\n",
+
+      outcome_display
+    )
+  )
+
+
+  cat(
+
     "  plots          Generated visualization objects\n"
   )
 
+
   cat(
-    "  long_data      Long-format dataset used internally\n"
+
+    sprintf(
+
+      "  long_data      Long-format %s dataset used internally\n",
+
+      outcome_display
+    )
   )
+
 
   line("=")
 
+
   cat("\n")
+
 
   invisible(x)
 }

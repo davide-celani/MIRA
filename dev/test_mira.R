@@ -45,7 +45,7 @@ list_stan_models("MIRA")
 
 set.seed(123)
 
-n_patients <- 100
+n_patients <- 150
 
 
 # ------------------------------------------------------------
@@ -78,19 +78,26 @@ data <- data.frame(
   patient = seq_len(n_patients)
 )
 
-data$t0 <- rnorm(
+data$IOP_t0 <- rnorm(
   n_patients,
   mean = true_t0 + subject_effect,
   sd = true_sigma
 )
 
-data$t1 <- rnorm(
+data$IOP_t1 <- rnorm(
   n_patients,
   mean = true_t1 + subject_effect,
   sd = true_sigma
 )
 
-data$t2 <- rnorm(
+data$IOP_t2 <- rnorm(
+  n_patients,
+  mean = true_t2 + subject_effect,
+  sd = true_sigma
+)
+
+
+data$IOP_t3 <- rnorm(
   n_patients,
   mean = true_t2 + subject_effect,
   sd = true_sigma
@@ -98,17 +105,31 @@ data$t2 <- rnorm(
 
 
 
-
+res <- mira_info(
+  data = data,
+  id = "patient",
+  time_vars = c("IOP_t0", "IOP_t1", "IOP_t2", "IOP_t3"),
+  time_labels = c(
+    "Baseline",
+    "Time 1",
+    "Time 2",
+    "Time 3"
+  ),
+  plots = TRUE,
+  model = TRUE,
+  outliers = TRUE,
+  correlations = TRUE,
+  verbose = TRUE
+)
 
 
 res <- mira_info(
   data = data,
   id = "patient",
-  time_vars = c("t0", "t1", "t2"),
+  time_vars = c("IOP_t0", "IOP_t1"),
   time_labels = c(
     "Baseline",
-    "Time 1",
-    "Time 2"
+    "Time 1"
   ),
   plots = TRUE,
   model = TRUE,

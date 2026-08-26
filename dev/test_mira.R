@@ -269,8 +269,6 @@ fit <- model$sample(
 # PRINT RESULTS
 # ============================================================
 
-fit
-
 
 fit <- mira_fit(
   stan_data,

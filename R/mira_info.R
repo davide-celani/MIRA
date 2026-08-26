@@ -1959,426 +1959,810 @@ mira_info <- function(data,
 # PRINT METHOD
 # ============================================================
 
-print.mira_info <- function(x, ...) {
+print.mira_info <- function(x,
+                            digits = 3,
+                            max_rows = 20,
+                            correlations = TRUE,
+                            model = TRUE,
+                            outliers = TRUE,
+                            ...) {
+
+  line <- function(char = "-", n = 72) {
+    cat(paste0(strrep(char, n), "\n"))
+  }
+
+  fmt_num <- function(z, digits = 3) {
+    ifelse(
+      is.na(z),
+      "NA",
+      formatC(z, format = "f", digits = digits)
+    )
+  }
+
+  fmt_pct <- function(z, digits = 1) {
+    ifelse(
+      is.na(z),
+      "NA",
+      paste0(formatC(z, format = "f", digits = digits), "%")
+    )
+  }
+
+  fmt_p <- function(p) {
+    ifelse(
+      is.na(p),
+      "NA",
+      ifelse(
+        p < 0.001,
+        "<0.001",
+        formatC(p, format = "f", digits = 3)
+      )
+    )
+  }
+
+  effect_label <- function(d) {
+
+    if (is.na(d)) {
+      return(NA_character_)
+    }
+
+    a <- abs(d)
+
+    if (a < 0.20) {
+      "negligible"
+    } else if (a < 0.50) {
+      "small"
+    } else if (a < 0.80) {
+      "moderate"
+    } else {
+      "large"
+    }
+  }
+
 
   cat("\n")
+  line("=")
 
-  cat(
-    "============================================================\n"
-  )
+  cat("                         MIRA INFO\n")
+  cat("        Comprehensive Longitudinal Dataset Snapshot\n")
 
-  cat(
-    "                    MIRA INFO REPORT\n"
-  )
-
-  cat(
-    "============================================================\n"
-  )
+  line("=")
 
 
-  # ----------------------------------------------------------
-  # DATASET
-  # ----------------------------------------------------------
+  # ============================================================
+  # DATASET OVERVIEW
+  # ============================================================
 
-  cat("\nDATASET\n")
+  cat("\nDATASET OVERVIEW\n")
+  line()
 
-  cat(
-    "------------------------------------------------------------\n"
-  )
-
-  cat(
-    "Patients:       ",
-    x$overview$n_patients,
-    "\n"
-  )
-
-  cat(
-    "Rows:           ",
-    x$overview$n_rows,
-    "\n"
-  )
-
-  cat(
-    "Timepoints:     ",
-    x$overview$n_timepoints,
-    "\n"
-  )
-
-  cat(
-    "Time variables: ",
-    paste(
-      x$overview$timepoints,
-      collapse = ", "
-    ),
-    "\n"
-  )
-
-  cat(
-    "Complete:       ",
-    sprintf(
-      "%.1f%%",
-      x$overview$complete_profiles_pct
-    ),
-    "\n"
-  )
-
-  cat(
-    "Duplicated IDs:  ",
-    x$overview$duplicated_ids,
-    "\n"
-  )
-
-
-  # ----------------------------------------------------------
-  # DESCRIPTIVES
-  # ----------------------------------------------------------
-
-  cat("\n\nDESCRIPTIVE STATISTICS\n")
-
-  cat(
-    "------------------------------------------------------------\n"
-  )
-
+  ov <- x$overview
   d <- x$descriptives
 
+  total_cells <- ov$n_rows * ov$n_timepoints
 
-  print(
+  observed_cells <- sum(d$n)
 
-    data.frame(
+  missing_cells <- sum(d$missing)
 
-      time =
-        d$time,
+  non_finite_cells <- sum(d$non_finite)
 
-      n =
-        d$n,
+  complete_profiles <- ov$complete_profiles
 
-      missing =
-        d$missing,
+  incomplete_profiles <- ov$n_rows - complete_profiles
 
-      mean =
-        round(d$mean, 3),
 
-      sd =
-        round(d$sd, 3),
+  cat(
+    sprintf(
+      "ID variable:                 %s\n",
+      as.character(x$call$id)
+    )
+  )
 
-      median =
-        round(d$median, 3),
+  cat(
+    sprintf(
+      "Rows:                        %s\n",
+      ov$n_rows
+    )
+  )
 
-      q1 =
-        round(d$q1, 3),
+  cat(
+    sprintf(
+      "Unique subjects:             %s\n",
+      ov$n_patients
+    )
+  )
 
-      q3 =
-        round(d$q3, 3),
+  cat(
+    sprintf(
+      "Timepoints:                  %s\n",
+      ov$n_timepoints
+    )
+  )
 
-      min =
-        round(d$min, 3),
+  cat(
+    sprintf(
+      "Time variables:              %s\n",
+      paste(ov$timepoints, collapse = ", ")
+    )
+  )
 
-      max =
-        round(d$max, 3),
+  cat(
+    sprintf(
+      "Time labels:                 %s\n",
+      paste(unname(ov$time_labels), collapse = ", ")
+    )
+  )
 
-      ci_lower =
-        round(d$ci_lower, 3),
+  cat(
+    sprintf(
+      "Duplicated IDs:              %s\n",
+      ov$duplicated_ids
+    )
+  )
 
-      ci_upper =
-        round(d$ci_upper, 3),
 
-      stringsAsFactors =
-        FALSE
+  # ============================================================
+  # DATA QUALITY
+  # ============================================================
+
+  cat("\nDATA QUALITY\n")
+  line()
+
+  cat(
+    sprintf(
+      "Total longitudinal cells:    %s\n",
+      total_cells
+    )
+  )
+
+  cat(
+    sprintf(
+      "Finite observations:         %s (%s)\n",
+      observed_cells,
+      fmt_pct(observed_cells / total_cells * 100)
+    )
+  )
+
+  cat(
+    sprintf(
+      "Missing values:              %s (%s)\n",
+      missing_cells,
+      fmt_pct(missing_cells / total_cells * 100)
+    )
+  )
+
+  cat(
+    sprintf(
+      "Non-finite values:           %s (%s)\n",
+      non_finite_cells,
+      fmt_pct(non_finite_cells / total_cells * 100)
+    )
+  )
+
+  cat(
+    sprintf(
+      "Complete profiles:           %s (%s)\n",
+      complete_profiles,
+      fmt_pct(ov$complete_profiles_pct)
+    )
+  )
+
+  cat(
+    sprintf(
+      "Incomplete profiles:         %s (%s)\n",
+      incomplete_profiles,
+      fmt_pct(
+        incomplete_profiles /
+          ov$n_rows * 100
+      )
+    )
+  )
+
+
+  # ============================================================
+  # DESCRIPTIVE STATISTICS
+  # ============================================================
+
+  cat("\nDESCRIPTIVE STATISTICS BY TIMEPOINT\n")
+  line()
+
+  desc_print <- data.frame(
+
+    Time = d$label,
+
+    N = d$n,
+
+    Missing = paste0(
+      d$missing,
+      " (",
+      formatC(
+        d$missing_pct,
+        format = "f",
+        digits = 1
+      ),
+      "%)"
     ),
 
+    Mean = round(d$mean, digits),
+
+    SD = round(d$sd, digits),
+
+    Median = round(d$median, digits),
+
+    IQR = round(d$iqr, digits),
+
+    Min = round(d$min, digits),
+
+    Max = round(d$max, digits),
+
+    CV_pct = round(d$cv_percent, 1),
+
+    CI_lower = round(d$ci_lower, digits),
+
+    CI_upper = round(d$ci_upper, digits),
+
+    check.names = FALSE
+  )
+
+  print(
+    desc_print,
     row.names = FALSE
   )
 
 
-  # ----------------------------------------------------------
-  # CHANGE
-  # ----------------------------------------------------------
+  # ============================================================
+  # MISSING DATA
+  # ============================================================
 
-  cat("\n\nLONGITUDINAL CHANGES\n")
+  cat("\nMISSING DATA BY TIMEPOINT\n")
+  line()
 
-  cat(
-    "------------------------------------------------------------\n"
+  miss <- x$missing$by_time
+
+  miss_print <- data.frame(
+
+    Time = miss$label,
+
+    Missing_n = miss$missing_n,
+
+    Missing_pct = round(
+      miss$missing_pct,
+      1
+    )
+
+  )
+
+  print(
+    miss_print,
+    row.names = FALSE
   )
 
 
-  if (
-    nrow(x$change) > 0
-  ) {
+  # ============================================================
+  # LONGITUDINAL CHANGE
+  # ============================================================
+
+  cat("\nLONGITUDINAL CHANGE\n")
+  line()
+
+  if (nrow(x$change) > 0) {
 
     ch <- x$change
 
+    # Main comparison:
+    # baseline -> final
+
+    baseline_final <-
+      ch[
+        ch$from == ov$timepoints[1] &
+          ch$to == ov$timepoints[length(ov$timepoints)],
+        ,
+        drop = FALSE
+      ]
+
+
+    if (nrow(baseline_final) == 1) {
+
+      bf <- baseline_final[1, ]
+
+      cat(
+        sprintf(
+          "Baseline -> Final:          %s -> %s\n",
+          bf$from,
+          bf$to
+        )
+      )
+
+      cat(
+        sprintf(
+          "Paired observations:        %s\n",
+          bf$n
+        )
+      )
+
+      cat(
+        sprintf(
+          "Mean change:                %s\n",
+          fmt_num(bf$mean_change, digits)
+        )
+      )
+
+      cat(
+        sprintf(
+          "%s%% CI:                     [%s, %s]\n",
+          100 * (1 - 0.05),
+          fmt_num(bf$ci_lower, digits),
+          fmt_num(bf$ci_upper, digits)
+        )
+      )
+
+      cat(
+        sprintf(
+          "Cohen's dz:                 %s (%s)\n",
+          fmt_num(bf$cohens_dz, digits),
+          effect_label(bf$cohens_dz)
+        )
+      )
+
+      cat(
+        sprintf(
+          "Improved / worsened / same: %s / %s / %s\n",
+          fmt_pct(bf$improved_pct),
+          fmt_pct(bf$worsened_pct),
+          fmt_pct(bf$unchanged_pct)
+        )
+      )
+
+      cat(
+        sprintf(
+          "Paired t-test p:            %s\n",
+          fmt_p(bf$paired_t_p)
+        )
+      )
+
+      cat(
+        sprintf(
+          "Wilcoxon p:                 %s\n",
+          fmt_p(bf$wilcoxon_p)
+        )
+      )
+    }
+
+
+    cat("\nPAIRWISE TIMEPOINT COMPARISONS\n")
+
+    change_print <- data.frame(
+
+      From = ch$from,
+
+      To = ch$to,
+
+      N = ch$n,
+
+      Mean_change =
+        round(ch$mean_change, digits),
+
+      CI_lower =
+        round(ch$ci_lower, digits),
+
+      CI_upper =
+        round(ch$ci_upper, digits),
+
+      Cohen_dz =
+        round(ch$cohens_dz, digits),
+
+      Improved_pct =
+        round(ch$improved_pct, 1),
+
+      Worsened_pct =
+        round(ch$worsened_pct, 1),
+
+      t_p =
+        vapply(
+          ch$paired_t_p,
+          fmt_p,
+          character(1)
+        ),
+
+      Wilcoxon_p =
+        vapply(
+          ch$wilcoxon_p,
+          fmt_p,
+          character(1)
+        ),
+
+      check.names = FALSE
+    )
+
+    if (nrow(change_print) > max_rows) {
+
+      cat(
+        sprintf(
+          "\nShowing first %s of %s comparisons.\n",
+          max_rows,
+          nrow(change_print)
+        )
+      )
+
+      change_print <-
+        head(
+          change_print,
+          max_rows
+        )
+    }
 
     print(
-
-      data.frame(
-
-        from =
-          ch$from,
-
-        to =
-          ch$to,
-
-        n =
-          ch$n,
-
-        mean_change =
-          round(
-            ch$mean_change,
-            4
-          ),
-
-        ci_lower =
-          round(
-            ch$ci_lower,
-            4
-          ),
-
-        ci_upper =
-          round(
-            ch$ci_upper,
-            4
-          ),
-
-        cohens_dz =
-          round(
-            ch$cohens_dz,
-            4
-          ),
-
-        improved_pct =
-          round(
-            ch$improved_pct,
-            1
-          ),
-
-        worsened_pct =
-          round(
-            ch$worsened_pct,
-            1
-          ),
-
-        paired_t_p =
-          signif(
-            ch$paired_t_p,
-            4
-          ),
-
-        wilcoxon_p =
-          signif(
-            ch$wilcoxon_p,
-            4
-          ),
-
-        stringsAsFactors =
-          FALSE
-      ),
-
+      change_print,
       row.names = FALSE
     )
 
   } else {
 
     cat(
-      "Nessun confronto longitudinale disponibile.\n"
+      "No longitudinal comparisons available.\n"
     )
   }
 
 
-  # ----------------------------------------------------------
+  # ============================================================
   # CORRELATIONS
-  # ----------------------------------------------------------
+  # ============================================================
 
   if (
-    !is.null(
-      x$correlations$pearson
-    )
+    correlations &&
+    !is.null(x$correlations$pearson)
   ) {
 
-    cat("\n\nPEARSON CORRELATIONS\n")
+    cat("\nCORRELATIONS\n")
+    line()
 
-    cat(
-      "------------------------------------------------------------\n"
-    )
+    cor_mat <- x$correlations$pearson
+
+    if (ncol(cor_mat) >= 2) {
+
+      upper_values <-
+        cor_mat[
+          upper.tri(cor_mat)
+        ]
+
+      finite_cor <-
+        upper_values[
+          is.finite(upper_values)
+        ]
+
+      if (length(finite_cor) > 0) {
+
+        cat(
+          sprintf(
+            "Pearson correlation range: %s to %s\n",
+            fmt_num(min(finite_cor), digits),
+            fmt_num(max(finite_cor), digits)
+          )
+        )
+
+        cat(
+          sprintf(
+            "Median correlation:        %s\n",
+            fmt_num(
+              median(finite_cor),
+              digits
+            )
+          )
+        )
+      }
+    }
+
+    cat("\nPearson correlation matrix:\n")
 
     print(
       round(
-        x$correlations$pearson,
-        3
+        cor_mat,
+        digits
       )
     )
   }
 
 
-  # ----------------------------------------------------------
+  # ============================================================
   # VARIABILITY
-  # ----------------------------------------------------------
+  # ============================================================
 
-  cat("\n\nVARIABILITY\n")
+  cat("\nVARIABILITY AND SUBJECT DEPENDENCE\n")
+  line()
 
-  cat(
-    "------------------------------------------------------------\n"
-  )
+  v <- x$variability
 
-  print(
-
-    data.frame(
-
-      grand_mean =
-        round(
-          x$variability$grand_mean,
-          4
-        ),
-
-      between_subject_sd =
-        round(
-          x$variability$between_subject_sd,
-          4
-        ),
-
-      within_subject_sd =
-        round(
-          x$variability$within_subject_sd,
-          4
-        ),
-
-      ICC =
-        round(
-          x$variability$ICC,
-          4
-        ),
-
-      stringsAsFactors =
-        FALSE
-    ),
-
-    row.names = FALSE
-  )
-
-
-  # ----------------------------------------------------------
-  # MIXED MODEL
-  # ----------------------------------------------------------
-
-  if (
-    !is.null(
-      x$model$fitted_model
-    )
-  ) {
-
-    cat("\n\nMIXED MODEL\n")
-
-    cat(
-      "------------------------------------------------------------\n"
-    )
-
-    cat(
-      "Model: value ~ time + (1 | patient)\n"
-    )
-
-    print(
-      summary(
-        x$model$fitted_model
-      )
-    )
-
-
+  ratio <-
     if (
-      !is.null(
-        x$model$anova
-      )
+      !is.na(v$between_subject_sd) &&
+      v$between_subject_sd != 0
     ) {
 
-      cat("\n\nGLOBAL TEST OF TIME\n")
+      v$within_subject_sd /
+        v$between_subject_sd
 
-      cat(
-        "------------------------------------------------------------\n"
-      )
+    } else {
 
-      print(
-        x$model$anova
-      )
+      NA_real_
     }
 
-  } else if (
-    !is.null(
-      x$model$error
+  cat(
+    sprintf(
+      "Grand mean:                  %s\n",
+      fmt_num(v$grand_mean, digits)
     )
-  ) {
+  )
 
-    cat("\n\nMIXED MODEL\n")
-
-    cat(
-      "------------------------------------------------------------\n"
-    )
-
-    cat(
-      "Model non stimato: ",
-      x$model$error,
-      "\n"
-    )
-  }
-
-
-  # ----------------------------------------------------------
-  # OUTLIERS
-  # ----------------------------------------------------------
-
-  if (
-    !is.null(
-      x$outliers$by_time
-    )
-  ) {
-
-    cat("\n\nOUTLIERS\n")
-
-    cat(
-      "------------------------------------------------------------\n"
-    )
-
-
-    for (
-      nm in names(
-        x$outliers$by_time
+  cat(
+    sprintf(
+      "Between-subject SD:          %s\n",
+      fmt_num(
+        v$between_subject_sd,
+        digits
       )
-    ) {
+    )
+  )
 
-      tmp <-
-        x$outliers$by_time[[nm]]
+  cat(
+    sprintf(
+      "Within-subject SD:           %s\n",
+      fmt_num(
+        v$within_subject_sd,
+        digits
+      )
+    )
+  )
+
+  cat(
+    sprintf(
+      "Within / Between ratio:      %s\n",
+      fmt_num(
+        ratio,
+        digits
+      )
+    )
+  )
+
+  cat(
+    sprintf(
+      "ICC:                         %s\n",
+      fmt_num(
+        v$ICC,
+        digits
+      )
+    )
+  )
+
+
+  # ============================================================
+  # MIXED MODEL
+  # ============================================================
+
+  if (model) {
+
+    cat("\nMIXED-EFFECTS MODEL\n")
+    line()
+
+    if (!is.null(x$model$fitted_model)) {
 
       cat(
+        "Model: value ~ time + (1 | subject)\n"
+      )
 
-        nm,
+      if (!is.null(x$model$anova)) {
 
-        ": ",
+        cat("\nGlobal test of time:\n")
 
-        nrow(tmp),
+        print(
+          x$model$anova
+        )
+      }
 
-        " outlier(s)\n",
+      cat(
+        "\nFull model output available in:\n"
+      )
 
+      cat(
+        "  result$model$summary\n"
+      )
+
+    } else if (!is.null(x$model$error)) {
+
+      cat(
+        "Model not estimated: ",
+        x$model$error,
+        "\n",
         sep = ""
       )
     }
   }
 
 
-  # ----------------------------------------------------------
-  # END
-  # ----------------------------------------------------------
+  # ============================================================
+  # OUTLIERS
+  # ============================================================
+
+  if (
+    outliers &&
+    !is.null(x$outliers$by_time)
+  ) {
+
+    cat("\nOUTLIER SUMMARY\n")
+    line()
+
+    outlier_counts <-
+      vapply(
+        x$outliers$by_time,
+        nrow,
+        integer(1)
+      )
+
+    total_outliers <-
+      sum(outlier_counts)
+
+    cat(
+      sprintf(
+        "Total timepoint outliers:   %s\n",
+        total_outliers
+      )
+    )
+
+    for (nm in names(outlier_counts)) {
+
+      cat(
+        sprintf(
+          "  %-25s %s\n",
+          nm,
+          outlier_counts[nm]
+        )
+      )
+    }
+
+
+    if (!is.null(x$outliers$change)) {
+
+      change_outlier_counts <-
+        vapply(
+          x$outliers$change,
+          nrow,
+          integer(1)
+        )
+
+      cat(
+        sprintf(
+          "Total change outliers:      %s\n",
+          sum(change_outlier_counts)
+        )
+      )
+    }
+  }
+
+
+  # ============================================================
+  # TRAJECTORIES
+  # ============================================================
+
+  if (!is.null(x$trajectories)) {
+
+    tr <- x$trajectories
+
+    finite_change <-
+      tr$absolute_change[
+        is.finite(tr$absolute_change)
+      ]
+
+    if (length(finite_change) > 0) {
+
+      cat("\nINDIVIDUAL TRAJECTORIES\n")
+      line()
+
+      cat(
+        sprintf(
+          "Subjects with baseline-final data: %s\n",
+          length(finite_change)
+        )
+      )
+
+      cat(
+        sprintf(
+          "Mean individual change:           %s\n",
+          fmt_num(
+            mean(finite_change),
+            digits
+          )
+        )
+      )
+
+      cat(
+        sprintf(
+          "Median individual change:         %s\n",
+          fmt_num(
+            median(finite_change),
+            digits
+          )
+        )
+      )
+
+      cat(
+        sprintf(
+          "Range of individual change:       [%s, %s]\n",
+          fmt_num(
+            min(finite_change),
+            digits
+          ),
+          fmt_num(
+            max(finite_change),
+            digits
+          )
+        )
+      )
+    }
+  }
+
+
+  # ============================================================
+  # OUTPUT GUIDE
+  # ============================================================
 
   cat("\n")
+  line("=")
+
+  cat("COMPLETE OUTPUT\n")
+  line()
 
   cat(
-    "============================================================\n"
+    "Use names(result) to inspect all available components.\n\n"
+  )
+
+  cat("Key components:\n")
+
+  cat(
+    "  overview       Dataset structure and completeness\n"
   )
 
   cat(
-    "Use names(result) to explore the complete output.\n"
+    "  descriptives   Detailed statistics by timepoint\n"
   )
 
   cat(
-    "============================================================\n\n"
+    "  missing        Missingness by timepoint and subject\n"
   )
 
+  cat(
+    "  change         All longitudinal pairwise comparisons\n"
+  )
+
+  cat(
+    "  correlations   Pearson and Spearman correlation matrices\n"
+  )
+
+  cat(
+    "  variability    Within/between-subject variability and ICC\n"
+  )
+
+  cat(
+    "  trajectories   Subject-level baseline-to-final changes\n"
+  )
+
+  cat(
+    "  model          Mixed-effects model and global time test\n"
+  )
+
+  cat(
+    "  outliers       Detected value and change outliers\n"
+  )
+
+  cat(
+    "  plots          Generated visualization objects\n"
+  )
+
+  cat(
+    "  long_data      Long-format dataset used internally\n"
+  )
+
+  line("=")
+
+  cat("\n")
 
   invisible(x)
 }

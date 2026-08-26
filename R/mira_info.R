@@ -1656,6 +1656,24 @@ mira_info <- function(data,
       # ------------------------------------------------------
 
       # ------------------------------------------------------
+      # PARAMETRO PER LA SOGLIA DI STABILITÀ
+      #
+      # 0 = qualsiasi variazione > 0 o < 0 viene considerata
+      #     rispettivamente Increase o Decrease
+      #
+      # Esempio:
+      # stable_threshold <- 0.2
+      #
+      # In quel caso:
+      #   - change > +0.2  = Increase
+      #   - change < -0.2  = Decrease
+      #   - -0.2 <= change <= +0.2 = Stable
+      # ------------------------------------------------------
+
+      stable_threshold <- 0
+
+
+      # ------------------------------------------------------
       # Variabile numerica per la posizione temporale
       # ------------------------------------------------------
 
@@ -1696,32 +1714,33 @@ mira_info <- function(data,
 
 
       # ------------------------------------------------------
-      # DIREZIONE DEL CAMBIAMENTO INDIVIDUALE
+      # N PER TIMEPOINT
       #
-      # Confronto tra primo e ultimo timepoint disponibile
-      # per ciascun paziente
+      # Numero di soggetti con un valore disponibile
+      # a ciascun timepoint
       # ------------------------------------------------------
 
-      patient_change <-
+      n_per_timepoint <-
 
         long_data_spaghetti |>
 
-        dplyr::group_by(patient) |>
+        dplyr::filter(
+
+          !is.na(value),
+
+          !is.na(time_index)
+
+        ) |>
+
+        dplyr::group_by(
+
+          time_index
+
+        ) |>
 
         dplyr::summarise(
 
-          first_value =
-            value[
-              which.min(time_index)
-            ],
-
-          last_value =
-            value[
-              which.max(time_index)
-            ],
-
-          change =
-            last_value - first_value,
+          n = dplyr::n_distinct(patient),
 
           .groups = "drop"
 
@@ -1729,80 +1748,39 @@ mira_info <- function(data,
 
 
       # ------------------------------------------------------
-      # CLASSIFICAZIONE DELLA DIREZIONE
+      # AGGIUNTA N AL SUMMARY
       # ------------------------------------------------------
 
-      long_data_spaghetti <-
+      trajectory_summary_plot <-
 
-        long_data_spaghetti |>
+        trajectory_summary_plot |>
 
         dplyr::left_join(
 
-          patient_change,
+          n_per_timepoint,
 
-          by = "patient"
-
-        ) |>
-
-        dplyr::mutate(
-
-          trajectory_direction =
-
-            dplyr::case_when(
-
-              change > 0 ~ "Increase",
-
-              change < 0 ~ "Decrease",
-
-              TRUE ~ "Stable"
-
-            )
+          by = "time_index"
 
         )
 
 
       # ------------------------------------------------------
-      # SPAGHETTI PLOT
+      # LABEL DELL'ASSE X CON N
       # ------------------------------------------------------
 
-      # ------------------------------------------------------
-      # Variabile numerica per la posizione temporale
-      # ------------------------------------------------------
+      trajectory_summary_plot$time_label_n <-
 
-      long_data_spaghetti <- long_data
+        paste0(
 
-      long_data_spaghetti$time_index <-
-        match(
-          long_data_spaghetti$time,
-          time_vars
+          trajectory_summary_plot$time_label,
+
+          "\n(N = ",
+
+          trajectory_summary_plot$n,
+
+          ")"
+
         )
-
-
-      # ------------------------------------------------------
-      # Summary per timepoint
-      # ------------------------------------------------------
-
-      trajectory_summary_plot <- data.frame(
-
-        time = time_vars,
-
-        time_index = seq_along(time_vars),
-
-        time_label = unname(
-          time_labels[time_vars]
-        ),
-
-        mean = descriptives$mean,
-
-        se = descriptives$se,
-
-        ci_lower = descriptives$ci_lower,
-
-        ci_upper = descriptives$ci_upper,
-
-        stringsAsFactors = FALSE
-
-      )
 
 
       # ------------------------------------------------------
@@ -1811,9 +1789,9 @@ mira_info <- function(data,
       # Calcoliamo la direzione tra ogni coppia di
       # timepoint consecutivi per ogni paziente.
       #
-      # Increase = valore aumenta
-      # Decrease = valore diminuisce
-      # Stable   = valore invariato
+      # Increase = aumento
+      # Decrease = diminuzione
+      # Stable   = variazione entro la soglia
       # ------------------------------------------------------
 
       trajectory_segments <-
@@ -1836,7 +1814,11 @@ mira_info <- function(data,
 
         ) |>
 
-        dplyr::group_by(patient) |>
+        dplyr::group_by(
+
+          patient
+
+        ) |>
 
         dplyr::mutate(
 
@@ -1855,9 +1837,9 @@ mira_info <- function(data,
 
               is.na(next_value) ~ NA_character_,
 
-              change > 0 ~ "Increase",
+              change > stable_threshold ~ "Increase",
 
-              change < 0 ~ "Decrease",
+              change < -stable_threshold ~ "Decrease",
 
               TRUE ~ "Stable"
 
@@ -1876,6 +1858,7 @@ mira_info <- function(data,
       # + individual observations
       # + population mean
       # + 95% CI
+      # + N per timepoint
       # ------------------------------------------------------
 
       plots_list$spaghetti <-
@@ -2064,20 +2047,22 @@ mira_info <- function(data,
 
         labels = c(
 
-          "Increase",
+          "↑ Increase",
 
-          "Decrease",
+          "↓ Decrease",
 
-          "Stable"
+          "→ Stable"
 
         ),
 
-        name = "Change between timepoints"
+        name = "Change between consecutive timepoints"
 
       ) +
 
         # ----------------------------------------------------
       # 7. X AXIS
+      #
+      # Timepoint + numero di soggetti
       # ----------------------------------------------------
 
       ggplot2::scale_x_continuous(
@@ -2086,7 +2071,7 @@ mira_info <- function(data,
           trajectory_summary_plot$time_index,
 
         labels =
-          trajectory_summary_plot$time_label,
+          trajectory_summary_plot$time_label_n,
 
         expand =
           ggplot2::expansion(
@@ -2159,7 +2144,9 @@ mira_info <- function(data,
 
               angle = 0,
 
-              hjust = 0.5
+              hjust = 0.5,
+
+              lineheight = 0.9
 
             ),
 
@@ -2183,6 +2170,14 @@ mira_info <- function(data,
 
             ),
 
+          legend.text =
+
+            ggplot2::element_text(
+
+              size = 10
+
+            ),
+
           plot.margin =
 
             ggplot2::margin(
@@ -2198,7 +2193,6 @@ mira_info <- function(data,
             )
 
         )
-
 
       # ------------------------------------------------------
       # MEAN + CI

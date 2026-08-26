@@ -1608,84 +1608,596 @@ mira_info <- function(data,
 
 
       # ------------------------------------------------------
-      # SPAGHETTI
+      # SPAGHETTI PLOT
+      # ------------------------------------------------------
+
+      # ------------------------------------------------------
+      # Variabile numerica per la posizione temporale
+      # ------------------------------------------------------
+
+      long_data_spaghetti <- long_data
+
+      long_data_spaghetti$time_index <-
+        match(
+          long_data_spaghetti$time,
+          time_vars
+        )
+
+
+      # ------------------------------------------------------
+      # Summary per timepoint
+      # ------------------------------------------------------
+
+      trajectory_summary_plot <- data.frame(
+
+        time = time_vars,
+
+        time_index = seq_along(time_vars),
+
+        time_label = unname(
+          time_labels[time_vars]
+        ),
+
+        mean = descriptives$mean,
+
+        se = descriptives$se,
+
+        ci_lower = descriptives$ci_lower,
+
+        ci_upper = descriptives$ci_upper,
+
+        stringsAsFactors = FALSE
+
+      )
+
+
+      # ------------------------------------------------------
+      # SPAGHETTI PLOT
+      # ------------------------------------------------------
+
+      # ------------------------------------------------------
+      # Variabile numerica per la posizione temporale
+      # ------------------------------------------------------
+
+      long_data_spaghetti <- long_data
+
+      long_data_spaghetti$time_index <-
+        match(
+          long_data_spaghetti$time,
+          time_vars
+        )
+
+
+      # ------------------------------------------------------
+      # Summary per timepoint
+      # ------------------------------------------------------
+
+      trajectory_summary_plot <- data.frame(
+
+        time = time_vars,
+
+        time_index = seq_along(time_vars),
+
+        time_label = unname(
+          time_labels[time_vars]
+        ),
+
+        mean = descriptives$mean,
+
+        se = descriptives$se,
+
+        ci_lower = descriptives$ci_lower,
+
+        ci_upper = descriptives$ci_upper,
+
+        stringsAsFactors = FALSE
+
+      )
+
+
+      # ------------------------------------------------------
+      # DIREZIONE DEL CAMBIAMENTO INDIVIDUALE
+      #
+      # Confronto tra primo e ultimo timepoint disponibile
+      # per ciascun paziente
+      # ------------------------------------------------------
+
+      patient_change <-
+
+        long_data_spaghetti |>
+
+        dplyr::group_by(patient) |>
+
+        dplyr::summarise(
+
+          first_value =
+            value[
+              which.min(time_index)
+            ],
+
+          last_value =
+            value[
+              which.max(time_index)
+            ],
+
+          change =
+            last_value - first_value,
+
+          .groups = "drop"
+
+        )
+
+
+      # ------------------------------------------------------
+      # CLASSIFICAZIONE DELLA DIREZIONE
+      # ------------------------------------------------------
+
+      long_data_spaghetti <-
+
+        long_data_spaghetti |>
+
+        dplyr::left_join(
+
+          patient_change,
+
+          by = "patient"
+
+        ) |>
+
+        dplyr::mutate(
+
+          trajectory_direction =
+
+            dplyr::case_when(
+
+              change > 0 ~ "Increase",
+
+              change < 0 ~ "Decrease",
+
+              TRUE ~ "Stable"
+
+            )
+
+        )
+
+
+      # ------------------------------------------------------
+      # SPAGHETTI PLOT
+      # ------------------------------------------------------
+
+      # ------------------------------------------------------
+      # Variabile numerica per la posizione temporale
+      # ------------------------------------------------------
+
+      long_data_spaghetti <- long_data
+
+      long_data_spaghetti$time_index <-
+        match(
+          long_data_spaghetti$time,
+          time_vars
+        )
+
+
+      # ------------------------------------------------------
+      # Summary per timepoint
+      # ------------------------------------------------------
+
+      trajectory_summary_plot <- data.frame(
+
+        time = time_vars,
+
+        time_index = seq_along(time_vars),
+
+        time_label = unname(
+          time_labels[time_vars]
+        ),
+
+        mean = descriptives$mean,
+
+        se = descriptives$se,
+
+        ci_lower = descriptives$ci_lower,
+
+        ci_upper = descriptives$ci_upper,
+
+        stringsAsFactors = FALSE
+
+      )
+
+
+      # ------------------------------------------------------
+      # DIREZIONE DEL CAMBIAMENTO
+      #
+      # Calcoliamo la direzione tra ogni coppia di
+      # timepoint consecutivi per ogni paziente.
+      #
+      # Increase = valore aumenta
+      # Decrease = valore diminuisce
+      # Stable   = valore invariato
+      # ------------------------------------------------------
+
+      trajectory_segments <-
+
+        long_data_spaghetti |>
+
+        dplyr::filter(
+
+          !is.na(value),
+
+          !is.na(time_index)
+
+        ) |>
+
+        dplyr::arrange(
+
+          patient,
+
+          time_index
+
+        ) |>
+
+        dplyr::group_by(patient) |>
+
+        dplyr::mutate(
+
+          next_time_index =
+            dplyr::lead(time_index),
+
+          next_value =
+            dplyr::lead(value),
+
+          change =
+            next_value - value,
+
+          trajectory_direction =
+
+            dplyr::case_when(
+
+              is.na(next_value) ~ NA_character_,
+
+              change > 0 ~ "Increase",
+
+              change < 0 ~ "Decrease",
+
+              TRUE ~ "Stable"
+
+            )
+
+        ) |>
+
+        dplyr::ungroup()
+
+
+      # ------------------------------------------------------
+      # SPAGHETTI PLOT
+      #
+      # Individual longitudinal trajectories
+      # + segment direction
+      # + individual observations
+      # + population mean
+      # + 95% CI
       # ------------------------------------------------------
 
       plots_list$spaghetti <-
 
-        ggplot2::ggplot(
+        ggplot2::ggplot() +
 
-          long_data,
+        # ----------------------------------------------------
+      # 1. 95% CONFIDENCE INTERVAL
+      # ----------------------------------------------------
 
-          ggplot2::aes(
+      ggplot2::geom_ribbon(
 
-            x = time_label,
+        data =
+          trajectory_summary_plot,
 
-            y = value,
+        ggplot2::aes(
 
-            group = patient
+          x = time_index,
+
+          ymin = ci_lower,
+
+          ymax = ci_upper,
+
+          group = 1
+
+        ),
+
+        inherit.aes = FALSE,
+
+        alpha = 0.20,
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 2. INDIVIDUAL TRAJECTORIES
+      #
+      # Ogni segmento è colorato in base alla direzione
+      # del cambiamento verso il timepoint successivo
+      # ----------------------------------------------------
+
+      ggplot2::geom_segment(
+
+        data =
+          trajectory_segments,
+
+        ggplot2::aes(
+
+          x = time_index,
+
+          xend = next_time_index,
+
+          y = value,
+
+          yend = next_value,
+
+          group = patient,
+
+          color = trajectory_direction
+
+        ),
+
+        alpha = 0.20,
+
+        linewidth = 0.6,
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 3. INDIVIDUAL OBSERVATIONS
+      # ----------------------------------------------------
+
+      ggplot2::geom_point(
+
+        data =
+          long_data_spaghetti,
+
+        ggplot2::aes(
+
+          x = time_index,
+
+          y = value
+
+        ),
+
+        color = "grey40",
+
+        alpha = 0.20,
+
+        size = 1.5,
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 4. POPULATION MEAN TRAJECTORY
+      # ----------------------------------------------------
+
+      ggplot2::geom_line(
+
+        data =
+          trajectory_summary_plot,
+
+        ggplot2::aes(
+
+          x = time_index,
+
+          y = mean,
+
+          group = 1
+
+        ),
+
+        inherit.aes = FALSE,
+
+        linewidth = 1.5,
+
+        color = "black",
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 5. POPULATION MEAN POINTS
+      # ----------------------------------------------------
+
+      ggplot2::geom_point(
+
+        data =
+          trajectory_summary_plot,
+
+        ggplot2::aes(
+
+          x = time_index,
+
+          y = mean
+
+        ),
+
+        inherit.aes = FALSE,
+
+        shape = 21,
+
+        size = 4,
+
+        stroke = 1.2,
+
+        fill = "white",
+
+        color = "black",
+
+        na.rm = TRUE
+
+      ) +
+
+        # ----------------------------------------------------
+      # 6. COLOR PALETTE
+      # ----------------------------------------------------
+
+      ggplot2::scale_color_manual(
+
+        values = c(
+
+          "Increase" = "#2C7BB6",
+
+          "Decrease" = "#D7191C",
+
+          "Stable" = "grey60"
+
+        ),
+
+        breaks = c(
+
+          "Increase",
+
+          "Decrease",
+
+          "Stable"
+
+        ),
+
+        labels = c(
+
+          "Increase",
+
+          "Decrease",
+
+          "Stable"
+
+        ),
+
+        name = "Change between timepoints"
+
+      ) +
+
+        # ----------------------------------------------------
+      # 7. X AXIS
+      # ----------------------------------------------------
+
+      ggplot2::scale_x_continuous(
+
+        breaks =
+          trajectory_summary_plot$time_index,
+
+        labels =
+          trajectory_summary_plot$time_label,
+
+        expand =
+          ggplot2::expansion(
+
+            mult = c(0.03, 0.03)
+
           )
-        ) +
 
-        ggplot2::geom_line(
+      ) +
 
-          alpha = 0.15,
+        # ----------------------------------------------------
+      # 8. LABELS
+      # ----------------------------------------------------
 
-          na.rm = TRUE
-        ) +
+      ggplot2::labs(
 
-        ggplot2::geom_point(
+        x = NULL,
 
-          alpha = 0.20,
+        y = "Value",
 
-          na.rm = TRUE
-        ) +
+        title =
+          "Individual Longitudinal Trajectories",
 
-        ggplot2::stat_summary(
+        subtitle =
+          "Subject-level changes between consecutive timepoints, with population mean and 95% confidence interval"
 
-          ggplot2::aes(
-            group = 1
-          ),
+      ) +
 
-          fun = mean,
+        # ----------------------------------------------------
+      # 9. PUBLICATION THEME
+      # ----------------------------------------------------
 
-          geom = "line",
+      ggplot2::theme_minimal(
 
-          color = "red",
+        base_size = 12
 
-          linewidth = 1.5,
+      ) +
 
-          na.rm = TRUE
-        ) +
+        ggplot2::theme(
 
-        ggplot2::stat_summary(
+          plot.title =
 
-          ggplot2::aes(
-            group = 1
-          ),
+            ggplot2::element_text(
 
-          fun = mean,
+              face = "bold",
 
-          geom = "point",
+              size = 15
 
-          color = "red",
+            ),
 
-          size = 3,
+          plot.subtitle =
 
-          na.rm = TRUE
-        ) +
+            ggplot2::element_text(
 
-        ggplot2::labs(
+              size = 10
 
-          x = "Time",
+            ),
 
-          y = "Value",
+          axis.title =
 
-          title =
-            "Individual trajectories"
-        ) +
+            ggplot2::element_text(
 
-        ggplot2::theme_minimal()
+              face = "bold"
+
+            ),
+
+          axis.text.x =
+
+            ggplot2::element_text(
+
+              angle = 0,
+
+              hjust = 0.5
+
+            ),
+
+          panel.grid.minor =
+
+            ggplot2::element_blank(),
+
+          panel.grid.major.x =
+
+            ggplot2::element_blank(),
+
+          legend.position =
+
+            "bottom",
+
+          legend.title =
+
+            ggplot2::element_text(
+
+              face = "bold"
+
+            ),
+
+          plot.margin =
+
+            ggplot2::margin(
+
+              12,
+
+              18,
+
+              12,
+
+              12
+
+            )
+
+        )
 
 
       # ------------------------------------------------------

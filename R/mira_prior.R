@@ -1,7 +1,8 @@
 #' Create a MIRA prior specification
 #'
 #' Creates a prior specification for the MIRA longitudinal
-#' Student-t model.
+#' Student-t model. The specification is independent of the
+#' number of longitudinal measurement occasions.
 #'
 #' @param stan_data Data prepared by [mira_prepare_data()].
 #' @param profile Character string specifying a predefined prior
@@ -42,217 +43,362 @@ mira_prior <- function(
     nu_rate = NULL
 ) {
 
-  # ------------------------------------------------------------
-  # Check data
-  # ------------------------------------------------------------
+  # ============================================================
+  # CHECK DATA
+  # ============================================================
 
   if (!is.list(stan_data)) {
-    stop("`stan_data` must be a list.", call. = FALSE)
+
+    stop(
+      "`stan_data` must be a list.",
+      call. = FALSE
+    )
   }
+
 
   required <- c(
     "mean_y",
     "sd_y"
   )
 
+
   missing <- setdiff(
     required,
     names(stan_data)
   )
 
+
   if (length(missing) > 0) {
+
     stop(
       "Missing Stan data: ",
-      paste(missing, collapse = ", "),
+      paste(
+        missing,
+        collapse = ", "
+      ),
       call. = FALSE
     )
   }
 
 
-  # ------------------------------------------------------------
-  # Profile
-  # ------------------------------------------------------------
+  # ============================================================
+  # PROFILE
+  # ============================================================
 
   profile <- match.arg(profile)
 
 
-  # ------------------------------------------------------------
-  # Scale
-  # ------------------------------------------------------------
+  # ============================================================
+  # OUTCOME SCALE
+  # ============================================================
 
   mean_y <- stan_data$mean_y
+
   sd_y <- stan_data$sd_y
 
 
-  if (!is.finite(mean_y)) {
+  if (
+    length(mean_y) != 1 ||
+    !is.numeric(mean_y) ||
+    !is.finite(mean_y)
+  ) {
+
     stop(
-      "`stan_data$mean_y` must be finite.",
+      "`stan_data$mean_y` must be a single finite numeric value.",
       call. = FALSE
     )
   }
 
-  if (!is.finite(sd_y) || sd_y <= 0) {
+
+  if (
+    length(sd_y) != 1 ||
+    !is.numeric(sd_y) ||
+    !is.finite(sd_y) ||
+    sd_y <= 0
+  ) {
+
     stop(
-      "`stan_data$sd_y` must be positive and finite.",
+      "`stan_data$sd_y` must be a single positive finite numeric value.",
       call. = FALSE
     )
   }
+
+
+  # ============================================================
+  # PREDEFINED PROFILES
+  #
+  # IMPORTANT:
+  #
+  # These priors do NOT depend on the number of time points.
+  #
+  # Whether T = 2, 3, 4, 5, 10, ...
+  # the same prior specification can be applied.
+  # ============================================================
 
 
   # ------------------------------------------------------------
-  # Default profile
-  #
-  # This reproduces the priors from the original model.
+  # DEFAULT
   # ------------------------------------------------------------
 
   if (profile == "default") {
 
-    mu_time_mean <- mean_y
-    mu_time_sd <- 5 * sd_y
+    mu_time_mean <-
+      mean_y
 
-    sigma_intercept_rate <- 1 / sd_y
-    sigma_slope_rate <- 1 / sd_y
+    mu_time_sd <-
+      5 * sd_y
 
-    sigma_rate <- 1 / sd_y
+    sigma_intercept_rate <-
+      1 / sd_y
 
-    nu_shape <- 2
-    nu_rate <- 0.1
+    sigma_slope_rate <-
+      1 / sd_y
+
+    sigma_rate <-
+      1 / sd_y
+
+    nu_shape <-
+      2
+
+    nu_rate <-
+      0.1
   }
 
 
   # ------------------------------------------------------------
-  # Weak profile
+  # WEAK
   # ------------------------------------------------------------
 
   if (profile == "weak") {
 
-    mu_time_mean <- mean_y
-    mu_time_sd <- 10 * sd_y
+    mu_time_mean <-
+      mean_y
 
-    sigma_intercept_rate <- 0.5 / sd_y
-    sigma_slope_rate <- 0.5 / sd_y
+    mu_time_sd <-
+      10 * sd_y
 
-    sigma_rate <- 0.5 / sd_y
+    sigma_intercept_rate <-
+      0.5 / sd_y
 
-    nu_shape <- 2
-    nu_rate <- 0.05
+    sigma_slope_rate <-
+      0.5 / sd_y
+
+    sigma_rate <-
+      0.5 / sd_y
+
+    nu_shape <-
+      2
+
+    nu_rate <-
+      0.05
   }
 
 
   # ------------------------------------------------------------
-  # Regularized profile
+  # REGULARIZED
   # ------------------------------------------------------------
 
   if (profile == "regularized") {
 
-    mu_time_mean <- mean_y
-    mu_time_sd <- 2 * sd_y
+    mu_time_mean <-
+      mean_y
 
-    sigma_intercept_rate <- 2 / sd_y
-    sigma_slope_rate <- 2 / sd_y
+    mu_time_sd <-
+      2 * sd_y
 
-    sigma_rate <- 2 / sd_y
+    sigma_intercept_rate <-
+      2 / sd_y
 
-    nu_shape <- 2
-    nu_rate <- 0.1
+    sigma_slope_rate <-
+      2 / sd_y
+
+    sigma_rate <-
+      2 / sd_y
+
+    nu_shape <-
+      2
+
+    nu_rate <-
+      0.1
   }
 
 
   # ------------------------------------------------------------
-  # Informative profile
+  # INFORMATIVE
   # ------------------------------------------------------------
 
   if (profile == "informative") {
 
-    mu_time_mean <- mean_y
-    mu_time_sd <- 1 * sd_y
+    mu_time_mean <-
+      mean_y
 
-    sigma_intercept_rate <- 5 / sd_y
-    sigma_slope_rate <- 5 / sd_y
+    mu_time_sd <-
+      1 * sd_y
 
-    sigma_rate <- 5 / sd_y
+    sigma_intercept_rate <-
+      5 / sd_y
 
-    nu_shape <- 5
-    nu_rate <- 0.5
+    sigma_slope_rate <-
+      5 / sd_y
+
+    sigma_rate <-
+      5 / sd_y
+
+    nu_shape <-
+      5
+
+    nu_rate <-
+      0.5
   }
 
 
-  # ------------------------------------------------------------
-  # Custom profile
-  # ------------------------------------------------------------
+  # ============================================================
+  # CUSTOM
+  # ============================================================
 
   if (profile == "custom") {
 
+    # ----------------------------------------------------------
+    # Population mean
+    # ----------------------------------------------------------
+
     if (is.null(mu_time_mean)) {
-      mu_time_mean <- mean_y
+
+      mu_time_mean <-
+        mean_y
     }
+
+
+    # ----------------------------------------------------------
+    # Population SD
+    # ----------------------------------------------------------
 
     if (is.null(mu_time_sd)) {
+
       stop(
-        "`mu_time_sd` must be supplied for `profile = 'custom'`.",
+        paste0(
+          "`mu_time_sd` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
+
+
+    # ----------------------------------------------------------
+    # Random intercept
+    # ----------------------------------------------------------
 
     if (is.null(sigma_intercept_rate)) {
+
       stop(
-        "`sigma_intercept_rate` must be supplied for ",
-        "`profile = 'custom'`.",
+        paste0(
+          "`sigma_intercept_rate` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
+
+
+    # ----------------------------------------------------------
+    # Random slope
+    # ----------------------------------------------------------
 
     if (is.null(sigma_slope_rate)) {
+
       stop(
-        "`sigma_slope_rate` must be supplied for ",
-        "`profile = 'custom'`.",
+        paste0(
+          "`sigma_slope_rate` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
+
+
+    # ----------------------------------------------------------
+    # Residual SD
+    # ----------------------------------------------------------
 
     if (is.null(sigma_rate)) {
+
       stop(
-        "`sigma_rate` must be supplied for ",
-        "`profile = 'custom'`.",
+        paste0(
+          "`sigma_rate` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
+
+
+    # ----------------------------------------------------------
+    # Student-t shape
+    # ----------------------------------------------------------
 
     if (is.null(nu_shape)) {
+
       stop(
-        "`nu_shape` must be supplied for ",
-        "`profile = 'custom'`.",
+        paste0(
+          "`nu_shape` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
 
+
+    # ----------------------------------------------------------
+    # Student-t rate
+    # ----------------------------------------------------------
+
     if (is.null(nu_rate)) {
+
       stop(
-        "`nu_rate` must be supplied for ",
-        "`profile = 'custom'`.",
+        paste0(
+          "`nu_rate` must be supplied for ",
+          "`profile = 'custom'`."
+        ),
         call. = FALSE
       )
     }
   }
 
 
-  # ------------------------------------------------------------
-  # Validation
-  # ------------------------------------------------------------
+  # ============================================================
+  # VALIDATION
+  # ============================================================
 
   values <- list(
-    mu_time_mean = mu_time_mean,
-    mu_time_sd = mu_time_sd,
-    sigma_intercept_rate = sigma_intercept_rate,
-    sigma_slope_rate = sigma_slope_rate,
-    sigma_rate = sigma_rate,
-    nu_shape = nu_shape,
-    nu_rate = nu_rate
+
+    mu_time_mean =
+      mu_time_mean,
+
+    mu_time_sd =
+      mu_time_sd,
+
+    sigma_intercept_rate =
+      sigma_intercept_rate,
+
+    sigma_slope_rate =
+      sigma_slope_rate,
+
+    sigma_rate =
+      sigma_rate,
+
+    nu_shape =
+      nu_shape,
+
+    nu_rate =
+      nu_rate
   )
+
 
   for (name in names(values)) {
 
     value <- values[[name]]
+
 
     if (
       length(value) != 1 ||
@@ -270,42 +416,57 @@ mira_prior <- function(
   }
 
 
+  # ============================================================
+  # POSITIVITY CHECKS
+  # ============================================================
+
   if (mu_time_sd <= 0) {
+
     stop(
       "`mu_time_sd` must be > 0.",
       call. = FALSE
     )
   }
 
+
   if (sigma_intercept_rate <= 0) {
+
     stop(
       "`sigma_intercept_rate` must be > 0.",
       call. = FALSE
     )
   }
 
+
   if (sigma_slope_rate <= 0) {
+
     stop(
       "`sigma_slope_rate` must be > 0.",
       call. = FALSE
     )
   }
 
+
   if (sigma_rate <= 0) {
+
     stop(
       "`sigma_rate` must be > 0.",
       call. = FALSE
     )
   }
 
+
   if (nu_shape <= 0) {
+
     stop(
       "`nu_shape` must be > 0.",
       call. = FALSE
     )
   }
 
+
   if (nu_rate <= 0) {
+
     stop(
       "`nu_rate` must be > 0.",
       call. = FALSE
@@ -313,9 +474,9 @@ mira_prior <- function(
   }
 
 
-  # ------------------------------------------------------------
-  # Build object
-  # ------------------------------------------------------------
+  # ============================================================
+  # BUILD PRIOR OBJECT
+  # ============================================================
 
   prior <- list(
 
@@ -345,9 +506,11 @@ mira_prior <- function(
   )
 
 
-  class(prior) <- "mira_prior"
+  class(prior) <-
+    "mira_prior"
 
-  prior
+
+  return(prior)
 }
 
 
@@ -364,7 +527,8 @@ print.mira_prior <- function(
 
   cat("\n")
   cat("MIRA prior specification\n")
-  cat("------------------------\n")
+  cat("========================\n\n")
+
 
   cat(
     "Profile: ",
@@ -373,9 +537,13 @@ print.mira_prior <- function(
     sep = ""
   )
 
+
   cat(
-    "Population means:\n",
-    "  mu_time ~ Normal(",
+    "Population time-specific means:\n"
+  )
+
+  cat(
+    "  mu_time[t] ~ Normal(",
     x$mu_time_prior_mean,
     ", ",
     x$mu_time_prior_sd,
@@ -383,32 +551,48 @@ print.mira_prior <- function(
     sep = ""
   )
 
+
   cat(
-    "Random intercept:\n",
+    "Random intercept:\n"
+  )
+
+  cat(
     "  sigma_intercept ~ Exponential(",
     x$sigma_intercept_prior_rate,
     ")\n\n",
     sep = ""
   )
 
+
   cat(
-    "Random slope:\n",
+    "Random slope:\n"
+  )
+
+  cat(
     "  sigma_slope ~ Exponential(",
     x$sigma_slope_prior_rate,
     ")\n\n",
     sep = ""
   )
 
+
   cat(
-    "Residual SD:\n",
+    "Residual SD:\n"
+  )
+
+  cat(
     "  sigma ~ Exponential(",
     x$sigma_prior_rate,
     ")\n\n",
     sep = ""
   )
 
+
   cat(
-    "Student-t degrees of freedom:\n",
+    "Student-t degrees of freedom:\n"
+  )
+
+  cat(
     "  nu ~ Gamma(",
     x$nu_prior_shape,
     ", ",
@@ -417,7 +601,9 @@ print.mira_prior <- function(
     sep = ""
   )
 
+
   cat("\n")
+
 
   invisible(x)
 }
@@ -430,7 +616,13 @@ print.mira_prior <- function(
 #' @return Invisibly returns TRUE.
 #'
 #' @export
-mira_validate_prior <- function(prior) {
+mira_validate_prior <- function(
+    prior
+) {
+
+  # ============================================================
+  # CLASS
+  # ============================================================
 
   if (!inherits(prior, "mira_prior")) {
 
@@ -440,29 +632,109 @@ mira_validate_prior <- function(prior) {
     )
   }
 
+
+  # ============================================================
+  # REQUIRED FIELDS
+  # ============================================================
+
   required <- c(
+
     "mu_time_prior_mean",
+
     "mu_time_prior_sd",
+
     "sigma_intercept_prior_rate",
+
     "sigma_slope_prior_rate",
+
     "sigma_prior_rate",
+
     "nu_prior_shape",
+
     "nu_prior_rate"
   )
+
 
   missing <- setdiff(
     required,
     names(prior)
   )
 
+
   if (length(missing) > 0) {
 
     stop(
       "Invalid MIRA prior. Missing fields: ",
-      paste(missing, collapse = ", "),
+      paste(
+        missing,
+        collapse = ", "
+      ),
       call. = FALSE
     )
   }
+
+
+  # ============================================================
+  # NUMERIC VALIDATION
+  # ============================================================
+
+  values <- prior[required]
+
+
+  for (name in names(values)) {
+
+    value <- values[[name]]
+
+
+    if (
+      length(value) != 1 ||
+      !is.numeric(value) ||
+      !is.finite(value)
+    ) {
+
+      stop(
+        "Invalid MIRA prior field `",
+        name,
+        "`.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  # ============================================================
+  # POSITIVITY
+  # ============================================================
+
+  positive_parameters <- c(
+
+    "mu_time_prior_sd",
+
+    "sigma_intercept_prior_rate",
+
+    "sigma_slope_prior_rate",
+
+    "sigma_prior_rate",
+
+    "nu_prior_shape",
+
+    "nu_prior_rate"
+  )
+
+
+  for (name in positive_parameters) {
+
+    if (prior[[name]] <= 0) {
+
+      stop(
+        "`",
+        name,
+        "` must be > 0.",
+        call. = FALSE
+      )
+    }
+  }
+
 
   invisible(TRUE)
 }
@@ -475,9 +747,14 @@ mira_validate_prior <- function(prior) {
 #' @return A named list suitable for CmdStan.
 #'
 #' @export
-mira_prior_stan_data <- function(prior) {
+mira_prior_stan_data <- function(
+    prior
+) {
 
-  mira_validate_prior(prior)
+  mira_validate_prior(
+    prior
+  )
+
 
   list(
 

@@ -1,22 +1,48 @@
 data {
 
   // ============================================================
-  // DATA
+  // DATA DIMENSIONS
   // ============================================================
 
   int<lower=1> N;
   int<lower=1> S;
+  int<lower=2> K;
+
+
+  // ============================================================
+  // OBSERVATIONS
+  // ============================================================
 
   vector[N] y;
 
+
+  // ============================================================
+  // SUBJECT INDEX
+  // ============================================================
+
   array[N] int<lower=1, upper=S> subject;
-  array[N] int<lower=1, upper=3> time;
 
-  vector[3] time_value;
 
-  // ------------------------------------------------------------
-  // Clinical threshold
-  // ------------------------------------------------------------
+  // ============================================================
+  // TIME INDEX
+  // ============================================================
+
+  array[N] int<lower=1, upper=K> time;
+
+
+  // ============================================================
+  // ACTUAL TIME VALUES
+  //
+  // Example:
+  // c(0, 3, 5, 12)
+  // ============================================================
+
+  vector[K] time_value;
+
+
+  // ============================================================
+  // CLINICAL THRESHOLD
+  // ============================================================
 
   real meaningful_change;
 
@@ -26,44 +52,72 @@ data {
   // ============================================================
 
   real mu_time_prior_mean;
+
   real<lower=0> mu_time_prior_sd;
 
-  real<lower=0> sigma_intercept_prior_rate;
 
-  real<lower=0> sigma_slope_prior_rate;
+  real<lower=0>
+    sigma_intercept_prior_rate;
 
-  real<lower=0> sigma_prior_rate;
 
-  real<lower=0> nu_prior_shape;
-  real<lower=0> nu_prior_rate;
+  real<lower=0>
+    sigma_slope_prior_rate;
+
+
+  real<lower=0>
+    sigma_prior_rate;
+
+
+  real<lower=0>
+    nu_prior_shape;
+
+
+  real<lower=0>
+    nu_prior_rate;
 }
 
 
 parameters {
 
   // ============================================================
-  // POPULATION-LEVEL TRAJECTORY
+  // POPULATION-LEVEL TIME MEANS
+  //
+  // One mean for every measurement occasion.
+  //
+  // K = 2  -> mu_time[1:2]
+  // K = 4  -> mu_time[1:4]
+  // K = 5  -> mu_time[1:5]
   // ============================================================
 
-  vector[3] mu_time;
+  vector[K] mu_time;
 
 
   // ============================================================
   // SUBJECT-LEVEL RANDOM EFFECTS
+  //
+  // Row 1 = random intercept
+  // Row 2 = random slope
   // ============================================================
 
   matrix[2, S] z_subject;
 
+
   vector<lower=0>[2] sigma_subject;
+
 
   cholesky_factor_corr[2] L_subject;
 
 
   // ============================================================
-  // RESIDUAL DISTRIBUTION
+  // RESIDUAL STANDARD DEVIATION
   // ============================================================
 
   real<lower=0> sigma;
+
+
+  // ============================================================
+  // STUDENT-T DEGREES OF FREEDOM
+  // ============================================================
 
   real<lower=2> nu;
 }
@@ -76,6 +130,7 @@ transformed parameters {
   // ============================================================
 
   matrix[2, S] b_subject;
+
 
   b_subject =
     diag_pre_multiply(
@@ -91,7 +146,7 @@ model {
 
 
   // ============================================================
-  // POPULATION TRAJECTORY
+  // POPULATION TIME MEANS
   // ============================================================
 
   mu_time ~ normal(
@@ -101,27 +156,39 @@ model {
 
 
   // ============================================================
-  // HIERARCHICAL SUBJECT EFFECTS
+  // NON-CENTERED RANDOM EFFECTS
   // ============================================================
 
   to_vector(z_subject) ~ std_normal();
 
+
+  // ============================================================
+  // RANDOM INTERCEPT SD
+  // ============================================================
 
   sigma_subject[1] ~ exponential(
     sigma_intercept_prior_rate
   );
 
 
+  // ============================================================
+  // RANDOM SLOPE SD
+  // ============================================================
+
   sigma_subject[2] ~ exponential(
     sigma_slope_prior_rate
   );
 
 
+  // ============================================================
+  // RANDOM EFFECT CORRELATION
+  // ============================================================
+
   L_subject ~ lkj_corr_cholesky(2);
 
 
   // ============================================================
-  // RESIDUAL VARIATION
+  // RESIDUAL SD
   // ============================================================
 
   sigma ~ exponential(
@@ -141,6 +208,14 @@ model {
 
   // ============================================================
   // OBSERVATION MODEL
+  //
+  // For each observation:
+  //
+  // population mean at that time
+  // + subject random intercept
+  // + subject random slope * actual time
+  //
+  // This works for ANY K.
   // ============================================================
 
   for (i in 1:N) {
@@ -155,6 +230,10 @@ model {
   }
 
 
+  // ============================================================
+  // LIKELIHOOD
+  // ============================================================
+
   y ~ student_t(
     nu,
     mu,
@@ -166,74 +245,122 @@ model {
 generated quantities {
 
   // ============================================================
-  // POPULATION CONTRASTS
+  // POPULATION CHANGE FROM BASELINE
+  //
+  // change_from_baseline[k]
+  //
+  // k = 1 -> 0 by definition
+  // k = 2 -> time 2 - baseline
+  // k = 3 -> time 3 - baseline
+  // ...
   // ============================================================
 
-  real change_T1;
-  real change_T2;
-  real change_T2_vs_T1;
-
-
-  // ============================================================
-  // POPULATION SLOPE
-  // ============================================================
-
-  real population_slope;
+  vector[K] change_from_baseline;
 
 
   // ============================================================
-  // VARIANCE COMPONENTS
+  // POPULATION CHANGE BETWEEN CONSECUTIVE TIMES
+  //
+  // consecutive_change[1] =
+  //   time 2 - time 1
+  //
+  // consecutive_change[2] =
+  //   time 3 - time 2
+  //
+  // etc.
   // ============================================================
 
-  real sigma_intercept;
-  real sigma_slope;
-  real rho_subject;
-
-
-  // ============================================================
-  // STANDARDIZED EFFECT
-  // ============================================================
-
-  real standardized_change_T2;
-
-
-  // ============================================================
-  // POPULATION CLINICAL QUANTITIES
-  // ============================================================
-
-  real population_meaningful_improvement_T2;
-  real population_any_improvement_T2;
-
-  real population_change_minus_MCID_T2;
+  vector[K - 1] consecutive_change;
 
 
   // ============================================================
-  // INDIVIDUAL EFFECTS
+  // POPULATION SLOPE BETWEEN BASELINE AND EACH TIME
+  // ============================================================
+
+  vector[K] population_slope_from_baseline;
+
+
+  // ============================================================
+  // STANDARDIZED CHANGE FROM BASELINE
+  // ============================================================
+
+  vector[K] standardized_change_from_baseline;
+
+
+  // ============================================================
+  // POPULATION CLINICAL IMPROVEMENT
+  // ============================================================
+
+  vector[K] population_any_improvement;
+
+  vector[K] population_meaningful_improvement;
+
+
+  // ============================================================
+  // POPULATION CHANGE MINUS MCID
+  // ============================================================
+
+  vector[K] population_change_minus_MCID;
+
+
+  // ============================================================
+  // SUBJECT-SPECIFIC SLOPES
   // ============================================================
 
   vector[S] individual_slope;
 
-  vector[S] individual_change_T1;
-  vector[S] individual_change_T2;
-  vector[S] individual_change_T2_vs_T1;
+
+  // ============================================================
+  // SUBJECT-SPECIFIC CHANGES FROM BASELINE
+  //
+  // Matrix:
+  //
+  // row = time
+  // col = subject
+  // ============================================================
+
+  matrix[K, S] individual_change_from_baseline;
+
+
+  // ============================================================
+  // SUBJECT-SPECIFIC CONSECUTIVE CHANGES
+  // ============================================================
+
+  matrix[K - 1, S] individual_consecutive_change;
 
 
   // ============================================================
   // INDIVIDUAL CLINICAL RESPONSE
   // ============================================================
 
-  vector[S] individual_any_improvement_T2;
+  matrix[K, S] individual_any_improvement;
 
-  vector[S] individual_meaningful_improvement_T2;
+  matrix[K, S] individual_meaningful_improvement;
 
-  vector[S] individual_change_minus_MCID_T2;
+
+  // ============================================================
+  // INDIVIDUAL CHANGE MINUS MCID
+  // ============================================================
+
+  matrix[K, S] individual_change_minus_MCID;
 
 
   // ============================================================
   // POPULATION RESPONDER PROPORTION
   // ============================================================
 
-  real population_responder_proportion_T2;
+  vector[K] population_responder_proportion;
+
+
+  // ============================================================
+  // RANDOM EFFECT PARAMETERS
+  // ============================================================
+
+  real sigma_intercept;
+
+  real sigma_slope;
+
+  real rho_subject;
 
 
   // ============================================================
@@ -251,33 +378,98 @@ generated quantities {
 
 
   // ============================================================
-  // POPULATION CONTRASTS
+  // POPULATION CHANGES
   // ============================================================
 
-  change_T1 =
-    mu_time[2] - mu_time[1];
+  for (k in 1:K) {
 
-
-  change_T2 =
-    mu_time[3] - mu_time[1];
-
-
-  change_T2_vs_T1 =
-    mu_time[3] - mu_time[2];
+    change_from_baseline[k] =
+      mu_time[k] - mu_time[1];
+  }
 
 
   // ============================================================
-  // POPULATION SLOPE
+  // CONSECUTIVE CHANGES
   // ============================================================
 
-  population_slope =
-    (mu_time[3] - mu_time[1])
-    /
-    (time_value[3] - time_value[1]);
+  for (k in 1:(K - 1)) {
+
+    consecutive_change[k] =
+      mu_time[k + 1]
+      -
+      mu_time[k];
+  }
 
 
   // ============================================================
-  // VARIANCE COMPONENTS
+  // POPULATION SLOPES
+  //
+  // Slope from baseline to each time point.
+  //
+  // At baseline the slope is set to 0.
+  // ============================================================
+
+  population_slope_from_baseline[1] = 0;
+
+
+  for (k in 2:K) {
+
+    population_slope_from_baseline[k] =
+      (
+        mu_time[k]
+        -
+        mu_time[1]
+      )
+      /
+      (
+        time_value[k]
+        -
+        time_value[1]
+      );
+  }
+
+
+  // ============================================================
+  // STANDARDIZED POPULATION CHANGE
+  // ============================================================
+
+  for (k in 1:K) {
+
+    standardized_change_from_baseline[k] =
+      change_from_baseline[k]
+      /
+      sigma;
+  }
+
+
+  // ============================================================
+  // POPULATION CLINICAL QUANTITIES
+  // ============================================================
+
+  for (k in 1:K) {
+
+    population_any_improvement[k] =
+      (change_from_baseline[k] > 0)
+      ? 1 : 0;
+
+
+    population_meaningful_improvement[k] =
+      (
+        change_from_baseline[k]
+        >= meaningful_change
+      )
+      ? 1 : 0;
+
+
+    population_change_minus_MCID[k] =
+      change_from_baseline[k]
+      -
+      meaningful_change;
+  }
+
+
+  // ============================================================
+  // RANDOM EFFECT PARAMETERS
   // ============================================================
 
   sigma_intercept =
@@ -295,116 +487,96 @@ generated quantities {
 
 
   // ============================================================
-  // STANDARDIZED EFFECT
-  // ============================================================
-
-  standardized_change_T2 =
-    change_T2 / sigma;
-
-
-  // ============================================================
-  // POPULATION CLINICAL QUANTITIES
-  // ============================================================
-
-  population_any_improvement_T2 =
-    (change_T2 > 0)
-      ? 1 : 0;
-
-
-  population_meaningful_improvement_T2 =
-    (change_T2 >= meaningful_change)
-      ? 1 : 0;
-
-
-  population_change_minus_MCID_T2 =
-    change_T2 - meaningful_change;
-
-
-  // ============================================================
-  // SUBJECT-SPECIFIC QUANTITIES
+  // INDIVIDUAL SLOPES
   // ============================================================
 
   for (s in 1:S) {
 
-    real mu_T0;
-    real mu_T1;
-    real mu_T2;
-
-
-    // ----------------------------------------------------------
-    // Individual slope
-    // ----------------------------------------------------------
-
     individual_slope[s] =
-      population_slope
+      population_slope_from_baseline[K]
       +
       b_subject[2, s];
+  }
 
 
-    // ----------------------------------------------------------
-    // Subject-specific expected values
-    // ----------------------------------------------------------
+  // ============================================================
+  // INDIVIDUAL CHANGES
+  // ============================================================
 
-    mu_T0 =
-      mu_time[1]
-      +
-      b_subject[1, s]
-      +
-      b_subject[2, s]
-        * time_value[1];
-
-
-    mu_T1 =
-      mu_time[2]
-      +
-      b_subject[1, s]
-      +
-      b_subject[2, s]
-        * time_value[2];
-
-
-    mu_T2 =
-      mu_time[3]
-      +
-      b_subject[1, s]
-      +
-      b_subject[2, s]
-        * time_value[3];
-
+  for (s in 1:S) {
 
     // ----------------------------------------------------------
-    // Individual changes
+    // Changes from baseline
     // ----------------------------------------------------------
 
-    individual_change_T1[s] =
-      mu_T1 - mu_T0;
+    for (k in 1:K) {
+
+      real mu_k;
+      real mu_baseline;
 
 
-    individual_change_T2[s] =
-      mu_T2 - mu_T0;
+      mu_k =
+        mu_time[k]
+        +
+        b_subject[1, s]
+        +
+        b_subject[2, s]
+          * time_value[k];
 
 
-    individual_change_T2_vs_T1[s] =
-      mu_T2 - mu_T1;
+      mu_baseline =
+        mu_time[1]
+        +
+        b_subject[1, s]
+        +
+        b_subject[2, s]
+          * time_value[1];
 
 
-    // ----------------------------------------------------------
-    // Clinical response
-    // ----------------------------------------------------------
+      individual_change_from_baseline[k, s] =
+        mu_k
+        -
+        mu_baseline;
 
-    individual_any_improvement_T2[s] =
-      (individual_change_T2[s] > 0)
+
+      // --------------------------------------------------------
+      // Clinical response
+      // --------------------------------------------------------
+
+      individual_any_improvement[k, s] =
+        (
+          individual_change_from_baseline[k, s]
+          > 0
+        )
         ? 1 : 0;
 
 
-    individual_meaningful_improvement_T2[s] =
-      (individual_change_T2[s] >= meaningful_change)
+      individual_meaningful_improvement[k, s] =
+        (
+          individual_change_from_baseline[k, s]
+          >= meaningful_change
+        )
         ? 1 : 0;
 
 
-    individual_change_minus_MCID_T2[s] =
-      individual_change_T2[s]
-      - meaningful_change;
+      individual_change_minus_MCID[k, s] =
+        individual_change_from_baseline[k, s]
+        -
+        meaningful_change;
+    }
+
+
+    // ----------------------------------------------------------
+    // Consecutive changes
+    // ----------------------------------------------------------
+
+    for (k in 1:(K - 1)) {
+
+      individual_consecutive_change[k, s] =
+        individual_change_from_baseline[k + 1, s]
+        -
+        individual_change_from_baseline[k, s];
+    }
   }
 
 
@@ -412,10 +584,13 @@ generated quantities {
   // POPULATION RESPONDER PROPORTION
   // ============================================================
 
-  population_responder_proportion_T2 =
-    mean(
-      individual_meaningful_improvement_T2
-    );
+  for (k in 1:K) {
+
+    population_responder_proportion[k] =
+      mean(
+        individual_meaningful_improvement[k]
+      );
+  }
 
 
   // ============================================================
@@ -436,6 +611,10 @@ generated quantities {
         * time_value[time[i]];
 
 
+    // ----------------------------------------------------------
+    // Log likelihood
+    // ----------------------------------------------------------
+
     log_lik[i] =
       student_t_lpdf(
         y[i] |
@@ -444,6 +623,10 @@ generated quantities {
         sigma
       );
 
+
+    // ----------------------------------------------------------
+    // Posterior predictive observation
+    // ----------------------------------------------------------
 
     y_rep[i] =
       student_t_rng(

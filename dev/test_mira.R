@@ -103,6 +103,12 @@ data$IOP_t3 <- rnorm(
   sd = true_sigma
 )
 
+data$IOP_t4 <- rnorm(
+  n_patients,
+  mean = true_t1 + subject_effect,
+  sd = true_sigma
+)
+
 
 
 res <- mira_info(
@@ -123,20 +129,7 @@ res <- mira_info(
 )
 
 
-res <- mira_info(
-  data = data,
-  id = "patient",
-  time_vars = c("IOP_t0", "IOP_t1"),
-  time_labels = c(
-    "Baseline",
-    "Time 1"
-  ),
-  plots = TRUE,
-  model = TRUE,
-  outliers = TRUE,
-  correlations = TRUE,
-  verbose = TRUE
-)
+
 
 
 res$descriptives
@@ -152,38 +145,132 @@ res$plots
 res$plots$spaghetti
 res$outliers
 res$model
-# ------------------------------------------------------------
-# Prepare data for Stan
-# ------------------------------------------------------------
+# ============================================================
+# PREPARE DATA
+# ============================================================
 
 stan_data <- mira_prepare_data(
   data = data,
-  time_value = c(0, 6, 12),
-  meaningful_change = 1.5
+  time_value = c(0, 3, 5, 12),
+  meaningful_change = 1
 )
 
-# ------------------------------------------------------------
-# Fit model
-# ------------------------------------------------------------
+
+# ============================================================
+# PRIOR
+# ============================================================
 
 
 prior <- mira_prior(
   stan_data,
-  profile = "custom",
-  mu_time_sd = 5 * stan_data$sd_y,
-  sigma_intercept_rate = 1 / stan_data$sd_y,
-  sigma_slope_rate = 1 / stan_data$sd_y,
-  sigma_rate = 1 / stan_data$sd_y,
-  nu_shape = 2,
-  nu_rate = 0.1
+  profile = "default"
 )
 
-prior <- mira_prior(
+stan_data <- c(
   stan_data,
-  profile = "regularized"
+  mira_prior_stan_data(prior)
 )
 
-print(prior)
+
+# ============================================================
+# STAN MODEL
+# ============================================================
+
+stan_file <- system.file(
+  "stan",
+  "gaussian_longitudinal.stan",
+  package = "MIRA"
+)
+
+
+
+
+# ============================================================
+# COMPILE
+# ============================================================
+
+model <- cmdstanr::cmdstan_model(
+  stan_file,
+  quiet = FALSE
+)
+
+
+# ============================================================
+# INITIAL VALUES
+# ============================================================
+
+init <- function() {
+
+  list(
+
+    # K population means
+    mu_time = rep(
+      stan_data$mean_y,
+      stan_data$K
+    ),
+
+    # Random effects:
+    # row 1 = intercept
+    # row 2 = slope
+    z_subject = matrix(
+      0,
+      nrow = 2,
+      ncol = stan_data$S
+    ),
+
+    sigma_subject = c(
+      max(
+        stan_data$sd_y,
+        0.1
+      ),
+      max(
+        stan_data$sd_y / 10,
+        0.01
+      )
+    ),
+
+    L_subject = diag(2),
+
+    sigma = max(
+      stan_data$sd_y,
+      0.1
+    ),
+
+    nu = 10
+  )
+}
+
+
+# ============================================================
+# FIT
+# ============================================================
+
+fit <- model$sample(
+
+  data = stan_data,
+
+  chains = 2,
+
+  parallel_chains = 2,
+
+  iter_warmup = 300,
+
+  iter_sampling = 500,
+
+  seed = 123,
+
+  #init = init,
+
+  refresh = 100
+)
+
+
+# ============================================================
+# PRINT RESULTS
+# ============================================================
+
+fit
+
 
 fit <- mira_fit(
   stan_data,

@@ -142,7 +142,7 @@ res$call
 res$overview
 res$missing
 res$correlations
-res$plots
+res$plots$boxplot
 res$plots$spaghetti
 res$outliers
 res$model

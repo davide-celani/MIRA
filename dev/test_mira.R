@@ -114,12 +114,13 @@ data$IOP_t4 <- rnorm(
 res <- mira_info(
   data = data,
   id = "patient",
-  time_vars = c("IOP_t0", "IOP_t1", "IOP_t2", "IOP_t3"),
+  time_vars = c("IOP_t0", "IOP_t1", "IOP_t2", "IOP_t3", "IOP_t4"),
   time_labels = c(
     "Baseline",
     "Time 1",
     "Time 2",
-    "Time 3"
+    "Time 3",
+    "Time 4"
   ),
   plots = TRUE,
   model = TRUE,
@@ -151,7 +152,7 @@ res$model
 
 stan_data <- mira_prepare_data(
   data = data,
-  time_value = c(0, 3, 5, 12),
+  time_value = c(0, 3, 5, 12, 15),
   meaningful_change = 1
 )
 
@@ -166,11 +167,15 @@ prior <- mira_prior(
   profile = "default"
 )
 
-stan_data <- c(
-  stan_data,
-  mira_prior_stan_data(prior)
+fit <- mira_fit(
+  stan_data = stan_data,
+  prior = prior,
+  chains = 4,
+  parallel_chains = 4,
+  iter_warmup = 300,
+  iter_sampling = 1000,
+  seed = 123
 )
-
 
 # ============================================================
 # STAN MODEL
@@ -270,10 +275,7 @@ fit <- model$sample(
 # ============================================================
 
 
-fit <- mira_fit(
-  stan_data,
-  prior=prior
-)
+
 
 
 # ------------------------------------------------------------

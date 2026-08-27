@@ -191,90 +191,17 @@ stan_file <- system.file(
 
 
 # ============================================================
-# COMPILE
-# ============================================================
-
-model <- cmdstanr::cmdstan_model(
-  stan_file,
-  quiet = FALSE
-)
-
-
-# ============================================================
-# INITIAL VALUES
-# ============================================================
-
-init <- function() {
-
-  list(
-
-    # K population means
-    mu_time = rep(
-      stan_data$mean_y,
-      stan_data$K
-    ),
-
-    # Random effects:
-    # row 1 = intercept
-    # row 2 = slope
-    z_subject = matrix(
-      0,
-      nrow = 2,
-      ncol = stan_data$S
-    ),
-
-    sigma_subject = c(
-      max(
-        stan_data$sd_y,
-        0.1
-      ),
-      max(
-        stan_data$sd_y / 10,
-        0.01
-      )
-    ),
-
-    L_subject = diag(2),
-
-    sigma = max(
-      stan_data$sd_y,
-      0.1
-    ),
-
-    nu = 10
-  )
-}
-
-
-# ============================================================
-# FIT
-# ============================================================
-
-fit <- model$sample(
-
-  data = stan_data,
-
-  chains = 2,
-
-  parallel_chains = 2,
-
-  iter_warmup = 300,
-
-  iter_sampling = 500,
-
-  seed = 123,
-
-  #init = init,
-
-  refresh = 100
-)
-
-
-# ============================================================
 # PRINT RESULTS
 # ============================================================
 
+summary <- mira_summary(
+  fit = fit,
+  stan_data = stan_data
+)
 
+
+summary$clinical
+summary$responders
 
 
 

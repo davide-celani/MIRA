@@ -1,37 +1,25 @@
 # ============================================================
-# MIRA_INFO
-# Comprehensive Longitudinal Data Analysis
+# MIRA_INFO v2
+# Robust longitudinal analysis for wide-format repeated measures
 #
-# Automatic outcome detection
+# Expected longitudinal column names:
+#   BCVA_t0, BCVA_t1, BCVA_t2, ...
+#   CMT_t0,  CMT_t1,  CMT_t2,  ...
 #
-# Expected column structure:
-#
-#   BCVA_t0
-#   BCVA_t1
-#   BCVA_t2
-#
-# or:
-#
-#   CMT_t0
-#   CMT_t1
-#   CMT_t2
-#
-# or:
-#
-#   IOP_t0
-#   IOP_t1
-#   IOP_t2
-#
-# The function automatically detects:
-#
-#   outcome = BCVA / CMT / IOP / ...
-#   timepoints = t0 / t1 / t2 / ...
-#
-# ============================================================
-
-
-# ============================================================
-# MAIN FUNCTION
+# Main improvements vs. the original version:
+#   - consistent handling of Inf/-Inf as unavailable observations
+#   - safe ID validation for wide longitudinal data
+#   - correct reordering of manual time_labels together with time_vars
+#   - generic increase/decrease/stable classification
+#   - optional direction of clinical improvement (higher/lower/unknown)
+#   - multiplicity-adjusted pairwise p-values (Holm by default)
+#   - pairwise sample-size matrix for correlations
+#   - model diagnostics (warnings, convergence, singularity)
+#   - likelihood-ratio global time test when lme4 is available
+#   - model-based ICC in addition to balanced-data ANOVA ICC
+#   - plotting requires ggplot2 only (no hidden dplyr dependency)
+#   - dynamic confidence-level labels (not hard-coded to 95%)
+#   - compact print(), summary(), and plot() S3 methods
 # ============================================================
 
 mira_info <- function(data,
@@ -43,3545 +31,1259 @@ mira_info <- function(data,
                       model = TRUE,
                       outliers = TRUE,
                       correlations = TRUE,
-                      verbose = TRUE) {
-
+                      verbose = TRUE,
+                      p_adjust_method = "holm",
+                      improvement_direction = c("unknown", "higher", "lower"),
+                      stable_threshold = 0,
+                      strict_id = TRUE) {
 
   # ----------------------------------------------------------
-  # 0. CHECK INPUT
+  # 0. INPUT VALIDATION
   # ----------------------------------------------------------
 
   if (!is.data.frame(data)) {
-
-    stop(
-      "data deve essere un data.frame."
-    )
+    stop("data deve essere un data.frame.", call. = FALSE)
   }
 
-
-  if (nrow(data) == 0) {
-
-    stop(
-      "Il dataset non contiene osservazioni."
-    )
+  if (nrow(data) == 0L) {
+    stop("Il dataset non contiene osservazioni.", call. = FALSE)
   }
 
-
-  if (!is.character(id) ||
-      length(id) != 1) {
-
-    stop(
-      "id deve essere il nome di una sola variabile."
-    )
+  if (!is.character(id) || length(id) != 1L || is.na(id) || !nzchar(id)) {
+    stop("id deve essere il nome di una sola variabile.", call. = FALSE)
   }
-
 
   if (!id %in% names(data)) {
+    stop(sprintf("La variabile ID '%s' non esiste nel dataset.", id), call. = FALSE)
+  }
 
+  if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
+      alpha <= 0 || alpha >= 1) {
+    stop("alpha deve essere un numero compreso tra 0 e 1.", call. = FALSE)
+  }
+
+  scalar_flag <- function(x, name) {
+    if (!is.logical(x) || length(x) != 1L || is.na(x)) {
+      stop(sprintf("%s deve essere TRUE o FALSE.", name), call. = FALSE)
+    }
+    invisible(TRUE)
+  }
+
+  scalar_flag(plots, "plots")
+  scalar_flag(model, "model")
+  scalar_flag(outliers, "outliers")
+  scalar_flag(correlations, "correlations")
+  scalar_flag(verbose, "verbose")
+  scalar_flag(strict_id, "strict_id")
+
+  improvement_direction <- match.arg(improvement_direction)
+
+  if (!is.numeric(stable_threshold) || length(stable_threshold) != 1L ||
+      !is.finite(stable_threshold) || stable_threshold < 0) {
+    stop("stable_threshold deve essere un numero finito >= 0.", call. = FALSE)
+  }
+
+  if (!is.character(p_adjust_method) || length(p_adjust_method) != 1L ||
+      is.na(p_adjust_method) || !p_adjust_method %in% p.adjust.methods) {
     stop(
       sprintf(
-        "La variabile ID '%s' non esiste nel dataset.",
-        id
-      )
+        "p_adjust_method deve essere uno tra: %s.",
+        paste(p.adjust.methods, collapse = ", ")
+      ),
+      call. = FALSE
     )
   }
 
+  # Wide-format repeated-measures data should have one row per subject.
+  id_values <- data[[id]]
+  missing_id_n <- sum(is.na(id_values))
+  duplicated_id_n <- sum(duplicated(id_values[!is.na(id_values)]))
 
-  if (!is.numeric(alpha) ||
-      length(alpha) != 1 ||
-      is.na(alpha) ||
-      alpha <= 0 ||
-      alpha >= 1) {
-
+  if (strict_id && missing_id_n > 0L) {
     stop(
-      "alpha deve essere un numero compreso tra 0 e 1."
+      sprintf("La variabile ID contiene %d valori mancanti.", missing_id_n),
+      call. = FALSE
     )
   }
 
+  if (strict_id && duplicated_id_n > 0L) {
+    stop(
+      sprintf(
+        paste0(
+          "La variabile ID contiene %d duplicati. ",
+          "mira_info() assume una riga per soggetto nel formato wide. ",
+          "Correggi i duplicati oppure usa strict_id = FALSE consapevolmente."
+        ),
+        duplicated_id_n
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!strict_id && missing_id_n > 0L) {
+    warning(sprintf("Sono presenti %d ID mancanti.", missing_id_n), call. = FALSE)
+  }
+
+  if (!strict_id && duplicated_id_n > 0L) {
+    warning(
+      sprintf(
+        "%d ID duplicati: saranno trattati come osservazioni dello stesso soggetto.",
+        duplicated_id_n
+      ),
+      call. = FALSE
+    )
+  }
 
   # ----------------------------------------------------------
-  # 1. IDENTIFICAZIONE AUTOMATICA OUTCOME + TIMEPOINT
+  # 1. DETECT OUTCOME + TIMEPOINTS
   # ----------------------------------------------------------
 
-  #
-  # La struttura attesa è:
-  #
-  # OUTCOME_t0
-  # OUTCOME_t1
-  # OUTCOME_t2
-  #
-  # ecc.
-  #
+  supplied_time_vars <- !is.null(time_vars)
 
   if (is.null(time_vars)) {
+    matched <- grep("^(.+)_t([0-9]+)$", names(data), value = TRUE)
 
-
-    # --------------------------------------------------------
-    # Cerca tutte le colonne che rispettano:
-    #
-    # qualcosa_tnumero
-    #
-    # Esempi:
-    # BCVA_t0
-    # CMT_t1
-    # IOP_t2
-    # --------------------------------------------------------
-
-    matched <- grep(
-      "^(.+)_t([0-9]+)$",
-      names(data),
-      value = TRUE
-    )
-
-
-    if (length(matched) == 0) {
-
+    if (length(matched) < 2L) {
       stop(
         paste0(
-          "Non sono state trovate variabili longitudinali.\n\n",
-          "Il dataset deve contenere colonne con struttura:\n\n",
-          "  BCVA_t0\n",
-          "  BCVA_t1\n",
-          "  BCVA_t2\n\n",
-          "oppure:\n\n",
-          "  CMT_t0\n",
-          "  CMT_t1\n",
-          "  CMT_t2\n\n",
-          "oppure qualsiasi altro OUTCOME_tTIME."
-        )
+          "Non sono state trovate almeno due variabili longitudinali nel formato ",
+          "OUTCOME_tTIME (es. BCVA_t0, BCVA_t1)."
+        ),
+        call. = FALSE
       )
     }
 
+    outcome_names <- sub("_t[0-9]+$", "", matched)
+    unique_outcomes <- unique(outcome_names)
 
-    # --------------------------------------------------------
-    # Estrae il nome dell'outcome
-    # --------------------------------------------------------
-
-    outcome_names <- sub(
-      "_t[0-9]+$",
-      "",
-      matched
-    )
-
-
-    unique_outcomes <- unique(
-      outcome_names
-    )
-
-
-    # --------------------------------------------------------
-    # Deve esserci un solo outcome
-    # --------------------------------------------------------
-
-    if (length(unique_outcomes) > 1) {
-
+    if (length(unique_outcomes) != 1L) {
       stop(
         paste0(
-          "Sono stati rilevati più outcome nello stesso dataset:\n\n",
-          paste(
-            unique_outcomes,
-            collapse = ", "
-          ),
-          "\n\n",
-          "mira_info() analizza un outcome alla volta.\n",
-          "Usa un dataset contenente un solo outcome longitudinale ",
-          "oppure seleziona esplicitamente le colonne tramite ",
-          "time_vars."
-        )
+          "Sono stati rilevati più outcome: ",
+          paste(unique_outcomes, collapse = ", "),
+          ". Specifica time_vars per analizzarne uno alla volta."
+        ),
+        call. = FALSE
       )
     }
 
-
-    outcome_name <- unique_outcomes[1]
-
-
-    # --------------------------------------------------------
-    # Estrae il numero del timepoint
-    # --------------------------------------------------------
-
-    time_numbers <- as.numeric(
-      sub(
-        "^.+_t([0-9]+)$",
-        "\\1",
-        matched
-      )
-    )
-
-
-    # --------------------------------------------------------
-    # Ordina cronologicamente
-    #
-    # t0, t1, t2, ..., t10
-    #
-    # --------------------------------------------------------
-
-    time_vars <- matched[
-      order(time_numbers)
-    ]
-
+    time_numbers <- as.numeric(sub("^.+_t([0-9]+)$", "\\1", matched))
+    ord <- order(time_numbers, matched)
+    time_vars <- matched[ord]
+    outcome_name <- unique_outcomes[[1L]]
 
   } else {
+    if (!is.character(time_vars) || length(time_vars) < 2L || anyNA(time_vars)) {
+      stop("time_vars deve contenere almeno due nomi di variabili.", call. = FALSE)
+    }
 
+    if (anyDuplicated(time_vars)) {
+      stop("time_vars contiene nomi duplicati.", call. = FALSE)
+    }
 
-    # --------------------------------------------------------
-    # TIME_VARS FORNITO MANUALMENTE
-    # --------------------------------------------------------
-
-    if (!is.character(time_vars) ||
-        length(time_vars) < 2) {
-
+    missing_vars <- setdiff(time_vars, names(data))
+    if (length(missing_vars) > 0L) {
       stop(
-        "time_vars deve contenere almeno due variabili longitudinali."
+        sprintf(
+          "Le seguenti variabili non esistono nel dataset: %s",
+          paste(missing_vars, collapse = ", ")
+        ),
+        call. = FALSE
       )
     }
 
-
-    # --------------------------------------------------------
-    # Controlla che le variabili esistano
-    # --------------------------------------------------------
-
-    missing_vars <- setdiff(
-      time_vars,
-      names(data)
-    )
-
-
-    if (length(missing_vars) > 0) {
-
+    invalid <- time_vars[!grepl("^(.+)_t([0-9]+)$", time_vars)]
+    if (length(invalid) > 0L) {
       stop(
-        paste0(
-          "Le seguenti variabili non esistono nel dataset: ",
-          paste(
-            missing_vars,
-            collapse = ", "
-          )
-        )
+        sprintf(
+          "Le seguenti variabili non rispettano OUTCOME_tTIME: %s",
+          paste(invalid, collapse = ", ")
+        ),
+        call. = FALSE
       )
     }
 
+    outcome_names <- sub("_t[0-9]+$", "", time_vars)
+    unique_outcomes <- unique(outcome_names)
 
-    # --------------------------------------------------------
-    # Controlla formato OUTCOME_tTIME
-    # --------------------------------------------------------
-
-    invalid_time_vars <- time_vars[
-      !grepl(
-        "^(.+)_t([0-9]+)$",
-        time_vars
-      )
-    ]
-
-
-    if (length(invalid_time_vars) > 0) {
-
+    if (length(unique_outcomes) != 1L) {
       stop(
-        paste0(
-          "Le seguenti variabili non rispettano il formato ",
-          "'OUTCOME_tTIME': ",
-          paste(
-            invalid_time_vars,
-            collapse = ", "
-          )
-        )
+        sprintf(
+          "time_vars contiene più outcome: %s",
+          paste(unique_outcomes, collapse = ", ")
+        ),
+        call. = FALSE
       )
     }
 
+    outcome_name <- unique_outcomes[[1L]]
+    time_numbers <- as.numeric(sub("^.+_t([0-9]+)$", "\\1", time_vars))
+    ord <- order(time_numbers, time_vars)
 
-    # --------------------------------------------------------
-    # Estrae outcome
-    # --------------------------------------------------------
-
-    outcome_names <- sub(
-      "_t[0-9]+$",
-      "",
-      time_vars
-    )
-
-
-    unique_outcomes <- unique(
-      outcome_names
-    )
-
-
-    if (length(unique_outcomes) > 1) {
-
-      stop(
-        paste0(
-          "time_vars contiene più outcome:\n\n",
-          paste(
-            unique_outcomes,
-            collapse = ", "
-          ),
-          "\n\n",
-          "mira_info() analizza un solo outcome alla volta."
-        )
-      )
+    # IMPORTANT: reorder labels together with manually supplied variables.
+    if (!is.null(time_labels)) {
+      if (length(time_labels) != length(time_vars)) {
+        stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
+      }
+      time_labels <- time_labels[ord]
     }
 
-
-    outcome_name <- unique_outcomes[1]
-
-
-    # --------------------------------------------------------
-    # Ordina timepoint
-    # --------------------------------------------------------
-
-    time_numbers <- as.numeric(
-      sub(
-        "^.+_t([0-9]+)$",
-        "\\1",
-        time_vars
-      )
-    )
-
-
-    time_vars <- time_vars[
-      order(time_numbers)
-    ]
+    time_vars <- time_vars[ord]
   }
 
-
-  # ----------------------------------------------------------
-  # Nome visualizzato
-  #
-  # BCVA -> BCVA
-  # cmt  -> CMT
-  # iop  -> IOP
-  # ----------------------------------------------------------
-
-  outcome_display <- toupper(
-    outcome_name
-  )
-
-
-  # ----------------------------------------------------------
-  # Timepoint names
-  #
-  # BCVA_t0 -> t0
-  # BCVA_t1 -> t1
-  # BCVA_t2 -> t2
-  # ----------------------------------------------------------
-
-  detected_time_labels <- sub(
-    "^.+_(t[0-9]+)$",
-    "\\1",
-    time_vars
-  )
-
-
-  # ----------------------------------------------------------
-  # 2. CONTROLLO TIME VARIABLES
-  # ----------------------------------------------------------
-
-  missing_vars <- setdiff(
-    time_vars,
-    names(data)
-  )
-
-
-  if (length(missing_vars) > 0) {
-
-    stop(
-      paste0(
-        "Le seguenti variabili non esistono nel dataset: ",
-        paste(
-          missing_vars,
-          collapse = ", "
-        )
-      )
-    )
+  if (anyDuplicated(as.numeric(sub("^.+_t([0-9]+)$", "\\1", time_vars)))) {
+    stop("Sono presenti timepoint numerici duplicati.", call. = FALSE)
   }
 
+  outcome_display <- toupper(outcome_name)
+  detected_time_labels <- sub("^.+_(t[0-9]+)$", "\\1", time_vars)
+
+  # ----------------------------------------------------------
+  # 2. TIME VARIABLE VALIDATION
+  # ----------------------------------------------------------
 
   non_numeric <- time_vars[
-    !vapply(
-      data[time_vars],
-      is.numeric,
-      logical(1)
-    )
+    !vapply(data[time_vars], is.numeric, logical(1L))
   ]
 
-
-  if (length(non_numeric) > 0) {
-
+  if (length(non_numeric) > 0L) {
     stop(
-      paste0(
-        "Le variabili longitudinali devono essere numeriche: ",
-        paste(
-          non_numeric,
-          collapse = ", "
-        )
-      )
+      sprintf(
+        "Le variabili longitudinali devono essere numeriche: %s",
+        paste(non_numeric, collapse = ", ")
+      ),
+      call. = FALSE
     )
   }
-
 
   # ----------------------------------------------------------
   # 3. TIME LABELS
   # ----------------------------------------------------------
 
   if (is.null(time_labels)) {
-
     time_labels <- detected_time_labels
-
   } else {
-
     if (length(time_labels) != length(time_vars)) {
-
-      stop(
-        "time_labels deve avere la stessa lunghezza di time_vars."
-      )
+      stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
     }
-
-
-    if (!is.character(time_labels)) {
-
-      time_labels <- as.character(
-        time_labels
-      )
-    }
+    time_labels <- as.character(time_labels)
   }
 
+  if (anyNA(time_labels) || any(!nzchar(trimws(time_labels)))) {
+    stop("time_labels non può contenere NA o etichette vuote.", call. = FALSE)
+  }
+
+  if (anyDuplicated(time_labels)) {
+    stop("time_labels deve contenere etichette univoche.", call. = FALSE)
+  }
 
   names(time_labels) <- time_vars
 
-
   # ----------------------------------------------------------
-  # 4. HELPER FUNCTIONS
+  # 4. CLEAN ANALYSIS COPY + HELPERS
   # ----------------------------------------------------------
 
-  mean_ci <- function(x,
-                      alpha = 0.05) {
+  raw_data <- data
+  analysis_data <- data
 
-    x <- x[
-      is.finite(x)
-    ]
+  non_finite_by_time <- vapply(
+    raw_data[time_vars],
+    function(x) sum(!is.na(x) & !is.finite(x)),
+    integer(1L)
+  )
 
-    n <- length(x)
+  total_non_finite <- sum(non_finite_by_time)
 
-
-    if (n == 0) {
-
-      return(
-        c(
-          mean = NA_real_,
-          se = NA_real_,
-          lower = NA_real_,
-          upper = NA_real_
-        )
-      )
-    }
-
-
-    m <- mean(x)
-
-
-    if (n < 2) {
-
-      return(
-        c(
-          mean = m,
-          se = NA_real_,
-          lower = NA_real_,
-          upper = NA_real_
-        )
-      )
-    }
-
-
-    s <- sd(x)
-
-    se <- s / sqrt(n)
-
-
-    crit <- qt(
-      1 - alpha / 2,
-      df = n - 1
-    )
-
-
-    c(
-      mean = m,
-      se = se,
-      lower = m - crit * se,
-      upper = m + crit * se
+  if (total_non_finite > 0L) {
+    warning(
+      sprintf(
+        "%d valori Inf/-Inf nelle variabili longitudinali saranno trattati come NA nelle analisi.",
+        total_non_finite
+      ),
+      call. = FALSE
     )
   }
 
+  analysis_data[time_vars] <- lapply(
+    analysis_data[time_vars],
+    function(x) {
+      x[!is.finite(x)] <- NA_real_
+      x
+    }
+  )
 
   safe_mean <- function(x) {
-
-    x <- x[
-      is.finite(x)
-    ]
-
-
-    if (length(x) == 0) {
-
-      return(
-        NA_real_
-      )
-    }
-
-
-    mean(x)
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) NA_real_ else mean(x)
   }
-
 
   safe_sd <- function(x) {
-
-    x <- x[
-      is.finite(x)
-    ]
-
-
-    if (length(x) < 2) {
-
-      return(
-        NA_real_
-      )
-    }
-
-
-    sd(x)
+    x <- x[is.finite(x)]
+    if (length(x) < 2L) NA_real_ else stats::sd(x)
   }
-
-
-  safe_median <- function(x) {
-
-    x <- x[
-      is.finite(x)
-    ]
-
-
-    if (length(x) == 0) {
-
-      return(
-        NA_real_
-      )
-    }
-
-
-    median(x)
-  }
-
-
-  safe_quantile <- function(x,
-                            p) {
-
-    x <- x[
-      is.finite(x)
-    ]
-
-
-    if (length(x) == 0) {
-
-      return(
-        NA_real_
-      )
-    }
-
-
-    as.numeric(
-      quantile(
-        x,
-        probs = p,
-        names = FALSE
-      )
-    )
-  }
-
 
   safe_var <- function(x) {
-
-    x <- x[
-      is.finite(x)
-    ]
-
-
-    if (length(x) < 2) {
-
-      return(
-        NA_real_
-      )
-    }
-
-
-    var(x)
+    x <- x[is.finite(x)]
+    if (length(x) < 2L) NA_real_ else stats::var(x)
   }
 
+  safe_median <- function(x) {
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) NA_real_ else stats::median(x)
+  }
 
-  # ----------------------------------------------------------
-  # 5. BASIC OVERVIEW
-  # ----------------------------------------------------------
+  safe_quantile <- function(x, p) {
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) {
+      NA_real_
+    } else {
+      as.numeric(stats::quantile(x, probs = p, names = FALSE, type = 7))
+    }
+  }
 
-  n_rows <- nrow(data)
+  mean_ci <- function(x) {
+    x <- x[is.finite(x)]
+    n <- length(x)
 
+    if (n == 0L) {
+      return(c(mean = NA_real_, se = NA_real_, lower = NA_real_, upper = NA_real_))
+    }
 
-  patient_values <- data[[id]]
+    m <- mean(x)
+    if (n < 2L) {
+      return(c(mean = m, se = NA_real_, lower = NA_real_, upper = NA_real_))
+    }
 
+    s <- stats::sd(x)
+    se <- s / sqrt(n)
+    crit <- stats::qt(1 - alpha / 2, df = n - 1L)
+    c(mean = m, se = se, lower = m - crit * se, upper = m + crit * se)
+  }
 
-  n_patients <- length(
-    unique(
-      patient_values[
-        !is.na(patient_values)
-      ]
+  safe_t_p <- function(x, y) {
+    if (length(x) < 2L || length(y) < 2L) return(NA_real_)
+    z <- tryCatch(
+      stats::t.test(y, x, paired = TRUE, conf.level = 1 - alpha),
+      error = function(e) NULL
     )
-  )
+    if (is.null(z)) NA_real_ else unname(z$p.value)
+  }
 
-
-  duplicated_ids <- sum(
-    duplicated(
-      patient_values[
-        !is.na(patient_values)
-      ]
+  safe_wilcox_p <- function(x, y) {
+    if (length(x) < 1L || length(y) < 1L) return(NA_real_)
+    z <- tryCatch(
+      suppressWarnings(stats::wilcox.test(y, x, paired = TRUE, exact = FALSE)),
+      error = function(e) NULL
     )
-  )
+    if (is.null(z)) NA_real_ else unname(z$p.value)
+  }
 
+  adjust_p <- function(p) {
+    out <- rep(NA_real_, length(p))
+    ok <- is.finite(p)
+    if (any(ok)) out[ok] <- stats::p.adjust(p[ok], method = p_adjust_method)
+    out
+  }
+
+  improvement_counts <- function(delta) {
+    increased <- delta > stable_threshold
+    decreased <- delta < -stable_threshold
+    stable <- !(increased | decreased)
+
+    if (improvement_direction == "higher") {
+      improved <- increased
+      worsened <- decreased
+    } else if (improvement_direction == "lower") {
+      improved <- decreased
+      worsened <- increased
+    } else {
+      improved <- rep(NA, length(delta))
+      worsened <- rep(NA, length(delta))
+    }
+
+    list(
+      increased_n = sum(increased),
+      decreased_n = sum(decreased),
+      stable_n = sum(stable),
+      improved_n = if (improvement_direction == "unknown") NA_integer_ else sum(improved),
+      worsened_n = if (improvement_direction == "unknown") NA_integer_ else sum(worsened)
+    )
+  }
+
+  pct <- function(n, denom) {
+    if (length(n) == 0L || is.na(n) || denom <= 0L) NA_real_ else n / denom * 100
+  }
+
+  confidence_level <- 1 - alpha
+  confidence_percent <- 100 * confidence_level
 
   # ----------------------------------------------------------
-  # Complete profile
+  # 5. OVERVIEW
   # ----------------------------------------------------------
 
-  complete_cases <- sum(
-    complete.cases(
-      data[time_vars]
-    )
-  )
-
+  n_rows <- nrow(analysis_data)
+  n_patients <- length(unique(id_values[!is.na(id_values)]))
+  complete_profiles <- sum(stats::complete.cases(analysis_data[time_vars]))
 
   # ----------------------------------------------------------
   # 6. DESCRIPTIVE STATISTICS
   # ----------------------------------------------------------
 
-  descriptive_list <- lapply(
+  descriptive_list <- lapply(time_vars, function(v) {
+    raw_x <- raw_data[[v]]
+    x <- analysis_data[[v]]
+    finite_x <- x[is.finite(x)]
+    n <- length(finite_x)
+    na_n <- sum(is.na(raw_x))
+    nonfinite_n <- sum(!is.na(raw_x) & !is.finite(raw_x))
+    unavailable_n <- sum(is.na(x))
+    ci <- mean_ci(x)
+    q1 <- safe_quantile(x, 0.25)
+    q3 <- safe_quantile(x, 0.75)
+    m <- safe_mean(x)
+    s <- safe_sd(x)
 
-    time_vars,
+    data.frame(
+      time = v,
+      label = unname(time_labels[v]),
+      n = n,
+      missing = na_n,
+      missing_pct = na_n / n_rows * 100,
+      non_finite = nonfinite_n,
+      non_finite_pct = nonfinite_n / n_rows * 100,
+      unavailable = unavailable_n,
+      unavailable_pct = unavailable_n / n_rows * 100,
+      mean = m,
+      sd = s,
+      variance = safe_var(x),
+      se = unname(ci["se"]),
+      ci_lower = unname(ci["lower"]),
+      ci_upper = unname(ci["upper"]),
+      median = safe_median(x),
+      q1 = q1,
+      q3 = q3,
+      iqr = if (is.na(q1) || is.na(q3)) NA_real_ else q3 - q1,
+      min = if (n > 0L) min(finite_x) else NA_real_,
+      max = if (n > 0L) max(finite_x) else NA_real_,
+      cv_percent = if (!is.na(m) && !is.na(s) && m != 0) s / abs(m) * 100 else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  })
 
-    function(v) {
+  descriptives <- do.call(rbind, descriptive_list)
+  rownames(descriptives) <- NULL
 
-
-      x <- data[[v]]
-
-
-      finite_x <- x[
-        is.finite(x)
-      ]
-
-
-      n <- length(
-        finite_x
-      )
-
-
-      missing_n <- sum(
-        is.na(x)
-      )
-
-
-      non_finite_n <- sum(
-        !is.na(x) &
-          !is.finite(x)
-      )
-
-
-      ci <- mean_ci(
-        x,
-        alpha = alpha
-      )
-
-
-      m <- safe_mean(x)
-
-      s <- safe_sd(x)
-
-      variance <- safe_var(x)
-
-
-      q1 <- safe_quantile(
-        x,
-        0.25
-      )
-
-
-      q3 <- safe_quantile(
-        x,
-        0.75
-      )
-
-
-      cv <- if (
-        !is.na(m) &&
-        !is.na(s) &&
-        m != 0
-      ) {
-
-        s / abs(m) * 100
-
-      } else {
-
-        NA_real_
-      }
-
-
-      data.frame(
-
-        time = v,
-
-        label = unname(
-          time_labels[v]
-        ),
-
-        n = n,
-
-        missing = missing_n,
-
-        missing_pct =
-          missing_n /
-          n_rows *
-          100,
-
-        non_finite =
-          non_finite_n,
-
-        mean = m,
-
-        sd = s,
-
-        variance = variance,
-
-        se =
-          unname(
-            ci["se"]
-          ),
-
-        ci_lower =
-          unname(
-            ci["lower"]
-          ),
-
-        ci_upper =
-          unname(
-            ci["upper"]
-          ),
-
-        median =
-          safe_median(x),
-
-        q1 = q1,
-
-        q3 = q3,
-
-        iqr =
-          if (
-            !is.na(q1) &&
-            !is.na(q3)
-          ) {
-
-            q3 - q1
-
-          } else {
-
-            NA_real_
-          },
-
-        min =
-          if (n > 0) {
-
-            min(finite_x)
-
-          } else {
-
-            NA_real_
-          },
-
-        max =
-          if (n > 0) {
-
-            max(finite_x)
-
-          } else {
-
-            NA_real_
-          },
-
-        cv_percent = cv,
-
-        stringsAsFactors = FALSE
-      )
-    }
-  )
-
-
-  descriptives <- do.call(
-    rbind,
-    descriptive_list
-  )
-
-
-  rownames(
-    descriptives
-  ) <- NULL
-
+  # Compatibility / convenience aliases.
+  descriptives[[paste0(outcome_name, "_mean")]] <- descriptives$mean
+  descriptives[[paste0(outcome_name, "_sd")]] <- descriptives$sd
+  descriptives[[paste0(outcome_name, "_median")]] <- descriptives$median
+  descriptives[[paste0(outcome_name, "_ci_lower")]] <- descriptives$ci_lower
+  descriptives[[paste0(outcome_name, "_ci_upper")]] <- descriptives$ci_upper
 
   # ----------------------------------------------------------
-  # Outcome-specific descriptive column names
-  #
-  # BCVA_mean
-  # BCVA_sd
-  # BCVA_median
-  # ...
-  # ----------------------------------------------------------
-
-  descriptives[[paste0(
-    outcome_name,
-    "_mean"
-  )]] <-
-    descriptives$mean
-
-
-  descriptives[[paste0(
-    outcome_name,
-    "_sd"
-  )]] <-
-    descriptives$sd
-
-
-  descriptives[[paste0(
-    outcome_name,
-    "_median"
-  )]] <-
-    descriptives$median
-
-
-  descriptives[[paste0(
-    outcome_name,
-    "_ci_lower"
-  )]] <-
-    descriptives$ci_lower
-
-
-  descriptives[[paste0(
-    outcome_name,
-    "_ci_upper"
-  )]] <-
-    descriptives$ci_upper
-
-
-  # ----------------------------------------------------------
-  # 7. MISSINGNESS
+  # 7. MISSINGNESS / DATA AVAILABILITY
   # ----------------------------------------------------------
 
   missing_by_patient <- data.frame(
-
-    patient =
-      data[[id]],
-
-    missing_n =
-      rowSums(
-        is.na(
-          data[time_vars]
-        )
-      ),
-
-    missing_pct =
-      rowMeans(
-        is.na(
-          data[time_vars]
-        )
-      ) * 100,
-
+    patient = analysis_data[[id]],
+    missing_n = rowSums(is.na(raw_data[time_vars])),
+    non_finite_n = rowSums(vapply(
+      raw_data[time_vars],
+      function(x) !is.na(x) & !is.finite(x),
+      logical(n_rows)
+    )),
+    unavailable_n = rowSums(is.na(analysis_data[time_vars])),
     stringsAsFactors = FALSE
   )
 
+  missing_by_patient$unavailable_pct <-
+    missing_by_patient$unavailable_n / length(time_vars) * 100
 
-  missing_summary <- data.frame(
+  missing_summary <- descriptives[c(
+    "time", "label", "missing", "missing_pct",
+    "non_finite", "non_finite_pct", "unavailable", "unavailable_pct"
+  )]
 
-    time = time_vars,
-
-    label =
-      unname(
-        time_labels[time_vars]
-      ),
-
-    missing_n =
-      vapply(
-        data[time_vars],
-        function(x) {
-          sum(is.na(x))
-        },
-        numeric(1)
-      ),
-
-    missing_pct =
-      vapply(
-        data[time_vars],
-        function(x) {
-          mean(is.na(x)) * 100
-        },
-        numeric(1)
-      ),
-
-    stringsAsFactors = FALSE
-  )
-
+  names(missing_summary)[names(missing_summary) == "missing"] <- "missing_n"
+  names(missing_summary)[names(missing_summary) == "non_finite"] <- "non_finite_n"
+  names(missing_summary)[names(missing_summary) == "unavailable"] <- "unavailable_n"
 
   # ----------------------------------------------------------
-  # 8. CHANGE ANALYSIS
+  # 8. PAIRWISE CHANGE ANALYSIS
   # ----------------------------------------------------------
 
   change_list <- list()
+  counter <- 1L
 
-  counter <- 1
-
-
-  for (i in seq_len(
-    length(time_vars) - 1
-  )) {
-
-
-    for (j in (i + 1):length(time_vars)) {
-
-
-      v1 <- time_vars[i]
-
-      v2 <- time_vars[j]
-
-
-      x <- data[[v1]]
-
-      y <- data[[v2]]
-
-
-      keep <- complete.cases(
-        x,
-        y
-      )
-
-
-      x_complete <- x[
-        keep
-      ]
-
-
-      y_complete <- y[
-        keep
-      ]
-
-
-      delta <- y_complete -
-        x_complete
-
-
-      finite <- is.finite(
-        delta
-      )
-
-
-      delta <-
-        delta[finite]
-
-
-      x_complete <-
-        x_complete[finite]
-
-
-      y_complete <-
-        y_complete[finite]
-
-
+  for (i in seq_len(length(time_vars) - 1L)) {
+    for (j in seq.int(i + 1L, length(time_vars))) {
+      v1 <- time_vars[[i]]
+      v2 <- time_vars[[j]]
+      x <- analysis_data[[v1]]
+      y <- analysis_data[[v2]]
+      keep <- stats::complete.cases(x, y)
+      x_complete <- x[keep]
+      y_complete <- y[keep]
+      delta <- y_complete - x_complete
       n <- length(delta)
 
+      if (n == 0L) next
 
-      if (n == 0) {
+      delta_mean <- mean(delta)
+      delta_sd <- if (n >= 2L) stats::sd(delta) else NA_real_
+      delta_se <- if (n >= 2L) delta_sd / sqrt(n) else NA_real_
 
-        next
-      }
-
-
-      delta_mean <-
-        mean(delta)
-
-
-      delta_sd <-
-
-        if (n >= 2) {
-
-          sd(delta)
-
-        } else {
-
-          NA_real_
-        }
-
-
-      delta_se <-
-
-        if (n >= 2) {
-
-          delta_sd /
-            sqrt(n)
-
-        } else {
-
-          NA_real_
-        }
-
-
-      if (n >= 2) {
-
-        tcrit <- qt(
-          1 - alpha / 2,
-          df = n - 1
-        )
-
-
-        ci_low <-
-          delta_mean -
-          tcrit *
-          delta_se
-
-
-        ci_high <-
-          delta_mean +
-          tcrit *
-          delta_se
-
+      if (n >= 2L && is.finite(delta_se)) {
+        tcrit <- stats::qt(1 - alpha / 2, df = n - 1L)
+        ci_low <- delta_mean - tcrit * delta_se
+        ci_high <- delta_mean + tcrit * delta_se
       } else {
-
         ci_low <- NA_real_
-
         ci_high <- NA_real_
       }
 
+      effect_size <- if (n >= 2L && is.finite(delta_sd) && delta_sd > 0) {
+        delta_mean / delta_sd
+      } else {
+        NA_real_
+      }
 
-      # ------------------------------------------------------
-      # Cohen's dz
-      # ------------------------------------------------------
+      counts <- improvement_counts(delta)
 
-      effect_size <-
-
-        if (
-          n >= 2 &&
-          !is.na(delta_sd) &&
-          delta_sd > 0
-        ) {
-
-          delta_mean /
-            delta_sd
-
-        } else {
-
-          NA_real_
-        }
-
-
-      # ------------------------------------------------------
-      # Paired t-test
-      # ------------------------------------------------------
-
-      ttest <- tryCatch(
-
-        t.test(
-          y_complete,
-          x_complete,
-          paired = TRUE,
-          conf.level = 1 - alpha
-        ),
-
-        error = function(e) {
-          NULL
-        }
+      change_list[[counter]] <- data.frame(
+        from = v1,
+        to = v2,
+        from_label = unname(time_labels[v1]),
+        to_label = unname(time_labels[v2]),
+        n = n,
+        mean_from = mean(x_complete),
+        mean_to = mean(y_complete),
+        mean_change = delta_mean,
+        sd_change = delta_sd,
+        se_change = delta_se,
+        ci_lower = ci_low,
+        ci_upper = ci_high,
+        cohens_dz = effect_size,
+        increased_n = counts$increased_n,
+        increased_pct = pct(counts$increased_n, n),
+        decreased_n = counts$decreased_n,
+        decreased_pct = pct(counts$decreased_n, n),
+        stable_n = counts$stable_n,
+        stable_pct = pct(counts$stable_n, n),
+        improved_n = counts$improved_n,
+        improved_pct = pct(counts$improved_n, n),
+        worsened_n = counts$worsened_n,
+        worsened_pct = pct(counts$worsened_n, n),
+        paired_t_p = safe_t_p(x_complete, y_complete),
+        wilcoxon_p = safe_wilcox_p(x_complete, y_complete),
+        stringsAsFactors = FALSE
       )
 
-
-      p_value <-
-
-        if (!is.null(ttest)) {
-
-          ttest$p.value
-
-        } else {
-
-          NA_real_
-        }
-
-
-      # ------------------------------------------------------
-      # Wilcoxon
-      # ------------------------------------------------------
-
-      wilcox <- tryCatch(
-
-        suppressWarnings(
-
-          wilcox.test(
-            y_complete,
-            x_complete,
-            paired = TRUE,
-            exact = FALSE
-          )
-        ),
-
-        error = function(e) {
-          NULL
-        }
-      )
-
-
-      wilcox_p <-
-
-        if (!is.null(wilcox)) {
-
-          wilcox$p.value
-
-        } else {
-
-          NA_real_
-        }
-
-
-      # ------------------------------------------------------
-      # Direction
-      # ------------------------------------------------------
-
-      improved <- sum(
-        delta > 0
-      )
-
-
-      worsened <- sum(
-        delta < 0
-      )
-
-
-      unchanged <- sum(
-        delta == 0
-      )
-
-
-      # ------------------------------------------------------
-      # Store result
-      # ------------------------------------------------------
-
-      change_list[[counter]] <-
-
-        data.frame(
-
-          from = v1,
-
-          to = v2,
-
-          from_label =
-            unname(
-              time_labels[v1]
-            ),
-
-          to_label =
-            unname(
-              time_labels[v2]
-            ),
-
-          n = n,
-
-          mean_from =
-            mean(x_complete),
-
-          mean_to =
-            mean(y_complete),
-
-          mean_change =
-            delta_mean,
-
-          sd_change =
-            delta_sd,
-
-          se_change =
-            delta_se,
-
-          ci_lower =
-            ci_low,
-
-          ci_upper =
-            ci_high,
-
-          cohens_dz =
-            effect_size,
-
-          improved_n =
-            improved,
-
-          improved_pct =
-            improved /
-            n *
-            100,
-
-          worsened_n =
-            worsened,
-
-          worsened_pct =
-            worsened /
-            n *
-            100,
-
-          unchanged_n =
-            unchanged,
-
-          unchanged_pct =
-            unchanged /
-            n *
-            100,
-
-          paired_t_p =
-            p_value,
-
-          wilcoxon_p =
-            wilcox_p,
-
-          stringsAsFactors = FALSE
-        )
-
-
-      counter <- counter + 1
+      counter <- counter + 1L
     }
   }
 
-
-  # ----------------------------------------------------------
-  # Combine change results
-  # ----------------------------------------------------------
-
-  if (length(change_list) > 0) {
-
-    change <- do.call(
-      rbind,
-      change_list
-    )
-
-
+  if (length(change_list) > 0L) {
+    change <- do.call(rbind, change_list)
     rownames(change) <- NULL
-
+    change$paired_t_p_adj <- adjust_p(change$paired_t_p)
+    change$wilcoxon_p_adj <- adjust_p(change$wilcoxon_p)
   } else {
-
     change <- data.frame(
-
-      from = character(0),
-
-      to = character(0),
-
-      from_label = character(0),
-
-      to_label = character(0),
-
-      n = numeric(0),
-
-      mean_from = numeric(0),
-
-      mean_to = numeric(0),
-
-      mean_change = numeric(0),
-
-      sd_change = numeric(0),
-
-      se_change = numeric(0),
-
-      ci_lower = numeric(0),
-
-      ci_upper = numeric(0),
-
-      cohens_dz = numeric(0),
-
-      improved_n = numeric(0),
-
-      improved_pct = numeric(0),
-
-      worsened_n = numeric(0),
-
-      worsened_pct = numeric(0),
-
-      unchanged_n = numeric(0),
-
-      unchanged_pct = numeric(0),
-
-      paired_t_p = numeric(0),
-
-      wilcoxon_p = numeric(0),
-
+      from = character(0), to = character(0),
+      from_label = character(0), to_label = character(0),
+      n = integer(0), mean_from = numeric(0), mean_to = numeric(0),
+      mean_change = numeric(0), sd_change = numeric(0), se_change = numeric(0),
+      ci_lower = numeric(0), ci_upper = numeric(0), cohens_dz = numeric(0),
+      increased_n = integer(0), increased_pct = numeric(0),
+      decreased_n = integer(0), decreased_pct = numeric(0),
+      stable_n = integer(0), stable_pct = numeric(0),
+      improved_n = integer(0), improved_pct = numeric(0),
+      worsened_n = integer(0), worsened_pct = numeric(0),
+      paired_t_p = numeric(0), paired_t_p_adj = numeric(0),
+      wilcoxon_p = numeric(0), wilcoxon_p_adj = numeric(0),
       stringsAsFactors = FALSE
     )
   }
 
-
-  # ----------------------------------------------------------
-  # Outcome-specific change columns
-  # ----------------------------------------------------------
-
-  if (nrow(change) > 0) {
-
-    change[[paste0(
-      outcome_name,
-      "_change"
-    )]] <-
-      change$mean_change
-
-
-    change[[paste0(
-      outcome_name,
-      "_mean_from"
-    )]] <-
-      change$mean_from
-
-
-    change[[paste0(
-      outcome_name,
-      "_mean_to"
-    )]] <-
-      change$mean_to
+  if (nrow(change) > 0L) {
+    change[[paste0(outcome_name, "_change")]] <- change$mean_change
+    change[[paste0(outcome_name, "_mean_from")]] <- change$mean_from
+    change[[paste0(outcome_name, "_mean_to")]] <- change$mean_to
   }
 
-
   # ----------------------------------------------------------
-  # 9. CORRELATIONS
+  # 9. CORRELATIONS + PAIRWISE N
   # ----------------------------------------------------------
 
   correlation_pearson <- NULL
-
   correlation_spearman <- NULL
-
+  correlation_n <- NULL
 
   if (correlations) {
-
+    cor_data <- analysis_data[time_vars]
 
     correlation_pearson <- tryCatch(
-
-      cor(
-        data[time_vars],
-        use = "pairwise.complete.obs",
-        method = "pearson"
-      ),
-
-      error = function(e) {
-        NULL
-      }
+      stats::cor(cor_data, use = "pairwise.complete.obs", method = "pearson"),
+      error = function(e) NULL
     )
-
 
     correlation_spearman <- tryCatch(
-
-      cor(
-        data[time_vars],
-        use = "pairwise.complete.obs",
-        method = "spearman"
-      ),
-
-      error = function(e) {
-        NULL
-      }
+      stats::cor(cor_data, use = "pairwise.complete.obs", method = "spearman"),
+      error = function(e) NULL
     )
-  }
 
+    correlation_n <- matrix(
+      NA_integer_,
+      nrow = length(time_vars),
+      ncol = length(time_vars),
+      dimnames = list(time_vars, time_vars)
+    )
+
+    for (i in seq_along(time_vars)) {
+      for (j in seq_along(time_vars)) {
+        correlation_n[i, j] <- sum(stats::complete.cases(
+          cor_data[[i]], cor_data[[j]]
+        ))
+      }
+    }
+  }
 
   # ----------------------------------------------------------
   # 10. LONG DATA
   # ----------------------------------------------------------
 
-  long_list <- lapply(
-
-    time_vars,
-
-    function(v) {
-
-      data.frame(
-
-        patient =
-          data[[id]],
-
-        outcome =
-          outcome_name,
-
-        time = v,
-
-        time_label =
-          unname(
-            time_labels[v]
-          ),
-
-        value =
-          data[[v]],
-
-        stringsAsFactors = FALSE
-      )
-    }
-  )
-
-
-  long_data <- do.call(
-    rbind,
-    long_list
-  )
-
-
-  rownames(long_data) <- NULL
-
-
-  long_data$time_label <-
-
-    factor(
-
-      long_data$time_label,
-
-      levels =
-        unname(
-          time_labels[time_vars]
-        )
+  long_list <- lapply(seq_along(time_vars), function(k) {
+    v <- time_vars[[k]]
+    data.frame(
+      patient = analysis_data[[id]],
+      outcome = outcome_name,
+      time = v,
+      time_index = k,
+      time_label = unname(time_labels[v]),
+      value = analysis_data[[v]],
+      stringsAsFactors = FALSE
     )
+  })
 
+  long_data <- do.call(rbind, long_list)
+  rownames(long_data) <- NULL
+  long_data$time_label <- factor(
+    long_data$time_label,
+    levels = unname(time_labels[time_vars])
+  )
 
   # ----------------------------------------------------------
   # 11. WITHIN / BETWEEN SUBJECT VARIABILITY
   # ----------------------------------------------------------
 
   individual_means <- apply(
-
-    data[time_vars],
-
-    1,
-
-    function(x) {
-
-      x <- x[
-        is.finite(x)
-      ]
-
-
-      if (length(x) == 0) {
-
-        return(
-          NA_real_
-        )
-      }
-
-
-      mean(x)
-    }
-  )
-
-
-  between_sd <- safe_sd(
-    individual_means
-  )
-
-
-  grand_mean <- safe_mean(
-    long_data$value
-  )
-
-
-  # ----------------------------------------------------------
-  # Patient means
-  # ----------------------------------------------------------
-
-  patient_means <- tapply(
-
-    long_data$value,
-
-    long_data$patient,
-
+    analysis_data[time_vars],
+    1L,
     safe_mean
   )
 
+  between_sd <- safe_sd(individual_means)
+  grand_mean <- safe_mean(long_data$value)
 
-  patient_key <- as.character(
-    long_data$patient
-  )
+  patient_means <- tapply(long_data$value, long_data$patient, safe_mean)
+  patient_key <- as.character(long_data$patient)
+  long_data$patient_mean <- unname(patient_means[patient_key])
+  residuals_within <- long_data$value - long_data$patient_mean
+  within_sd <- safe_sd(residuals_within)
 
-
-  long_data$patient_mean <-
-
-    unname(
-      patient_means[
-        patient_key
-      ]
-    )
-
-
-  residuals_within <-
-
-    long_data$value -
-    long_data$patient_mean
-
-
-  within_sd <- safe_sd(
-    residuals_within
-  )
-
-
-  # ----------------------------------------------------------
-  # 12. ICC
-  # ----------------------------------------------------------
-
-  icc <- NA_real_
-
+  # Balanced-data one-way ICC(1,1) using only complete profiles.
+  icc_anova <- NA_real_
   ms_between <- NA_real_
-
   ms_within <- NA_real_
-
   df_between <- NA_real_
-
   df_within <- NA_real_
 
+  complete_profile_idx <- stats::complete.cases(analysis_data[time_vars]) &
+    !is.na(analysis_data[[id]])
 
-  complete_long <- long_data[
+  complete_wide <- analysis_data[complete_profile_idx, c(id, time_vars), drop = FALSE]
 
-    is.finite(
-      long_data$value
-    ) &
+  if (nrow(complete_wide) >= 2L && length(time_vars) >= 2L) {
+    k_actual <- length(time_vars)
+    y_matrix <- as.matrix(complete_wide[time_vars])
+    subject_means <- rowMeans(y_matrix)
+    grand <- mean(y_matrix)
+    ss_between <- k_actual * sum((subject_means - grand)^2)
+    ss_within <- sum((y_matrix - subject_means)^2)
+    df_between <- nrow(y_matrix) - 1L
+    df_within <- nrow(y_matrix) * (k_actual - 1L)
 
-      !is.na(
-        long_data$patient_mean
-      ) &
-
-      !is.na(
-        long_data$patient
-      ),
-
-  ]
-
-
-  if (
-    nrow(complete_long) > 1
-  ) {
-
-
-    patient_counts <- table(
-      complete_long$patient
-    )
-
-
-    if (
-
-      length(
-        unique(
-          patient_counts
-        )
-      ) == 1 &&
-
-      length(
-        patient_counts
-      ) > 1
-
-    ) {
-
-
-      k_actual <-
-
-        as.numeric(
-          unique(
-            patient_counts
-          )
-        )
-
-
-      means2 <- tapply(
-
-        complete_long$value,
-
-        complete_long$patient,
-
-        mean
-      )
-
-
-      grand_mean2 <-
-        mean(
-          complete_long$value
-        )
-
-
-      ss_between <-
-
-        k_actual *
-
-        sum(
-
-          (
-            means2 -
-              grand_mean2
-          )^2
-        )
-
-
-      ss_within <- sum(
-
-        (
-          complete_long$value -
-
-            means2[
-              as.character(
-                complete_long$patient
-              )
-            ]
-
-        )^2
-      )
-
-
-      df_between <-
-        length(means2) - 1
-
-
-      df_within <-
-        nrow(complete_long) -
-        length(means2)
-
-
-      if (
-        df_between > 0 &&
-        df_within > 0
-      ) {
-
-
-        ms_between <-
-          ss_between /
-          df_between
-
-
-        ms_within <-
-          ss_within /
-          df_within
-
-
-        denominator <-
-
-          ms_between +
-
-          (k_actual - 1) *
-          ms_within
-
-
-        if (
-          is.finite(denominator) &&
-          denominator != 0
-        ) {
-
-          icc <-
-
-            (
-              ms_between -
-                ms_within
-            ) /
-
-            denominator
-        }
+    if (df_between > 0L && df_within > 0L) {
+      ms_between <- ss_between / df_between
+      ms_within <- ss_within / df_within
+      denom <- ms_between + (k_actual - 1L) * ms_within
+      if (is.finite(denom) && denom != 0) {
+        icc_anova <- (ms_between - ms_within) / denom
       }
     }
   }
 
-
   # ----------------------------------------------------------
-  # Variability output
-  # ----------------------------------------------------------
-
-  variability <- data.frame(
-
-    outcome =
-      outcome_name,
-
-    grand_mean =
-      grand_mean,
-
-    between_subject_sd =
-      between_sd,
-
-    within_subject_sd =
-      within_sd,
-
-    ICC =
-      icc,
-
-    ms_between =
-      ms_between,
-
-    ms_within =
-      ms_within,
-
-    df_between =
-      df_between,
-
-    df_within =
-      df_within,
-
-    stringsAsFactors = FALSE
-  )
-
-
-  variability[[paste0(
-    outcome_name,
-    "_grand_mean"
-  )]] <-
-    variability$grand_mean
-
-
-  variability[[paste0(
-    outcome_name,
-    "_between_subject_sd"
-  )]] <-
-    variability$between_subject_sd
-
-
-  variability[[paste0(
-    outcome_name,
-    "_within_subject_sd"
-  )]] <-
-    variability$within_subject_sd
-
-
-  # ----------------------------------------------------------
-  # 13. MIXED MODEL
+  # 12. MIXED MODEL + MODEL-BASED ICC + GLOBAL TIME TEST
   # ----------------------------------------------------------
 
   mixed_model <- NULL
-
   model_summary <- NULL
-
   model_anova <- NULL
-
+  global_time_test <- NULL
   model_error <- NULL
-
+  model_warnings <- character(0)
+  model_singular <- NA
+  model_converged <- NA
+  icc_model <- NA_real_
 
   if (model) {
+    if (!requireNamespace("lme4", quietly = TRUE)) {
+      model_error <- "Il pacchetto 'lme4' non è installato."
+    } else {
+      model_data <- long_data[
+        !is.na(long_data$patient) & is.finite(long_data$value),
+        ,
+        drop = FALSE
+      ]
 
-
-    if (
-      requireNamespace(
-        "lme4",
-        quietly = TRUE
+      model_data$patient_factor <- factor(model_data$patient)
+      model_data$time_factor <- factor(
+        as.character(model_data$time_label),
+        levels = unname(time_labels[time_vars])
       )
-    ) {
 
-
-      model_data <- long_data
-
-
-      model_data$time_factor <-
-
-        factor(
-
-          model_data$time,
-
-          levels =
-            time_vars,
-
-          labels =
-            unname(
-              time_labels[time_vars]
-            )
-        )
-
-
-      model_data$patient_factor <-
-
-        factor(
-          model_data$patient
-        )
-
-
-      model_formula <-
-
-        value ~
-        time_factor +
-        (1 | patient_factor)
-
-
-      # ------------------------------------------------------
-      # lmerTest
-      # ------------------------------------------------------
-
-      if (
-        requireNamespace(
-          "lmerTest",
-          quietly = TRUE
-        )
-      ) {
-
-
-        mixed_model <- tryCatch(
-
-          lmerTest::lmer(
-
-            model_formula,
-
-            data = model_data,
-
-            REML = TRUE,
-
-            na.action = na.omit
-          ),
-
-          error = function(e) {
-
-            model_error <<-
-              conditionMessage(e)
-
-            NULL
-          }
-        )
-
-
+      if (nrow(model_data) < 3L || nlevels(model_data$patient_factor) < 2L ||
+          nlevels(model_data$time_factor) < 2L) {
+        model_error <- "Dati insufficienti per stimare un mixed-effects model."
       } else {
+        fit_with_warnings <- function(expr) {
+          withCallingHandlers(
+            expr,
+            warning = function(w) {
+              model_warnings <<- unique(c(model_warnings, conditionMessage(w)))
+              invokeRestart("muffleWarning")
+            }
+          )
+        }
 
+        model_formula <- value ~ time_factor + (1 | patient_factor)
 
         mixed_model <- tryCatch(
-
-          lme4::lmer(
-
-            model_formula,
-
-            data = model_data,
-
-            REML = TRUE,
-
-            na.action = na.omit
+          fit_with_warnings(
+            if (requireNamespace("lmerTest", quietly = TRUE)) {
+              lmerTest::lmer(
+                model_formula,
+                data = model_data,
+                REML = TRUE,
+                na.action = stats::na.omit
+              )
+            } else {
+              lme4::lmer(
+                model_formula,
+                data = model_data,
+                REML = TRUE,
+                na.action = stats::na.omit
+              )
+            }
           ),
-
           error = function(e) {
-
-            model_error <<-
-              conditionMessage(e)
-
+            model_error <<- conditionMessage(e)
             NULL
           }
         )
-      }
 
-
-      # ------------------------------------------------------
-      # Model summary
-      # ------------------------------------------------------
-
-      if (!is.null(mixed_model)) {
-
-
-        model_summary <-
-
-          summary(
-            mixed_model
+        if (!is.null(mixed_model)) {
+          model_summary <- summary(mixed_model)
+          model_anova <- tryCatch(stats::anova(mixed_model), error = function(e) NULL)
+          model_singular <- tryCatch(
+            lme4::isSingular(mixed_model, tol = 1e-4),
+            error = function(e) NA
           )
 
-
-        model_anova <- tryCatch(
-
-          anova(
-            mixed_model
-          ),
-
-          error = function(e) {
-            NULL
+          optinfo <- tryCatch(mixed_model@optinfo, error = function(e) NULL)
+          conv_messages <- if (!is.null(optinfo)) optinfo$conv$lme4$messages else NULL
+          opt_ok <- if (!is.null(optinfo) && !is.null(optinfo$conv$opt)) {
+            isTRUE(optinfo$conv$opt == 0)
+          } else {
+            TRUE
           }
-        )
+          model_converged <- opt_ok && is.null(conv_messages)
+
+          vc <- tryCatch(as.data.frame(lme4::VarCorr(mixed_model)), error = function(e) NULL)
+          if (!is.null(vc)) {
+            subject_var <- vc$vcov[vc$grp == "patient_factor" & is.na(vc$var2)]
+            residual_var <- vc$vcov[vc$grp == "Residual"]
+            if (length(subject_var) >= 1L && length(residual_var) >= 1L) {
+              denom <- subject_var[[1L]] + residual_var[[1L]]
+              if (is.finite(denom) && denom > 0) {
+                icc_model <- subject_var[[1L]] / denom
+              }
+            }
+          }
+
+          # Robust global time test: ML likelihood-ratio full vs. no-time model.
+          global_time_test <- tryCatch({
+            full_ml <- fit_with_warnings(
+              lme4::lmer(
+                value ~ time_factor + (1 | patient_factor),
+                data = model_data,
+                REML = FALSE,
+                na.action = stats::na.omit
+              )
+            )
+            null_ml <- fit_with_warnings(
+              lme4::lmer(
+                value ~ 1 + (1 | patient_factor),
+                data = model_data,
+                REML = FALSE,
+                na.action = stats::na.omit
+              )
+            )
+            stats::anova(null_ml, full_ml)
+          }, error = function(e) NULL)
+        }
       }
-
-
-    } else {
-
-
-      model_error <-
-
-        paste(
-          "Il pacchetto 'lme4' non è installato."
-        )
     }
   }
 
+  variability <- data.frame(
+    outcome = outcome_name,
+    grand_mean = grand_mean,
+    between_subject_sd = between_sd,
+    within_subject_sd = within_sd,
+    ICC_anova_complete_profiles = icc_anova,
+    ICC_model = icc_model,
+    ms_between = ms_between,
+    ms_within = ms_within,
+    df_between = df_between,
+    df_within = df_within,
+    stringsAsFactors = FALSE
+  )
+
+  # Backward-friendly alias: prefer model ICC if available.
+  variability$ICC <- if (is.finite(icc_model)) icc_model else icc_anova
+  variability[[paste0(outcome_name, "_grand_mean")]] <- variability$grand_mean
+  variability[[paste0(outcome_name, "_between_subject_sd")]] <- variability$between_subject_sd
+  variability[[paste0(outcome_name, "_within_subject_sd")]] <- variability$within_subject_sd
 
   # ----------------------------------------------------------
-  # 14. OUTLIERS
+  # 13. OUTLIERS (IQR FLAGS; NOT AUTOMATIC EXCLUSIONS)
   # ----------------------------------------------------------
 
   outlier_results <- list()
-
   change_outliers <- list()
 
-
   if (outliers) {
-
-
-    # --------------------------------------------------------
-    # OUTLIERS PER TIMEPOINT
-    # --------------------------------------------------------
-
     for (v in time_vars) {
+      x <- analysis_data[[v]]
+      finite_x <- x[is.finite(x)]
 
-
-      x <- data[[v]]
-
-
-      finite_x <- x[
-        is.finite(x)
-      ]
-
-
-      if (length(finite_x) < 4) {
-
-
-        outlier_results[[v]] <-
-
-          data.frame(
-
-            row = integer(0),
-
-            patient =
-              data[[id]][
-                integer(0)
-              ],
-
-            value = numeric(0),
-
-            lower_bound =
-              numeric(0),
-
-            upper_bound =
-              numeric(0),
-
-            stringsAsFactors =
-              FALSE
-          )
-
-
+      if (length(finite_x) < 4L) {
+        outlier_results[[v]] <- data.frame(
+          row = integer(0), patient = analysis_data[[id]][integer(0)],
+          value = numeric(0), lower_bound = numeric(0), upper_bound = numeric(0),
+          stringsAsFactors = FALSE
+        )
         next
       }
 
+      q1 <- as.numeric(stats::quantile(finite_x, 0.25, names = FALSE))
+      q3 <- as.numeric(stats::quantile(finite_x, 0.75, names = FALSE))
+      iqr_value <- q3 - q1
+      lower <- q1 - 1.5 * iqr_value
+      upper <- q3 + 1.5 * iqr_value
+      idx <- which(is.finite(x) & (x < lower | x > upper))
 
-      q1 <- quantile(
-
-        finite_x,
-
-        0.25,
-
-        names = FALSE
+      outlier_results[[v]] <- data.frame(
+        row = idx,
+        patient = analysis_data[[id]][idx],
+        value = x[idx],
+        lower_bound = rep(lower, length(idx)),
+        upper_bound = rep(upper, length(idx)),
+        stringsAsFactors = FALSE
       )
-
-
-      q3 <- quantile(
-
-        finite_x,
-
-        0.75,
-
-        names = FALSE
-      )
-
-
-      iqr_value <-
-        q3 - q1
-
-
-      lower <-
-        q1 -
-        1.5 *
-        iqr_value
-
-
-      upper <-
-        q3 +
-        1.5 *
-        iqr_value
-
-
-      idx <- which(
-
-        !is.na(x) &
-
-          is.finite(x) &
-
-          (
-            x < lower |
-              x > upper
-          )
-      )
-
-
-      if (length(idx) == 0) {
-
-
-        outlier_results[[v]] <-
-
-          data.frame(
-
-            row = integer(0),
-
-            patient =
-              data[[id]][
-                integer(0)
-              ],
-
-            value = numeric(0),
-
-            lower_bound =
-              numeric(0),
-
-            upper_bound =
-              numeric(0),
-
-            stringsAsFactors =
-              FALSE
-          )
-
-
-      } else {
-
-
-        outlier_results[[v]] <-
-
-          data.frame(
-
-            row = idx,
-
-            patient =
-              data[[id]][idx],
-
-            value =
-              x[idx],
-
-            lower_bound =
-              rep(
-                lower,
-                length(idx)
-              ),
-
-            upper_bound =
-              rep(
-                upper,
-                length(idx)
-              ),
-
-            stringsAsFactors =
-              FALSE
-          )
-      }
     }
 
+    if (nrow(change) > 0L) {
+      for (r in seq_len(nrow(change))) {
+        v1 <- change$from[[r]]
+        v2 <- change$to[[r]]
+        keep <- stats::complete.cases(analysis_data[[v1]], analysis_data[[v2]])
+        delta <- analysis_data[[v2]][keep] - analysis_data[[v1]][keep]
+        patients <- analysis_data[[id]][keep]
+        nm <- paste(v1, v2, sep = "_to_")
 
-    # --------------------------------------------------------
-    # OUTLIERS DEL CAMBIAMENTO
-    # --------------------------------------------------------
-
-    if (
-      nrow(change) > 0
-    ) {
-
-
-      for (i in seq_len(
-        nrow(change)
-      )) {
-
-
-        v1 <- change$from[i]
-
-        v2 <- change$to[i]
-
-
-        x <- data[[v1]]
-
-        y <- data[[v2]]
-
-
-        keep <- complete.cases(
-          x,
-          y
-        )
-
-
-        delta <- y[keep] -
-          x[keep]
-
-
-        patients <-
-          data[[id]][keep]
-
-
-        finite <- is.finite(
-          delta
-        )
-
-
-        delta <-
-          delta[finite]
-
-
-        patients <-
-          patients[finite]
-
-
-        name <- paste(
-
-          v1,
-
-          v2,
-
-          sep = "_to_"
-        )
-
-
-        if (length(delta) < 4) {
-
-
-          change_outliers[[name]] <-
-
-            data.frame(
-
-              patient =
-                patients[
-                  integer(0)
-                ],
-
-              change =
-                numeric(0),
-
-              lower_bound =
-                numeric(0),
-
-              upper_bound =
-                numeric(0),
-
-              stringsAsFactors =
-                FALSE
-            )
-
-
+        if (length(delta) < 4L) {
+          change_outliers[[nm]] <- data.frame(
+            patient = patients[integer(0)], change = numeric(0),
+            lower_bound = numeric(0), upper_bound = numeric(0),
+            stringsAsFactors = FALSE
+          )
           next
         }
 
+        q1 <- as.numeric(stats::quantile(delta, 0.25, names = FALSE))
+        q3 <- as.numeric(stats::quantile(delta, 0.75, names = FALSE))
+        iqr_value <- q3 - q1
+        lower <- q1 - 1.5 * iqr_value
+        upper <- q3 + 1.5 * iqr_value
+        idx <- which(delta < lower | delta > upper)
 
-        q1 <- quantile(
-
-          delta,
-
-          0.25,
-
-          names = FALSE
+        change_outliers[[nm]] <- data.frame(
+          patient = patients[idx],
+          change = delta[idx],
+          lower_bound = rep(lower, length(idx)),
+          upper_bound = rep(upper, length(idx)),
+          stringsAsFactors = FALSE
         )
-
-
-        q3 <- quantile(
-
-          delta,
-
-          0.75,
-
-          names = FALSE
-        )
-
-
-        iqr_value <-
-          q3 - q1
-
-
-        lower <-
-          q1 -
-          1.5 *
-          iqr_value
-
-
-        upper <-
-          q3 +
-          1.5 *
-          iqr_value
-
-
-        idx <- which(
-
-          is.finite(delta) &
-
-            (
-              delta < lower |
-                delta > upper
-            )
-        )
-
-
-        if (length(idx) == 0) {
-
-
-          change_outliers[[name]] <-
-
-            data.frame(
-
-              patient =
-                patients[
-                  integer(0)
-                ],
-
-              change =
-                numeric(0),
-
-              lower_bound =
-                numeric(0),
-
-              upper_bound =
-                numeric(0),
-
-              stringsAsFactors =
-                FALSE
-            )
-
-
-        } else {
-
-
-          change_outliers[[name]] <-
-
-            data.frame(
-
-              patient =
-                patients[idx],
-
-              change =
-                delta[idx],
-
-              lower_bound =
-                rep(
-                  lower,
-                  length(idx)
-                ),
-
-              upper_bound =
-                rep(
-                  upper,
-                  length(idx)
-                ),
-
-              stringsAsFactors =
-                FALSE
-            )
-        }
       }
     }
   }
 
-
   # ----------------------------------------------------------
-  # 15. PATIENT TRAJECTORIES
+  # 14. PATIENT TRAJECTORIES
   # ----------------------------------------------------------
 
-  baseline <- data[[
-    time_vars[1]
-  ]]
-
-
-  final <- data[[
-    time_vars[
-      length(time_vars)
-    ]
-  ]]
-
+  baseline <- analysis_data[[time_vars[[1L]]]]
+  final <- analysis_data[[time_vars[[length(time_vars)]]]]
+  absolute_change <- final - baseline
 
   trajectory_summary <- data.frame(
-
-    patient =
-      data[[id]],
-
-    outcome =
-      outcome_name,
-
-    baseline =
-      baseline,
-
-    final =
-      final,
-
-    stringsAsFactors =
-      FALSE
+    patient = analysis_data[[id]],
+    outcome = outcome_name,
+    baseline = baseline,
+    final = final,
+    absolute_change = absolute_change,
+    relative_change_percent = ifelse(
+      is.finite(baseline) & baseline != 0 & is.finite(final),
+      (final - baseline) / abs(baseline) * 100,
+      NA_real_
+    ),
+    stringsAsFactors = FALSE
   )
 
-
-  trajectory_summary$absolute_change <-
-
-    trajectory_summary$final -
-
-    trajectory_summary$baseline
-
-
-  trajectory_summary$relative_change_percent <-
-
+  trajectory_summary$direction <- ifelse(
+    is.na(trajectory_summary$absolute_change),
+    NA_character_,
     ifelse(
-
-      !is.na(
-        trajectory_summary$baseline
-      ) &
-
-        trajectory_summary$baseline != 0,
-
-      (
-
-        trajectory_summary$final -
-
-          trajectory_summary$baseline
-
-      ) /
-
-        abs(
-          trajectory_summary$baseline
-        ) *
-
-        100,
-
-      NA_real_
+      trajectory_summary$absolute_change > stable_threshold,
+      "Increase",
+      ifelse(
+        trajectory_summary$absolute_change < -stable_threshold,
+        "Decrease",
+        "Stable"
+      )
     )
+  )
 
+  trajectory_summary$clinical_direction <- if (improvement_direction == "unknown") {
+    rep(NA_character_, nrow(trajectory_summary))
+  } else if (improvement_direction == "higher") {
+    ifelse(
+      is.na(trajectory_summary$direction), NA_character_,
+      ifelse(trajectory_summary$direction == "Increase", "Improved",
+             ifelse(trajectory_summary$direction == "Decrease", "Worsened", "Stable"))
+    )
+  } else {
+    ifelse(
+      is.na(trajectory_summary$direction), NA_character_,
+      ifelse(trajectory_summary$direction == "Decrease", "Improved",
+             ifelse(trajectory_summary$direction == "Increase", "Worsened", "Stable"))
+    )
+  }
 
-  # ----------------------------------------------------------
-  # Outcome-specific trajectory columns
-  # ----------------------------------------------------------
-
-  trajectory_summary[[paste0(
-    outcome_name,
-    "_baseline"
-  )]] <-
-    trajectory_summary$baseline
-
-
-  trajectory_summary[[paste0(
-    outcome_name,
-    "_final"
-  )]] <-
-    trajectory_summary$final
-
-
-  trajectory_summary[[paste0(
-    outcome_name,
-    "_change"
-  )]] <-
-    trajectory_summary$absolute_change
-
-
-  trajectory_summary[[paste0(
-    outcome_name,
-    "_relative_change_percent"
-  )]] <-
+  trajectory_summary[[paste0(outcome_name, "_baseline")]] <- trajectory_summary$baseline
+  trajectory_summary[[paste0(outcome_name, "_final")]] <- trajectory_summary$final
+  trajectory_summary[[paste0(outcome_name, "_change")]] <- trajectory_summary$absolute_change
+  trajectory_summary[[paste0(outcome_name, "_relative_change_percent")]] <-
     trajectory_summary$relative_change_percent
 
-
   # ----------------------------------------------------------
-  # 16. PLOTS
+  # 15. PLOTS (ggplot2 ONLY)
   # ----------------------------------------------------------
 
   plots_list <- list()
-
+  plot_error <- NULL
 
   if (plots) {
+    if (!requireNamespace("ggplot2", quietly = TRUE)) {
+      plot_error <- "Il pacchetto 'ggplot2' non è installato."
+    } else {
+      ci_text <- paste0(formatC(confidence_percent, format = "fg", digits = 4), "% CI")
 
-
-    if (
-      requireNamespace(
-        "ggplot2",
-        quietly = TRUE
+      # Boxplot summary uses the already validated descriptives table.
+      boxplot_summary <- descriptives
+      boxplot_summary$time_label_n <- paste0(
+        boxplot_summary$label,
+        "\n(N = ",
+        boxplot_summary$n,
+        ")"
       )
-    ) {
 
-
-      # ======================================================
-      # BOXPLOT
-      # ======================================================
-
-      boxplot_summary <-
-
-        long_data |>
-
-        dplyr::filter(
-
-          !is.na(value),
-
-          !is.na(time_label)
-
-        ) |>
-
-        dplyr::group_by(
-
-          time,
-
-          time_label
-
-        ) |>
-
-        dplyr::summarise(
-
-          n =
-            dplyr::n_distinct(
-              patient
-            ),
-
-          mean =
-            mean(
-              value,
-              na.rm = TRUE
-            ),
-
-          se =
-            stats::sd(
-              value,
-              na.rm = TRUE
-            ) /
-
-            sqrt(
-              sum(
-                !is.na(value)
-              )
-            ),
-
-          ci_lower =
-
-            mean -
-
-            stats::qt(
-
-              1 - alpha / 2,
-
-              df =
-                sum(
-                  !is.na(value)
-                ) - 1
-
-            ) *
-
-            se,
-
-          ci_upper =
-
-            mean +
-
-            stats::qt(
-
-              1 - alpha / 2,
-
-              df =
-                sum(
-                  !is.na(value)
-                ) - 1
-
-            ) *
-
-            se,
-
-          median =
-            stats::median(
-              value,
-              na.rm = TRUE
-            ),
-
-          .groups = "drop"
-        )
-
-
-      # ------------------------------------------------------
-      # Label con N
-      # ------------------------------------------------------
-
-      boxplot_summary$time_label_n <-
-
-        paste0(
-
-          boxplot_summary$time_label,
-
-          "\n(N = ",
-
-          boxplot_summary$n,
-
-          ")"
-        )
-
-
-      # ------------------------------------------------------
-      # Ordine timepoint
-      # ------------------------------------------------------
-
-      long_data_boxplot <-
-
-        long_data |>
-
-        dplyr::mutate(
-
-          time_label = factor(
-
-            time_label,
-
-            levels =
-              boxplot_summary$time_label
-          )
-        )
-
-
-      boxplot_summary$time_label <-
-
-        factor(
-
-          boxplot_summary$time_label,
-
-          levels =
-            boxplot_summary$time_label
-        )
-
-
-      # ------------------------------------------------------
-      # BOXplot
-      # ------------------------------------------------------
+      long_plot <- long_data[is.finite(long_data$value), , drop = FALSE]
+      long_plot$time_label <- factor(
+        long_plot$time_label,
+        levels = unname(time_labels[time_vars])
+      )
 
       plots_list$boxplot <-
-
-        ggplot2::ggplot(
-
-          long_data_boxplot,
-
-          ggplot2::aes(
-
-            x = time_label,
-
-            y = value
-          )
-        ) +
-
-
+        ggplot2::ggplot(long_plot, ggplot2::aes(x = time_label, y = value)) +
         ggplot2::geom_boxplot(
-
-          width = 0.55,
-
-          fill = "grey92",
-
-          color = "grey30",
-
-          linewidth = 0.7,
-
-          outlier.shape = NA,
-
-          na.rm = TRUE
+          width = 0.55, fill = "grey92", color = "grey30",
+          linewidth = 0.7, outlier.shape = NA, na.rm = TRUE
         ) +
-
-
         ggplot2::geom_jitter(
-
-          width = 0.10,
-
-          height = 0,
-
-          alpha = 0.22,
-
-          size = 1.5,
-
-          color = "grey35",
-
-          na.rm = TRUE
+          width = 0.10, height = 0, alpha = 0.22,
+          size = 1.5, color = "grey35", na.rm = TRUE
         ) +
-
-
         ggplot2::geom_errorbar(
-
-          data =
-            boxplot_summary,
-
-          ggplot2::aes(
-
-            x = time_label,
-
-            ymin = ci_lower,
-
-            ymax = ci_upper
-          ),
-
-          inherit.aes = FALSE,
-
-          width = 0.10,
-
-          linewidth = 1.0,
-
-          color = "#2C7BB6",
-
-          na.rm = TRUE
+          data = boxplot_summary,
+          ggplot2::aes(x = label, ymin = ci_lower, ymax = ci_upper),
+          inherit.aes = FALSE, width = 0.10, linewidth = 0.9,
+          color = "#2C7BB6", na.rm = TRUE
         ) +
-
-
         ggplot2::geom_point(
-
-          data =
-            boxplot_summary,
-
-          ggplot2::aes(
-
-            x = time_label,
-
-            y = mean
-          ),
-
-          inherit.aes = FALSE,
-
-          shape = 21,
-
-          size = 3.8,
-
-          stroke = 1.1,
-
-          fill = "white",
-
-          color = "#2C7BB6",
-
-          na.rm = TRUE
+          data = boxplot_summary,
+          ggplot2::aes(x = label, y = mean),
+          inherit.aes = FALSE, shape = 21, size = 3.8,
+          stroke = 1.1, fill = "white", color = "#2C7BB6", na.rm = TRUE
         ) +
-
-
-        ggplot2::geom_point(
-
-          data =
-            boxplot_summary,
-
-          ggplot2::aes(
-
-            x = time_label,
-
-            y = median
-          ),
-
-          inherit.aes = FALSE,
-
-          shape = 95,
-
-          size = 7,
-
-          color = "grey20",
-
-          na.rm = TRUE
-        ) +
-
-
-        ggplot2::scale_x_discrete(
-
-          labels =
-            boxplot_summary$time_label_n
-        ) +
-
-
+        ggplot2::scale_x_discrete(labels = boxplot_summary$time_label_n) +
         ggplot2::labs(
-
           x = NULL,
-
           y = outcome_display,
+          title = paste("Distribution of", outcome_display, "Across Timepoints"),
+          subtitle = paste("Individual observations, IQR, mean and", ci_text)
+        ) +
+        ggplot2::theme_minimal(base_size = 12)
 
-          title = paste(
+      # Build patient-to-patient consecutive segments without dplyr.
+      segment_list <- list()
+      s_counter <- 1L
+      split_long <- split(long_plot, long_plot$patient, drop = TRUE)
 
-            "Distribution of",
+      for (patient_data in split_long) {
+        patient_data <- patient_data[order(patient_data$time_index), , drop = FALSE]
+        if (nrow(patient_data) < 2L) next
 
-            outcome_display,
+        for (k in seq_len(nrow(patient_data) - 1L)) {
+          dlt <- patient_data$value[[k + 1L]] - patient_data$value[[k]]
+          direction <- if (dlt > stable_threshold) {
+            "Increase"
+          } else if (dlt < -stable_threshold) {
+            "Decrease"
+          } else {
+            "Stable"
+          }
 
-            "Across Timepoints"
-          ),
-
-          subtitle = paste(
-
-            "Individual observations, interquartile range,",
-
-            "population mean and",
-
-            "95% confidence interval"
+          segment_list[[s_counter]] <- data.frame(
+            patient = patient_data$patient[[k]],
+            x = patient_data$time_index[[k]],
+            xend = patient_data$time_index[[k + 1L]],
+            y = patient_data$value[[k]],
+            yend = patient_data$value[[k + 1L]],
+            trajectory_direction = direction,
+            stringsAsFactors = FALSE
           )
-        ) +
+          s_counter <- s_counter + 1L
+        }
+      }
 
-
-        ggplot2::theme_minimal(
-
-          base_size = 12
-        ) +
-
-
-        ggplot2::theme(
-
-          plot.title =
-
-            ggplot2::element_text(
-
-              face = "bold",
-
-              size = 15
-            ),
-
-          plot.subtitle =
-
-            ggplot2::element_text(
-
-              size = 10,
-
-              color = "grey35"
-            ),
-
-          axis.title.y =
-
-            ggplot2::element_text(
-
-              face = "bold"
-            ),
-
-          axis.text.x =
-
-            ggplot2::element_text(
-
-              angle = 0,
-
-              hjust = 0.5,
-
-              lineheight = 0.9
-            ),
-
-          axis.text.y =
-
-            ggplot2::element_text(
-
-              color = "grey25"
-            ),
-
-          panel.grid.minor =
-
-            ggplot2::element_blank(),
-
-          panel.grid.major.x =
-
-            ggplot2::element_blank(),
-
-          panel.grid.major.y =
-
-            ggplot2::element_line(
-
-              color = "grey90",
-
-              linewidth = 0.4
-            ),
-
-          legend.position = "none",
-
-          plot.margin =
-
-            ggplot2::margin(
-
-              12,
-
-              18,
-
-              12,
-
-              12
-            )
+      if (length(segment_list) > 0L) {
+        trajectory_segments <- do.call(rbind, segment_list)
+      } else {
+        trajectory_segments <- data.frame(
+          patient = character(0), x = numeric(0), xend = numeric(0),
+          y = numeric(0), yend = numeric(0), trajectory_direction = character(0),
+          stringsAsFactors = FALSE
         )
-
-
-      # ======================================================
-      # SPAGHETTI PLOT
-      # ======================================================
-
-      stable_threshold <- 0
-
-
-      long_data_spaghetti <- long_data
-
-
-      long_data_spaghetti$time_index <-
-
-        match(
-
-          long_data_spaghetti$time,
-
-          time_vars
-        )
-
+      }
 
       trajectory_summary_plot <- data.frame(
-
-        time = time_vars,
-
-        time_index =
-          seq_along(time_vars),
-
-        time_label =
-          unname(
-            time_labels[time_vars]
-          ),
-
-        mean =
-          descriptives$mean,
-
-        se =
-          descriptives$se,
-
-        ci_lower =
-          descriptives$ci_lower,
-
-        ci_upper =
-          descriptives$ci_upper,
-
+        time_index = seq_along(time_vars),
+        time_label = unname(time_labels[time_vars]),
+        n = descriptives$n,
+        mean = descriptives$mean,
+        ci_lower = descriptives$ci_lower,
+        ci_upper = descriptives$ci_upper,
         stringsAsFactors = FALSE
       )
-
-
-      n_per_timepoint <-
-
-        long_data_spaghetti |>
-
-        dplyr::filter(
-
-          !is.na(value),
-
-          !is.na(time_index)
-        ) |>
-
-        dplyr::group_by(
-
-          time_index
-        ) |>
-
-        dplyr::summarise(
-
-          n =
-            dplyr::n_distinct(
-              patient
-            ),
-
-          .groups = "drop"
-        )
-
-
-      trajectory_summary_plot <-
-
-        trajectory_summary_plot |>
-
-        dplyr::left_join(
-
-          n_per_timepoint,
-
-          by = "time_index"
-        )
-
-
-      trajectory_summary_plot$time_label_n <-
-
-        paste0(
-
-          trajectory_summary_plot$time_label,
-
-          "\n(N = ",
-
-          trajectory_summary_plot$n,
-
-          ")"
-        )
-
-
-      # ------------------------------------------------------
-      # Direction
-      # ------------------------------------------------------
-
-      trajectory_segments <-
-
-        long_data_spaghetti |>
-
-        dplyr::filter(
-
-          !is.na(value),
-
-          !is.na(time_index)
-        ) |>
-
-        dplyr::arrange(
-
-          patient,
-
-          time_index
-        ) |>
-
-        dplyr::group_by(
-
-          patient
-        ) |>
-
-        dplyr::mutate(
-
-          next_time_index =
-            dplyr::lead(
-              time_index
-            ),
-
-          next_value =
-            dplyr::lead(
-              value
-            ),
-
-          change =
-            next_value -
-            value,
-
-          trajectory_direction =
-
-            dplyr::case_when(
-
-              is.na(next_value) ~
-                NA_character_,
-
-              change >
-                stable_threshold ~
-                "Increase",
-
-              change <
-                -stable_threshold ~
-                "Decrease",
-
-              TRUE ~
-                "Stable"
-            )
-        ) |>
-
-        dplyr::ungroup()
-
-
-      # ------------------------------------------------------
-      # Spaghetti
-      # ------------------------------------------------------
+      trajectory_summary_plot$time_label_n <- paste0(
+        trajectory_summary_plot$time_label,
+        "\n(N = ", trajectory_summary_plot$n, ")"
+      )
 
       plots_list$spaghetti <-
-
         ggplot2::ggplot() +
-
-
         ggplot2::geom_ribbon(
-
-          data =
-            trajectory_summary_plot,
-
-          ggplot2::aes(
-
-            x = time_index,
-
-            ymin = ci_lower,
-
-            ymax = ci_upper,
-
-            group = 1
-          ),
-
-          inherit.aes = FALSE,
-
-          alpha = 0.20,
-
-          na.rm = TRUE
+          data = trajectory_summary_plot,
+          ggplot2::aes(x = time_index, ymin = ci_lower, ymax = ci_upper),
+          inherit.aes = FALSE, alpha = 0.15, na.rm = TRUE
         ) +
-
-
         ggplot2::geom_segment(
-
-          data =
-            trajectory_segments,
-
+          data = trajectory_segments,
           ggplot2::aes(
-
-            x = time_index,
-
-            xend =
-              next_time_index,
-
-            y = value,
-
-            yend =
-              next_value,
-
-            group = patient,
-
-            color =
-              trajectory_direction
+            x = x, xend = xend, y = y, yend = yend,
+            group = patient, color = trajectory_direction
           ),
-
-          alpha = 0.20,
-
-          linewidth = 0.6,
-
-          na.rm = TRUE
+          alpha = 0.22, linewidth = 0.6, na.rm = TRUE
         ) +
-
-
         ggplot2::geom_point(
-
-          data =
-            long_data_spaghetti,
-
-          ggplot2::aes(
-
-            x = time_index,
-
-            y = value
-          ),
-
-          color = "grey40",
-
-          alpha = 0.20,
-
-          size = 1.5,
-
-          na.rm = TRUE
+          data = long_plot,
+          ggplot2::aes(x = time_index, y = value),
+          color = "grey40", alpha = 0.20, size = 1.4, na.rm = TRUE
         ) +
-
-
         ggplot2::geom_line(
-
-          data =
-            trajectory_summary_plot,
-
-          ggplot2::aes(
-
-            x = time_index,
-
-            y = mean,
-
-            group = 1
-          ),
-
-          inherit.aes = FALSE,
-
-          linewidth = 1.5,
-
-          color = "black",
-
-          na.rm = TRUE
+          data = trajectory_summary_plot,
+          ggplot2::aes(x = time_index, y = mean),
+          linewidth = 1.3, color = "black", na.rm = TRUE
         ) +
-
-
         ggplot2::geom_point(
-
-          data =
-            trajectory_summary_plot,
-
-          ggplot2::aes(
-
-            x = time_index,
-
-            y = mean
-          ),
-
-          inherit.aes = FALSE,
-
-          shape = 21,
-
-          size = 4,
-
-          stroke = 1.2,
-
-          fill = "white",
-
-          color = "black",
-
-          na.rm = TRUE
+          data = trajectory_summary_plot,
+          ggplot2::aes(x = time_index, y = mean),
+          shape = 21, size = 3.8, stroke = 1.1,
+          fill = "white", color = "black", na.rm = TRUE
         ) +
-
-
         ggplot2::scale_color_manual(
-
-          values = c(
-
-            "Increase" =
-              "#2C7BB6",
-
-            "Decrease" =
-              "#D7191C",
-
-            "Stable" =
-              "grey60"
-          ),
-
-          breaks = c(
-
-            "Increase",
-
-            "Decrease",
-
-            "Stable"
-          ),
-
-          labels = c(
-
-            "↑ Increase",
-
-            "↓ Decrease",
-
-            "→ Stable"
-          ),
-
-          name =
-            "Change between consecutive timepoints"
+          values = c(Increase = "#2C7BB6", Decrease = "#D7191C", Stable = "grey60"),
+          breaks = c("Increase", "Decrease", "Stable"),
+          name = "Consecutive change"
         ) +
-
-
         ggplot2::scale_x_continuous(
-
-          breaks =
-            trajectory_summary_plot$time_index,
-
-          labels =
-            trajectory_summary_plot$time_label_n,
-
-          expand =
-            ggplot2::expansion(
-
-              mult =
-                c(
-                  0.03,
-                  0.03
-                )
-            )
+          breaks = trajectory_summary_plot$time_index,
+          labels = trajectory_summary_plot$time_label_n
         ) +
-
-
         ggplot2::labs(
-
           x = NULL,
-
           y = outcome_display,
-
-          title = paste(
-
-            "Individual",
-
-            outcome_display,
-
-            "Longitudinal Trajectories"
-          ),
-
-          subtitle = paste(
-
-            "Subject-level changes between consecutive timepoints,",
-
-            "with population mean and 95% confidence interval"
-          )
+          title = paste("Individual", outcome_display, "Longitudinal Trajectories"),
+          subtitle = paste("Subject trajectories, population mean and", ci_text)
         ) +
+        ggplot2::theme_minimal(base_size = 12) +
+        ggplot2::theme(legend.position = "bottom")
 
-
-        ggplot2::theme_minimal(
-
-          base_size = 12
-        ) +
-
-
-        ggplot2::theme(
-
-          plot.title =
-
-            ggplot2::element_text(
-
-              face = "bold",
-
-              size = 15
-            ),
-
-          plot.subtitle =
-
-            ggplot2::element_text(
-
-              size = 10
-            ),
-
-          axis.title =
-
-            ggplot2::element_text(
-
-              face = "bold"
-            ),
-
-          axis.text.x =
-
-            ggplot2::element_text(
-
-              angle = 0,
-
-              hjust = 0.5,
-
-              lineheight = 0.9
-            ),
-
-          panel.grid.minor =
-
-            ggplot2::element_blank(),
-
-          panel.grid.major.x =
-
-            ggplot2::element_blank(),
-
-          legend.position =
-            "bottom",
-
-          legend.title =
-
-            ggplot2::element_text(
-
-              face = "bold"
-            ),
-
-          legend.text =
-
-            ggplot2::element_text(
-
-              size = 10
-            ),
-
-          plot.margin =
-
-            ggplot2::margin(
-
-              12,
-
-              18,
-
-              12,
-
-              12
-            )
-        )
-
-
-      # ======================================================
-      # MEAN + CI
-      # ======================================================
+      mean_ci_plot_data <- descriptives
+      mean_ci_plot_data$label <- factor(
+        mean_ci_plot_data$label,
+        levels = unname(time_labels[time_vars])
+      )
 
       plots_list$mean_ci <-
-
         ggplot2::ggplot(
-
-          descriptives,
-
-          ggplot2::aes(
-
-            x = label,
-
-            y = mean,
-
-            group = 1
-          )
+          mean_ci_plot_data,
+          ggplot2::aes(x = label, y = mean, group = 1)
         ) +
-
-
-        ggplot2::geom_line(
-
-          color = "#2C7FB8",
-
-          linewidth = 0.8,
-
-          na.rm = TRUE
-        ) +
-
-
-        ggplot2::geom_point(
-
-          size = 3,
-
-          color = "#2C7FB8",
-
-          na.rm = TRUE
-        ) +
-
-
+        ggplot2::geom_line(color = "#2C7FB8", linewidth = 0.8, na.rm = TRUE) +
+        ggplot2::geom_point(size = 3, color = "#2C7FB8", na.rm = TRUE) +
         ggplot2::geom_errorbar(
-
-          ggplot2::aes(
-
-            ymin = ci_lower,
-
-            ymax = ci_upper
-          ),
-
-          width = 0.1,
-
-          na.rm = TRUE
+          ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
+          width = 0.1, na.rm = TRUE
         ) +
-
-
         ggplot2::labs(
-
-          x = "Time",
-
-          y = paste(
-            "Mean",
-            outcome_display
-          ),
-
-          title = paste(
-
-            "Mean",
-
-            outcome_display,
-
-            "and 95% CI"
-          )
+          x = "Time", y = paste("Mean", outcome_display),
+          title = paste("Mean", outcome_display, "and", ci_text)
         ) +
-
-
         ggplot2::theme_minimal()
 
-
-      # ======================================================
-      # INDIVIDUAL CHANGE
-      # ======================================================
+      trajectory_plot_data <- trajectory_summary[
+        is.finite(trajectory_summary$absolute_change),
+        ,
+        drop = FALSE
+      ]
 
       plots_list$change <-
-
         ggplot2::ggplot(
-
-          trajectory_summary,
-
-          ggplot2::aes(
-
-            x = "All patients",
-
-            y = absolute_change
-          )
+          trajectory_plot_data,
+          ggplot2::aes(x = "All patients", y = absolute_change)
         ) +
-
-
-        ggplot2::geom_boxplot(
-
-          fill = "#59A14F",
-
-          alpha = 0.7,
-
-          na.rm = TRUE
-        ) +
-
-
-        ggplot2::geom_jitter(
-
-          width = 0.08,
-
-          alpha = 0.30,
-
-          na.rm = TRUE
-        ) +
-
-
-        ggplot2::geom_hline(
-
-          yintercept = 0,
-
-          linetype = "dashed"
-        ) +
-
-
+        ggplot2::geom_boxplot(fill = "#59A14F", alpha = 0.7, na.rm = TRUE) +
+        ggplot2::geom_jitter(width = 0.08, alpha = 0.30, na.rm = TRUE) +
+        ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
         ggplot2::labs(
-
           x = NULL,
-
-          y = paste(
-
-            "Final - Baseline",
-
-            outcome_display
-          ),
-
-          title = paste(
-
-            "Individual",
-
-            outcome_display,
-
-            "Change"
-          )
+          y = paste("Final - Baseline", outcome_display),
+          title = paste("Individual", outcome_display, "Change")
         ) +
-
-
         ggplot2::theme_minimal()
     }
   }
 
-
   # ----------------------------------------------------------
-  # 17. GLOBAL TEST OF TIME
-  # ----------------------------------------------------------
-
-  global_time_test <-
-    model_anova
-
-
-  # ----------------------------------------------------------
-  # 18. OVERVIEW
+  # 16. FINAL RESULT
   # ----------------------------------------------------------
 
   overview <- list(
-
-    outcome =
-      outcome_name,
-
-    outcome_display =
-      outcome_display,
-
-    n_rows =
-      n_rows,
-
-    n_patients =
-      n_patients,
-
-    n_timepoints =
-      length(time_vars),
-
-    timepoints =
-      time_vars,
-
-    time_labels =
-      time_labels,
-
-    duplicated_ids =
-      duplicated_ids,
-
-    complete_profiles =
-      complete_cases,
-
-    complete_profiles_pct =
-
-      complete_cases /
-      n_rows *
-      100
+    outcome = outcome_name,
+    outcome_display = outcome_display,
+    id = id,
+    n_rows = n_rows,
+    n_patients = n_patients,
+    n_timepoints = length(time_vars),
+    timepoints = time_vars,
+    time_labels = time_labels,
+    supplied_time_vars = supplied_time_vars,
+    missing_ids = missing_id_n,
+    duplicated_ids = duplicated_id_n,
+    complete_profiles = complete_profiles,
+    complete_profiles_pct = complete_profiles / n_rows * 100,
+    non_finite_values = total_non_finite
   )
-
-
-  # ----------------------------------------------------------
-  # 19. FINAL RESULT
-  # ----------------------------------------------------------
 
   result <- list(
-
-    call =
-      match.call(),
-
-
-    overview =
-      overview,
-
-
-    outcome =
-      outcome_name,
-
-
-    outcome_display =
-      outcome_display,
-
-
-    time_vars =
-      time_vars,
-
-
-    time_labels =
-      time_labels,
-
-
-    descriptives =
-      descriptives,
-
-
-    missing =
-      list(
-
-        by_time =
-          missing_summary,
-
-        by_patient =
-          missing_by_patient
-      ),
-
-
-    change =
-      change,
-
-
-    correlations =
-      list(
-
-        pearson =
-          correlation_pearson,
-
-        spearman =
-          correlation_spearman
-      ),
-
-
-    variability =
-      variability,
-
-
-    trajectories =
-      trajectory_summary,
-
-
-    model =
-      list(
-
-        fitted_model =
-          mixed_model,
-
-        summary =
-          model_summary,
-
-        anova =
-          model_anova,
-
-        global_time_test =
-          global_time_test,
-
-        error =
-          model_error
-      ),
-
-
-    outliers =
-      list(
-
-        by_time =
-
-          if (outliers)
-
-            outlier_results
-
-        else
-
-          NULL,
-
-
-        change =
-
-          if (outliers)
-
-            change_outliers
-
-        else
-
-          NULL
-      ),
-
-
-    plots =
-      plots_list,
-
-
-    long_data =
-      long_data
+    call = match.call(),
+    version = "2.0.0",
+    settings = list(
+      alpha = alpha,
+      confidence_level = confidence_level,
+      confidence_percent = confidence_percent,
+      p_adjust_method = p_adjust_method,
+      improvement_direction = improvement_direction,
+      stable_threshold = stable_threshold,
+      strict_id = strict_id,
+      non_finite_handling = "Inf/-Inf treated as NA for analysis"
+    ),
+    overview = overview,
+    outcome = outcome_name,
+    outcome_display = outcome_display,
+    time_vars = time_vars,
+    time_labels = time_labels,
+    descriptives = descriptives,
+    missing = list(by_time = missing_summary, by_patient = missing_by_patient),
+    change = change,
+    correlations = list(
+      pearson = correlation_pearson,
+      spearman = correlation_spearman,
+      pairwise_n = correlation_n
+    ),
+    variability = variability,
+    trajectories = trajectory_summary,
+    model = list(
+      fitted_model = mixed_model,
+      summary = model_summary,
+      anova = model_anova,
+      global_time_test = global_time_test,
+      singular = model_singular,
+      converged = model_converged,
+      warnings = model_warnings,
+      error = model_error
+    ),
+    outliers = list(
+      note = "IQR flags are diagnostic flags and are not automatically excluded from analyses.",
+      by_time = if (outliers) outlier_results else NULL,
+      change = if (outliers) change_outliers else NULL
+    ),
+    plots = plots_list,
+    plot_error = plot_error,
+    long_data = long_data
   )
 
+  class(result) <- c("mira_info", "list")
 
-  class(result) <-
-    "mira_info"
-
-
-  # ----------------------------------------------------------
-  # 20. PRINT
-  # ----------------------------------------------------------
-
-  if (verbose) {
-
-    print(
-      result
-    )
-  }
-
-
-  invisible(
-    result
-  )
+  if (verbose) print(result)
+  invisible(result)
 }
-
 
 
 # ============================================================
@@ -3596,1699 +1298,260 @@ print.mira_info <- function(x,
                             outliers = TRUE,
                             ...) {
 
+  line <- function(char = "-", n = 76L) cat(strrep(char, n), "\n", sep = "")
 
-  # ----------------------------------------------------------
-  # Helper
-  # ----------------------------------------------------------
-
-  line <- function(
-    char = "-",
-    n = 72
-  ) {
-
-    cat(
-      paste0(
-        strrep(
-          char,
-          n
-        ),
-        "\n"
-      )
-    )
+  fmt_num <- function(z) {
+    ifelse(is.na(z), "NA", formatC(z, format = "f", digits = digits))
   }
 
-
-  fmt_num <- function(
-    z,
-    digits = 3
-  ) {
-
-    ifelse(
-
-      is.na(z),
-
-      "NA",
-
-      formatC(
-
-        z,
-
-        format = "f",
-
-        digits = digits
-      )
-    )
+  fmt_pct <- function(z, d = 1L) {
+    ifelse(is.na(z), "NA", paste0(formatC(z, format = "f", digits = d), "%"))
   }
-
-
-  fmt_pct <- function(
-    z,
-    digits = 1
-  ) {
-
-    ifelse(
-
-      is.na(z),
-
-      "NA",
-
-      paste0(
-
-        formatC(
-
-          z,
-
-          format = "f",
-
-          digits = digits
-        ),
-
-        "%"
-      )
-    )
-  }
-
 
   fmt_p <- function(p) {
-
     ifelse(
-
       is.na(p),
-
       "NA",
-
-      ifelse(
-
-        p < 0.001,
-
-        "<0.001",
-
-        formatC(
-
-          p,
-
-          format = "f",
-
-          digits = 3
-        )
-      )
+      ifelse(p < 0.001, "<0.001", formatC(p, format = "f", digits = 3L))
     )
   }
-
 
   effect_label <- function(d) {
-
-    if (is.na(d)) {
-
-      return(
-        NA_character_
-      )
-    }
-
-
+    if (is.na(d)) return(NA_character_)
     a <- abs(d)
-
-
-    if (a < 0.20) {
-
-      "negligible"
-
-    } else if (a < 0.50) {
-
-      "small"
-
-    } else if (a < 0.80) {
-
-      "moderate"
-
-    } else {
-
-      "large"
-    }
+    if (a < 0.20) "negligible" else if (a < 0.50) "small" else if (a < 0.80) "moderate" else "large"
   }
 
-
-  # ----------------------------------------------------------
-  # Extract automatic outcome
-  # ----------------------------------------------------------
-
-  outcome_display <-
-
-    if (!is.null(x$overview$outcome_display)) {
-
-      x$overview$outcome_display
-
-    } else if (!is.null(x$outcome_display)) {
-
-      x$outcome_display
-
-    } else {
-
-      "OUTCOME"
-    }
-
-
-  # ----------------------------------------------------------
-  # HEADER
-  # ----------------------------------------------------------
+  ov <- x$overview
+  d <- x$descriptives
+  conf_pct <- x$settings$confidence_percent
+  conf_label <- paste0(formatC(conf_pct, format = "fg", digits = 4L), "% CI")
 
   cat("\n")
-
+  line("=")
+  cat(sprintf("MIRA INFO v%s — %s\n", x$version, ov$outcome_display))
   line("=")
 
+  cat(sprintf("Subjects: %d | Rows: %d | Timepoints: %d | Complete profiles: %s\n",
+              ov$n_patients, ov$n_rows, ov$n_timepoints, fmt_pct(ov$complete_profiles_pct)))
+  cat(sprintf("ID: %s | Duplicates: %d | Missing IDs: %d | Non-finite values: %d\n",
+              ov$id, ov$duplicated_ids, ov$missing_ids, ov$non_finite_values))
+  cat(sprintf("Improvement direction: %s | Stable threshold: %s | p-adjust: %s\n",
+              x$settings$improvement_direction,
+              fmt_num(x$settings$stable_threshold),
+              x$settings$p_adjust_method))
 
-  cat(
-
-    sprintf(
-
-      "                         MIRA INFO — %s\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    "        Comprehensive Longitudinal Dataset Snapshot\n"
-  )
-
-
-  line("=")
-
-
-  # ==========================================================
-  # DATASET OVERVIEW
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nDATASET OVERVIEW — %s\n",
-
-      outcome_display
-    )
-  )
-
-
+  cat("\nDESCRIPTIVES\n")
   line()
-
-
-  ov <- x$overview
-
-  d <- x$descriptives
-
-
-  total_cells <-
-
-    ov$n_rows *
-    ov$n_timepoints
-
-
-  observed_cells <-
-
-    sum(
-      d$n
-    )
-
-
-  missing_cells <-
-
-    sum(
-      d$missing
-    )
-
-
-  non_finite_cells <-
-
-    sum(
-      d$non_finite
-    )
-
-
-  complete_profiles <-
-
-    ov$complete_profiles
-
-
-  incomplete_profiles <-
-
-    ov$n_rows -
-    complete_profiles
-
-
-  # ----------------------------------------------------------
-  # Outcome
-  # ----------------------------------------------------------
-
-  cat(
-
-    sprintf(
-
-      "Outcome:                     %s\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "ID variable:                 %s\n",
-
-      as.character(
-        x$call$id
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Rows:                        %s\n",
-
-      ov$n_rows
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Unique subjects:             %s\n",
-
-      ov$n_patients
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Timepoints:                  %s\n",
-
-      ov$n_timepoints
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Time variables:              %s\n",
-
-      paste(
-
-        ov$timepoints,
-
-        collapse = ", "
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Time labels:                 %s\n",
-
-      paste(
-
-        unname(
-          ov$time_labels
-        ),
-
-        collapse = ", "
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Duplicated IDs:              %s\n",
-
-      ov$duplicated_ids
-    )
-  )
-
-
-  # ==========================================================
-  # DATA QUALITY
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nDATA QUALITY — %s\n",
-
-      outcome_display
-    )
-  )
-
-
-  line()
-
-
-  cat(
-
-    sprintf(
-
-      "Total longitudinal cells:    %s\n",
-
-      total_cells
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Finite observations:         %s (%s)\n",
-
-      observed_cells,
-
-      fmt_pct(
-
-        observed_cells /
-          total_cells *
-          100
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Missing values:              %s (%s)\n",
-
-      missing_cells,
-
-      fmt_pct(
-
-        missing_cells /
-          total_cells *
-          100
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Non-finite values:           %s (%s)\n",
-
-      non_finite_cells,
-
-      fmt_pct(
-
-        non_finite_cells /
-          total_cells *
-          100
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Complete profiles:           %s (%s)\n",
-
-      complete_profiles,
-
-      fmt_pct(
-        ov$complete_profiles_pct
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Incomplete profiles:         %s (%s)\n",
-
-      incomplete_profiles,
-
-      fmt_pct(
-
-        incomplete_profiles /
-          ov$n_rows *
-          100
-      )
-    )
-  )
-
-
-  # ==========================================================
-  # DESCRIPTIVE STATISTICS
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nDESCRIPTIVE STATISTICS FOR %s BY TIMEPOINT\n",
-
-      outcome_display
-    )
-  )
-
-
-  line()
-
-
   desc_print <- data.frame(
-
-    Time =
-      d$label,
-
-    N =
-      d$n,
-
-    Missing =
-
-      paste0(
-
-        d$missing,
-
-        " (",
-
-        formatC(
-
-          d$missing_pct,
-
-          format = "f",
-
-          digits = 1
-        ),
-
-        "%)"
-      ),
-
-    Mean =
-      round(
-        d$mean,
-        digits
-      ),
-
-    SD =
-      round(
-        d$sd,
-        digits
-      ),
-
-    Median =
-      round(
-        d$median,
-        digits
-      ),
-
-    IQR =
-      round(
-        d$iqr,
-        digits
-      ),
-
-    Min =
-      round(
-        d$min,
-        digits
-      ),
-
-    Max =
-      round(
-        d$max,
-        digits
-      ),
-
-    CV_pct =
-      round(
-        d$cv_percent,
-        1
-      ),
-
-    CI_lower =
-      round(
-        d$ci_lower,
-        digits
-      ),
-
-    CI_upper =
-      round(
-        d$ci_upper,
-        digits
-      ),
-
+    Time = d$label,
+    N = d$n,
+    Unavailable = paste0(d$unavailable, " (", round(d$unavailable_pct, 1), "%)"),
+    Mean = round(d$mean, digits),
+    SD = round(d$sd, digits),
+    Median = round(d$median, digits),
+    IQR = round(d$iqr, digits),
+    CI_low = round(d$ci_lower, digits),
+    CI_high = round(d$ci_upper, digits),
     check.names = FALSE
   )
+  print(desc_print, row.names = FALSE)
+  cat(sprintf("Confidence intervals above: %s\n", conf_label))
 
-
-  print(
-
-    desc_print,
-
-    row.names = FALSE
-  )
-
-
-  # ==========================================================
-  # MISSING DATA
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nMISSING DATA FOR %s BY TIMEPOINT\n",
-
-      outcome_display
-    )
-  )
-
-
+  cat("\nLONGITUDINAL CHANGE\n")
   line()
 
-
-  miss <- x$missing$by_time
-
-
-  miss_print <- data.frame(
-
-    Time =
-      miss$label,
-
-    Missing_n =
-      miss$missing_n,
-
-    Missing_pct =
-      round(
-        miss$missing_pct,
-        1
-      )
-  )
-
-
-  print(
-
-    miss_print,
-
-    row.names = FALSE
-  )
-
-
-  # ==========================================================
-  # LONGITUDINAL CHANGE
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nLONGITUDINAL CHANGE — %s\n",
-
-      outcome_display
-    )
-  )
-
-
-  line()
-
-
-  if (nrow(x$change) > 0) {
-
-
+  if (nrow(x$change) == 0L) {
+    cat("No longitudinal comparisons available.\n")
+  } else {
     ch <- x$change
-
-
-    # --------------------------------------------------------
-    # Baseline -> Final
-    # --------------------------------------------------------
-
-    baseline_final <-
-
-      ch[
-
-        ch$from ==
-          ov$timepoints[1] &
-
-          ch$to ==
-          ov$timepoints[
-            length(
-              ov$timepoints
-            )
-          ],
-
-        ,
-
-        drop = FALSE
-      ]
-
-
-    if (nrow(baseline_final) == 1) {
-
-
-      bf <-
-        baseline_final[1, ]
-
-
-      cat(
-
-        sprintf(
-
-          "Baseline -> Final:          %s -> %s\n",
-
-          bf$from_label,
-
-          bf$to_label
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Paired observations:        %s\n",
-
-          bf$n
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Mean %s change:             %s\n",
-
-          outcome_display,
-
-          fmt_num(
-
-            bf$mean_change,
-
-            digits
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "%s%% CI:                     [%s, %s]\n",
-
-          100 * (1 - 0.05),
-
-          fmt_num(
-
-            bf$ci_lower,
-
-            digits
-          ),
-
-          fmt_num(
-
-            bf$ci_upper,
-
-            digits
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Cohen's dz:                 %s (%s)\n",
-
-          fmt_num(
-
-            bf$cohens_dz,
-
-            digits
-          ),
-
-          effect_label(
-            bf$cohens_dz
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Improved / worsened / same: %s / %s / %s\n",
-
-          fmt_pct(
-            bf$improved_pct
-          ),
-
-          fmt_pct(
-            bf$worsened_pct
-          ),
-
-          fmt_pct(
-            bf$unchanged_pct
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Paired t-test p:            %s\n",
-
-          fmt_p(
-            bf$paired_t_p
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Wilcoxon p:                 %s\n",
-
-          fmt_p(
-            bf$wilcoxon_p
-          )
-        )
-      )
+    baseline_final <- ch[
+      ch$from == ov$timepoints[[1L]] &
+        ch$to == ov$timepoints[[length(ov$timepoints)]],
+      ,
+      drop = FALSE
+    ]
+
+    if (nrow(baseline_final) == 1L) {
+      bf <- baseline_final[1L, ]
+      cat(sprintf("Baseline -> Final: %s -> %s (N=%d)\n",
+                  bf$from_label, bf$to_label, bf$n))
+      cat(sprintf("Mean change: %s | %s: [%s, %s] | Cohen dz: %s (%s)\n",
+                  fmt_num(bf$mean_change), conf_label,
+                  fmt_num(bf$ci_lower), fmt_num(bf$ci_upper),
+                  fmt_num(bf$cohens_dz), effect_label(bf$cohens_dz)))
+      cat(sprintf("Increase / decrease / stable: %s / %s / %s\n",
+                  fmt_pct(bf$increased_pct), fmt_pct(bf$decreased_pct), fmt_pct(bf$stable_pct)))
+
+      if (x$settings$improvement_direction != "unknown") {
+        cat(sprintf("Improved / worsened: %s / %s\n",
+                    fmt_pct(bf$improved_pct), fmt_pct(bf$worsened_pct)))
+      }
+
+      cat(sprintf("Paired t p: %s (adjusted %s) | Wilcoxon p: %s (adjusted %s)\n",
+                  fmt_p(bf$paired_t_p), fmt_p(bf$paired_t_p_adj),
+                  fmt_p(bf$wilcoxon_p), fmt_p(bf$wilcoxon_p_adj)))
     }
 
-
-    # --------------------------------------------------------
-    # Pairwise comparisons
-    # --------------------------------------------------------
-
-    cat(
-
-      sprintf(
-
-        "\nPAIRWISE %s TIMEPOINT COMPARISONS\n",
-
-        outcome_display
-      )
-    )
-
-
-    change_print <- data.frame(
-
-      From =
-        ch$from_label,
-
-      To =
-        ch$to_label,
-
-      N =
-        ch$n,
-
-      Mean_change =
-        round(
-          ch$mean_change,
-          digits
-        ),
-
-      CI_lower =
-        round(
-          ch$ci_lower,
-          digits
-        ),
-
-      CI_upper =
-        round(
-          ch$ci_upper,
-          digits
-        ),
-
-      Cohen_dz =
-        round(
-          ch$cohens_dz,
-          digits
-        ),
-
-      Improved_pct =
-        round(
-          ch$improved_pct,
-          1
-        ),
-
-      Worsened_pct =
-        round(
-          ch$worsened_pct,
-          1
-        ),
-
-      t_p =
-
-        vapply(
-
-          ch$paired_t_p,
-
-          fmt_p,
-
-          character(1)
-        ),
-
-      Wilcoxon_p =
-
-        vapply(
-
-          ch$wilcoxon_p,
-
-          fmt_p,
-
-          character(1)
-        ),
-
+    pairwise_print <- data.frame(
+      From = ch$from_label,
+      To = ch$to_label,
+      N = ch$n,
+      Mean_change = round(ch$mean_change, digits),
+      Cohen_dz = round(ch$cohens_dz, digits),
+      Increase_pct = round(ch$increased_pct, 1L),
+      Decrease_pct = round(ch$decreased_pct, 1L),
+      t_p_adj = vapply(ch$paired_t_p_adj, fmt_p, character(1L)),
+      Wilcoxon_p_adj = vapply(ch$wilcoxon_p_adj, fmt_p, character(1L)),
       check.names = FALSE
     )
 
-
-    if (
-      nrow(change_print) >
-      max_rows
-    ) {
-
-
-      cat(
-
-        sprintf(
-
-          "\nShowing first %s of %s comparisons.\n",
-
-          max_rows,
-
-          nrow(change_print)
-        )
-      )
-
-
-      change_print <-
-
-        head(
-
-          change_print,
-
-          max_rows
-        )
+    if (nrow(pairwise_print) > max_rows) {
+      cat(sprintf("\nShowing first %d of %d pairwise comparisons.\n", max_rows, nrow(pairwise_print)))
+      pairwise_print <- utils::head(pairwise_print, max_rows)
     }
 
-
-    print(
-
-      change_print,
-
-      row.names = FALSE
-    )
-
-
-  } else {
-
-
-    cat(
-
-      "No longitudinal comparisons available.\n"
-    )
+    cat("\nPAIRWISE COMPARISONS\n")
+    print(pairwise_print, row.names = FALSE)
   }
 
-
-  # ==========================================================
-  # CORRELATIONS
-  # ==========================================================
-
-  if (
-
-    correlations &&
-
-    !is.null(
-      x$correlations$pearson
-    )
-
-  ) {
-
-
-    cat(
-
-      sprintf(
-
-        "\nCORRELATIONS — %s\n",
-
-        outcome_display
-      )
-    )
-
-
-    line()
-
-
-    cor_mat <-
-
-      x$correlations$pearson
-
-
-    if (ncol(cor_mat) >= 2) {
-
-
-      upper_values <-
-
-        cor_mat[
-          upper.tri(cor_mat)
-        ]
-
-
-      finite_cor <-
-
-        upper_values[
-          is.finite(
-            upper_values
-          )
-        ]
-
-
-      if (length(finite_cor) > 0) {
-
-
-        cat(
-
-          sprintf(
-
-            "Pearson correlation range: %s to %s\n",
-
-            fmt_num(
-              min(
-                finite_cor
-              ),
-              digits
-            ),
-
-            fmt_num(
-              max(
-                finite_cor
-              ),
-              digits
-            )
-          )
-        )
-
-
-        cat(
-
-          sprintf(
-
-            "Median correlation:        %s\n",
-
-            fmt_num(
-
-              median(
-                finite_cor
-              ),
-
-              digits
-            )
-          )
-        )
-      }
-    }
-
-
-    cat(
-
-      sprintf(
-
-        "\nPearson correlation matrix for %s:\n",
-
-        outcome_display
-      )
-    )
-
-
-    print(
-
-      round(
-        cor_mat,
-        digits
-      )
-    )
-  }
-
-
-  # ==========================================================
-  # VARIABILITY
-  # ==========================================================
-
-  cat(
-
-    sprintf(
-
-      "\nVARIABILITY AND SUBJECT DEPENDENCE — %s\n",
-
-      outcome_display
-    )
-  )
-
-
+  cat("\nVARIABILITY\n")
   line()
+  v <- x$variability[1L, ]
+  cat(sprintf("Grand mean: %s | Between-subject SD: %s | Within-subject SD: %s\n",
+              fmt_num(v$grand_mean), fmt_num(v$between_subject_sd), fmt_num(v$within_subject_sd)))
+  cat(sprintf("ICC (preferred available estimate): %s | Model ICC: %s | Complete-profile ANOVA ICC: %s\n",
+              fmt_num(v$ICC), fmt_num(v$ICC_model), fmt_num(v$ICC_anova_complete_profiles)))
 
-
-  v <- x$variability
-
-
-  ratio <-
-
-    if (
-
-      !is.na(
-        v$between_subject_sd
-      ) &&
-
-      v$between_subject_sd != 0
-
-    ) {
-
-
-      v$within_subject_sd /
-        v$between_subject_sd
-
-
-    } else {
-
-
-      NA_real_
-    }
-
-
-  cat(
-
-    sprintf(
-
-      "Grand mean %s:              %s\n",
-
-      outcome_display,
-
-      fmt_num(
-
-        v$grand_mean,
-
-        digits
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Between-subject SD:          %s\n",
-
-      fmt_num(
-
-        v$between_subject_sd,
-
-        digits
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Within-subject SD:           %s\n",
-
-      fmt_num(
-
-        v$within_subject_sd,
-
-        digits
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "Within / Between ratio:      %s\n",
-
-      fmt_num(
-
-        ratio,
-
-        digits
-      )
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "ICC:                         %s\n",
-
-      fmt_num(
-
-        v$ICC,
-
-        digits
-      )
-    )
-  )
-
-
-  # ==========================================================
-  # MIXED MODEL
-  # ==========================================================
+  if (correlations && !is.null(x$correlations$pearson)) {
+    cat("\nPEARSON CORRELATIONS\n")
+    line()
+    print(round(x$correlations$pearson, digits))
+    cat("Pairwise N:\n")
+    print(x$correlations$pairwise_n)
+  }
 
   if (model) {
-
-
-    cat(
-
-      sprintf(
-
-        "\nMIXED-EFFECTS MODEL — %s\n",
-
-        outcome_display
-      )
-    )
-
-
+    cat("\nMIXED MODEL\n")
     line()
-
-
-    if (
-      !is.null(
-        x$model$fitted_model
-      )
-    ) {
-
-
-      cat(
-
-        sprintf(
-
-          "Model: %s ~ time + (1 | subject)\n",
-
-          outcome_display
-        )
-      )
-
-
-      if (
-        !is.null(
-          x$model$anova
-        )
-      ) {
-
-
-        cat(
-
-          sprintf(
-
-            "\nGlobal test of %s over time:\n",
-
-            outcome_display
-          )
-        )
-
-
-        print(
-          x$model$anova
-        )
+    if (!is.null(x$model$error)) {
+      cat("Model not estimated: ", x$model$error, "\n", sep = "")
+    } else if (!is.null(x$model$fitted_model)) {
+      cat(sprintf("Converged: %s | Singular: %s\n",
+                  as.character(x$model$converged), as.character(x$model$singular)))
+      if (length(x$model$warnings) > 0L) {
+        cat("Warnings:\n")
+        cat(paste0("  - ", x$model$warnings, collapse = "\n"), "\n")
       }
-
-
-      cat(
-
-        "\nFull model output available in:\n"
-      )
-
-
-      cat(
-
-        "  result$model$summary\n"
-      )
-
-
-    } else if (
-      !is.null(
-        x$model$error
-      )
-    ) {
-
-
-      cat(
-
-        "Model not estimated: ",
-
-        x$model$error,
-
-        "\n",
-
-        sep = ""
-      )
+      if (!is.null(x$model$global_time_test)) {
+        cat("Global time likelihood-ratio test (ML full vs. no-time model):\n")
+        print(x$model$global_time_test)
+      }
+      cat("Full fitted model: result$model$fitted_model\n")
     }
   }
 
-
-  # ==========================================================
-  # OUTLIERS
-  # ==========================================================
-
-  if (
-
-    outliers &&
-
-    !is.null(
-      x$outliers$by_time
-    )
-
-  ) {
-
-
-    cat(
-
-      sprintf(
-
-        "\nOUTLIER SUMMARY — %s\n",
-
-        outcome_display
-      )
-    )
-
-
+  if (outliers && !is.null(x$outliers$by_time)) {
+    cat("\nOUTLIER FLAGS\n")
     line()
-
-
-    outlier_counts <-
-
-      vapply(
-
-        x$outliers$by_time,
-
-        nrow,
-
-        integer(1)
-      )
-
-
-    total_outliers <-
-
-      sum(
-        outlier_counts
-      )
-
-
-    cat(
-
-      sprintf(
-
-        "Total %s timepoint outliers: %s\n",
-
-        outcome_display,
-
-        total_outliers
-      )
-    )
-
-
-    for (
-      nm in names(
-        outlier_counts
-      )
-    ) {
-
-
-      cat(
-
-        sprintf(
-
-          "  %-25s %s\n",
-
-          nm,
-
-          outlier_counts[nm]
-        )
-      )
-    }
-
-
-    if (
-      !is.null(
-        x$outliers$change
-      )
-    ) {
-
-
-      change_outlier_counts <-
-
-        vapply(
-
-          x$outliers$change,
-
-          nrow,
-
-          integer(1)
-        )
-
-
-      cat(
-
-        sprintf(
-
-          "Total %s change outliers:    %s\n",
-
-          outcome_display,
-
-          sum(
-            change_outlier_counts
-          )
-        )
-      )
-    }
+    counts <- vapply(x$outliers$by_time, nrow, integer(1L))
+    cat(sprintf("Timepoint IQR flags: %d total\n", sum(counts)))
+    if (length(counts) > 0L) print(counts)
+    cat("Note: these are diagnostic flags, not automatic exclusion criteria.\n")
   }
 
-
-  # ==========================================================
-  # TRAJECTORIES
-  # ==========================================================
-
-  if (
-    !is.null(
-      x$trajectories
-    )
-  ) {
-
-
-    tr <-
-      x$trajectories
-
-
-    finite_change <-
-
-      tr$absolute_change[
-
-        is.finite(
-          tr$absolute_change
-        )
-      ]
-
-
-    if (
-      length(finite_change) > 0
-    ) {
-
-
-      cat(
-
-        sprintf(
-
-          "\nINDIVIDUAL %s TRAJECTORIES\n",
-
-          outcome_display
-        )
-      )
-
-
-      line()
-
-
-      cat(
-
-        sprintf(
-
-          "Subjects with baseline-final data: %s\n",
-
-          length(
-            finite_change
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Mean individual %s change:           %s\n",
-
-          outcome_display,
-
-          fmt_num(
-
-            mean(
-              finite_change
-            ),
-
-            digits
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Median individual %s change:         %s\n",
-
-          outcome_display,
-
-          fmt_num(
-
-            median(
-              finite_change
-            ),
-
-            digits
-          )
-        )
-      )
-
-
-      cat(
-
-        sprintf(
-
-          "Range of individual %s change:       [%s, %s]\n",
-
-          outcome_display,
-
-          fmt_num(
-
-            min(
-              finite_change
-            ),
-
-            digits
-          ),
-
-          fmt_num(
-
-            max(
-              finite_change
-            ),
-
-            digits
-          )
-        )
-      )
-    }
+  if (!is.null(x$plot_error)) {
+    cat("\nPlot note: ", x$plot_error, "\n", sep = "")
   }
 
-
-  # ==========================================================
-  # OUTPUT GUIDE
-  # ==========================================================
-
-  cat("\n")
-
+  cat("\nKey objects: $descriptives, $missing, $change, $correlations, $variability,\n")
+  cat("             $trajectories, $model, $outliers, $plots, $long_data\n")
   line("=")
+  invisible(x)
+}
 
 
-  cat(
+# ============================================================
+# SUMMARY METHOD
+# ============================================================
 
-    sprintf(
+summary.mira_info <- function(object, ...) {
+  ov <- object$overview
+  ch <- object$change
 
-      "COMPLETE OUTPUT — %s\n",
+  baseline_final <- if (nrow(ch) > 0L) {
+    ch[
+      ch$from == ov$timepoints[[1L]] &
+        ch$to == ov$timepoints[[length(ov$timepoints)]],
+      ,
+      drop = FALSE
+    ]
+  } else {
+    ch
+  }
 
-      outcome_display
-    )
+  out <- list(
+    outcome = object$outcome,
+    n_patients = ov$n_patients,
+    n_timepoints = ov$n_timepoints,
+    complete_profiles = ov$complete_profiles,
+    complete_profiles_pct = ov$complete_profiles_pct,
+    descriptives = object$descriptives,
+    baseline_final = baseline_final,
+    variability = object$variability,
+    global_time_test = object$model$global_time_test,
+    model_singular = object$model$singular,
+    model_converged = object$model$converged
   )
 
-
-  line()
-
-
-  cat(
-
-    "Use names(result) to inspect all available components.\n\n"
-  )
-
-
-  cat(
-
-    "Key components:\n"
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  outcome        Automatically detected outcome (%s)\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    "  overview       Dataset structure and completeness\n"
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  descriptives   Detailed %s statistics by timepoint\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    "  missing        Missingness by timepoint and subject\n"
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  change         All %s longitudinal pairwise comparisons\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  correlations   %s Pearson and Spearman correlation matrices\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  variability    %s within/between-subject variability and ICC\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  trajectories    %s subject-level baseline-to-final changes\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  model          %s mixed-effects model and global time test\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  outliers       Detected %s value and change outliers\n",
-
-      outcome_display
-    )
-  )
-
-
-  cat(
-
-    "  plots          Generated visualization objects\n"
-  )
-
-
-  cat(
-
-    sprintf(
-
-      "  long_data      Long-format %s dataset used internally\n",
-
-      outcome_display
-    )
-  )
-
-
-  line("=")
-
-
-  cat("\n")
-
+  class(out) <- c("summary.mira_info", "list")
+  out
+}
+
+
+print.summary.mira_info <- function(x, digits = 3, ...) {
+  cat(sprintf("mira_info summary — %s\n", toupper(x$outcome)))
+  cat(sprintf("Subjects: %d | Timepoints: %d | Complete profiles: %.1f%%\n",
+              x$n_patients, x$n_timepoints, x$complete_profiles_pct))
+
+  if (nrow(x$baseline_final) == 1L) {
+    bf <- x$baseline_final[1L, ]
+    cat(sprintf("Baseline-final mean change: %.*f | adjusted paired-t p: %s\n",
+                digits, bf$mean_change,
+                ifelse(is.na(bf$paired_t_p_adj), "NA", format.pval(bf$paired_t_p_adj, digits = 3L))))
+  }
+
+  cat(sprintf("ICC: %s\n",
+              ifelse(is.na(x$variability$ICC[[1L]]), "NA",
+                     formatC(x$variability$ICC[[1L]], format = "f", digits = digits))))
+
+  if (!is.null(x$global_time_test)) {
+    cat("Global time test available in $global_time_test.\n")
+  }
 
   invisible(x)
+}
+
+
+# ============================================================
+# PLOT METHOD
+# ============================================================
+
+plot.mira_info <- function(x,
+                           which = c("boxplot", "spaghetti", "mean_ci", "change"),
+                           ...) {
+  which <- match.arg(which)
+
+  if (length(x$plots) == 0L || is.null(x$plots[[which]])) {
+    stop(
+      sprintf(
+        "Il grafico '%s' non è disponibile. Esegui mira_info(..., plots = TRUE) con ggplot2 installato.",
+        which
+      ),
+      call. = FALSE
+    )
+  }
+
+  print(x$plots[[which]])
+  invisible(x$plots[[which]])
 }

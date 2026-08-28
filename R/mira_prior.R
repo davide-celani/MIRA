@@ -1,26 +1,35 @@
 #' Create a MIRA prior specification
 #'
-#' Creates a prior specification for the MIRA longitudinal
-#' Student-t model. The specification is independent of the
-#' number of longitudinal measurement occasions.
+#' Creates prior specifications for the MIRA longitudinal multi-arm
+#' Student-t model.
+#'
+#' Priors are scaled using the observed outcome SD and the total elapsed
+#' follow-up time, so the specification remains applicable with any
+#' number of measurement occasions K >= 2 and with irregular time spacing.
 #'
 #' @param stan_data Data prepared by [mira_prepare_data()].
-#' @param profile Character string specifying a predefined prior
-#'   profile. Available profiles are `"default"`, `"weak"`,
-#'   `"regularized"`, `"informative"`, and `"custom"`.
-#' @param mu_time_mean Prior mean for the population time-specific means.
-#' @param mu_time_sd Prior standard deviation for the population
-#'   time-specific means.
-#' @param sigma_intercept_rate Rate parameter for the exponential
-#'   prior on the random-intercept standard deviation.
-#' @param sigma_slope_rate Rate parameter for the exponential
-#'   prior on the random-slope standard deviation.
-#' @param sigma_rate Rate parameter for the exponential prior on
-#'   the residual standard deviation.
-#' @param nu_shape Shape parameter for the Gamma prior on Student-t
-#'   degrees of freedom.
-#' @param nu_rate Rate parameter for the Gamma prior on Student-t
-#'   degrees of freedom.
+#' @param profile Character string specifying a predefined prior profile.
+#'   Available profiles are `"default"`, `"weak"`, `"regularized"`,
+#'   `"informative"`, and `"custom"`.
+#' @param baseline_mean Prior mean for the reference-arm baseline mean.
+#' @param baseline_sd Prior SD for the reference-arm baseline mean.
+#' @param beta_time_mean Prior mean for the reference-arm global time slope.
+#' @param beta_time_sd Prior SD for the reference-arm global time slope.
+#' @param tau_common_rate Exponential rate for continuous-time RW1
+#'   deviations of the reference trajectory.
+#' @param beta_treatment_sd Prior SD for treatment slopes relative to the
+#'   reference arm.
+#' @param tau_treatment_rate Exponential rate for treatment-specific RW1
+#'   deviations.
+#' @param arm_baseline_sd_rate Exponential rate for baseline imbalance SD
+#'   between treatment arms.
+#' @param sigma_intercept_rate Exponential rate for subject random-intercept SD.
+#' @param sigma_slope_rate Exponential rate for subject random-slope SD.
+#' @param sigma_rate Exponential rate for residual Student-t scale.
+#' @param nu_shape Shape parameter for the Gamma prior on Student-t degrees
+#'   of freedom.
+#' @param nu_rate Rate parameter for the Gamma prior on Student-t degrees
+#'   of freedom.
 #'
 #' @return An object of class `mira_prior`.
 #'
@@ -34,8 +43,14 @@ mira_prior <- function(
       "informative",
       "custom"
     ),
-    mu_time_mean = NULL,
-    mu_time_sd = NULL,
+    baseline_mean = NULL,
+    baseline_sd = NULL,
+    beta_time_mean = NULL,
+    beta_time_sd = NULL,
+    tau_common_rate = NULL,
+    beta_treatment_sd = NULL,
+    tau_treatment_rate = NULL,
+    arm_baseline_sd_rate = NULL,
     sigma_intercept_rate = NULL,
     sigma_slope_rate = NULL,
     sigma_rate = NULL,
@@ -44,473 +59,353 @@ mira_prior <- function(
 ) {
 
   # ============================================================
-  # CHECK DATA
+  # DATA VALIDATION
   # ============================================================
 
   if (!is.list(stan_data)) {
-
-    stop(
-      "`stan_data` must be a list.",
-      call. = FALSE
-    )
+    stop("`stan_data` must be a list.", call. = FALSE)
   }
 
-
   required <- c(
+    "y",
+    "time",
+    "time_value",
     "mean_y",
     "sd_y"
   )
 
-
-  missing <- setdiff(
-    required,
-    names(stan_data)
-  )
-
+  missing <- setdiff(required, names(stan_data))
 
   if (length(missing) > 0) {
-
     stop(
-      "Missing Stan data: ",
-      paste(
-        missing,
-        collapse = ", "
-      ),
+      "Missing data required to construct MIRA priors: ",
+      paste(missing, collapse = ", "),
       call. = FALSE
     )
   }
 
-
-  # ============================================================
-  # PROFILE
-  # ============================================================
-
   profile <- match.arg(profile)
 
+  y <- as.numeric(stan_data$y)
+  time <- as.integer(stan_data$time)
+  time_value <- as.numeric(stan_data$time_value)
+  mean_y <- as.numeric(stan_data$mean_y)
+  sd_y <- as.numeric(stan_data$sd_y)
 
-  # ============================================================
-  # OUTCOME SCALE
-  # ============================================================
+  if (length(y) < 1 || any(!is.finite(y))) {
+    stop("`stan_data$y` must contain finite numeric values.", call. = FALSE)
+  }
 
-  mean_y <- stan_data$mean_y
+  if (length(time) != length(y) ||
+      any(!is.finite(time)) ||
+      any(time < 1)) {
+    stop(
+      "`stan_data$time` must contain one valid time index per observation.",
+      call. = FALSE
+    )
+  }
 
-  sd_y <- stan_data$sd_y
+  if (length(time_value) < 2 ||
+      any(!is.finite(time_value)) ||
+      is.unsorted(time_value, strictly = TRUE)) {
+    stop(
+      "`stan_data$time_value` must contain at least two finite, strictly increasing values.",
+      call. = FALSE
+    )
+  }
 
-
-  if (
-    length(mean_y) != 1 ||
-    !is.numeric(mean_y) ||
-    !is.finite(mean_y)
-  ) {
-
+  if (length(mean_y) != 1 || !is.finite(mean_y)) {
     stop(
       "`stan_data$mean_y` must be a single finite numeric value.",
       call. = FALSE
     )
   }
 
-
-  if (
-    length(sd_y) != 1 ||
-    !is.numeric(sd_y) ||
-    !is.finite(sd_y) ||
-    sd_y <= 0
-  ) {
-
+  if (length(sd_y) != 1 || !is.finite(sd_y) || sd_y <= 0) {
     stop(
       "`stan_data$sd_y` must be a single positive finite numeric value.",
       call. = FALSE
     )
   }
 
+  # ============================================================
+  # DATA-ADAPTIVE REFERENCE SCALES
+  # ============================================================
+
+  baseline_y <- y[time == 1]
+
+  if (length(baseline_y) < 1) {
+    stop(
+      "No baseline observations (`time == 1`) were found.",
+      call. = FALSE
+    )
+  }
+
+  baseline_center <- mean(baseline_y)
+
+  time_span <- max(time_value) - min(time_value)
+
+  if (!is.finite(time_span) || time_span <= 0) {
+    stop(
+      "`time_value` must span a positive amount of time.",
+      call. = FALSE
+    )
+  }
+
+  # beta_* and subject slope have units outcome / time.
+  slope_scale <- sd_y / time_span
+
+  # tau_* multiplies sqrt(dt), therefore has units outcome / sqrt(time).
+  rw_scale <- sd_y / sqrt(time_span)
+
+  # Numerical guards only; these do not materially alter ordinary data.
+  outcome_scale <- max(sd_y, 1e-8)
+  slope_scale <- max(slope_scale, 1e-8)
+  rw_scale <- max(rw_scale, 1e-8)
 
   # ============================================================
   # PREDEFINED PROFILES
-  #
-  # IMPORTANT:
-  #
-  # These priors do NOT depend on the number of time points.
-  #
-  # Whether T = 2, 3, 4, 5, 10, ...
-  # the same prior specification can be applied.
   # ============================================================
-
-
-  # ------------------------------------------------------------
-  # DEFAULT
-  # ------------------------------------------------------------
 
   if (profile == "default") {
 
-    mu_time_mean <-
-      mean_y
+    baseline_mean <- baseline_center
+    baseline_sd <- 2 * outcome_scale
 
-    mu_time_sd <-
-      5 * sd_y
+    beta_time_mean <- 0
+    beta_time_sd <- 2 * slope_scale
 
-    sigma_intercept_rate <-
-      1 / sd_y
+    tau_common_rate <- 1 / rw_scale
 
-    sigma_slope_rate <-
-      1 / sd_y
+    beta_treatment_sd <- 2 * slope_scale
+    tau_treatment_rate <- 1 / rw_scale
 
-    sigma_rate <-
-      1 / sd_y
+    arm_baseline_sd_rate <- 1 / outcome_scale
 
-    nu_shape <-
-      2
+    sigma_intercept_rate <- 1 / outcome_scale
+    sigma_slope_rate <- 1 / slope_scale
 
-    nu_rate <-
-      0.1
+    sigma_rate <- 1 / outcome_scale
+
+    nu_shape <- 2
+    nu_rate <- 0.1
   }
 
-
-  # ------------------------------------------------------------
-  # WEAK
-  # ------------------------------------------------------------
 
   if (profile == "weak") {
 
-    mu_time_mean <-
-      mean_y
+    baseline_mean <- baseline_center
+    baseline_sd <- 5 * outcome_scale
 
-    mu_time_sd <-
-      10 * sd_y
+    beta_time_mean <- 0
+    beta_time_sd <- 5 * slope_scale
 
-    sigma_intercept_rate <-
-      0.5 / sd_y
+    tau_common_rate <- 0.5 / rw_scale
 
-    sigma_slope_rate <-
-      0.5 / sd_y
+    beta_treatment_sd <- 5 * slope_scale
+    tau_treatment_rate <- 0.5 / rw_scale
 
-    sigma_rate <-
-      0.5 / sd_y
+    arm_baseline_sd_rate <- 0.5 / outcome_scale
 
-    nu_shape <-
-      2
+    sigma_intercept_rate <- 0.5 / outcome_scale
+    sigma_slope_rate <- 0.5 / slope_scale
 
-    nu_rate <-
-      0.05
+    sigma_rate <- 0.5 / outcome_scale
+
+    nu_shape <- 2
+    nu_rate <- 0.05
   }
 
-
-  # ------------------------------------------------------------
-  # REGULARIZED
-  # ------------------------------------------------------------
 
   if (profile == "regularized") {
 
-    mu_time_mean <-
-      mean_y
+    baseline_mean <- baseline_center
+    baseline_sd <- 1.5 * outcome_scale
 
-    mu_time_sd <-
-      2 * sd_y
+    beta_time_mean <- 0
+    beta_time_sd <- 1 * slope_scale
 
-    sigma_intercept_rate <-
-      2 / sd_y
+    tau_common_rate <- 2 / rw_scale
 
-    sigma_slope_rate <-
-      2 / sd_y
+    beta_treatment_sd <- 1 * slope_scale
+    tau_treatment_rate <- 2 / rw_scale
 
-    sigma_rate <-
-      2 / sd_y
+    arm_baseline_sd_rate <- 2 / outcome_scale
 
-    nu_shape <-
-      2
+    sigma_intercept_rate <- 2 / outcome_scale
+    sigma_slope_rate <- 2 / slope_scale
 
-    nu_rate <-
-      0.1
+    sigma_rate <- 2 / outcome_scale
+
+    nu_shape <- 2
+    nu_rate <- 0.1
   }
 
 
-  # ------------------------------------------------------------
-  # INFORMATIVE
-  # ------------------------------------------------------------
-
   if (profile == "informative") {
 
-    mu_time_mean <-
-      mean_y
+    baseline_mean <- baseline_center
+    baseline_sd <- 0.75 * outcome_scale
 
-    mu_time_sd <-
-      1 * sd_y
+    beta_time_mean <- 0
+    beta_time_sd <- 0.5 * slope_scale
 
-    sigma_intercept_rate <-
-      5 / sd_y
+    tau_common_rate <- 5 / rw_scale
 
-    sigma_slope_rate <-
-      5 / sd_y
+    beta_treatment_sd <- 0.5 * slope_scale
+    tau_treatment_rate <- 5 / rw_scale
 
-    sigma_rate <-
-      5 / sd_y
+    arm_baseline_sd_rate <- 5 / outcome_scale
 
-    nu_shape <-
-      5
+    sigma_intercept_rate <- 5 / outcome_scale
+    sigma_slope_rate <- 5 / slope_scale
 
-    nu_rate <-
-      0.5
+    sigma_rate <- 5 / outcome_scale
+
+    nu_shape <- 5
+    nu_rate <- 0.5
   }
 
 
   # ============================================================
-  # CUSTOM
+  # CUSTOM PROFILE
   # ============================================================
 
   if (profile == "custom") {
 
-    # ----------------------------------------------------------
-    # Population mean
-    # ----------------------------------------------------------
-
-    if (is.null(mu_time_mean)) {
-
-      mu_time_mean <-
-        mean_y
+    if (is.null(baseline_mean)) {
+      baseline_mean <- baseline_center
     }
 
-
-    # ----------------------------------------------------------
-    # Population SD
-    # ----------------------------------------------------------
-
-    if (is.null(mu_time_sd)) {
-
-      stop(
-        paste0(
-          "`mu_time_sd` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
-        call. = FALSE
-      )
+    if (is.null(beta_time_mean)) {
+      beta_time_mean <- 0
     }
 
+    required_custom <- c(
+      "baseline_sd",
+      "beta_time_sd",
+      "tau_common_rate",
+      "beta_treatment_sd",
+      "tau_treatment_rate",
+      "arm_baseline_sd_rate",
+      "sigma_intercept_rate",
+      "sigma_slope_rate",
+      "sigma_rate",
+      "nu_shape",
+      "nu_rate"
+    )
 
-    # ----------------------------------------------------------
-    # Random intercept
-    # ----------------------------------------------------------
+    custom_values <- mget(
+      required_custom,
+      envir = environment(),
+      inherits = FALSE
+    )
 
-    if (is.null(sigma_intercept_rate)) {
+    missing_custom <- names(custom_values)[
+      vapply(custom_values, is.null, logical(1))
+    ]
 
+    if (length(missing_custom) > 0) {
       stop(
-        paste0(
-          "`sigma_intercept_rate` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
-        call. = FALSE
-      )
-    }
-
-
-    # ----------------------------------------------------------
-    # Random slope
-    # ----------------------------------------------------------
-
-    if (is.null(sigma_slope_rate)) {
-
-      stop(
-        paste0(
-          "`sigma_slope_rate` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
-        call. = FALSE
-      )
-    }
-
-
-    # ----------------------------------------------------------
-    # Residual SD
-    # ----------------------------------------------------------
-
-    if (is.null(sigma_rate)) {
-
-      stop(
-        paste0(
-          "`sigma_rate` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
-        call. = FALSE
-      )
-    }
-
-
-    # ----------------------------------------------------------
-    # Student-t shape
-    # ----------------------------------------------------------
-
-    if (is.null(nu_shape)) {
-
-      stop(
-        paste0(
-          "`nu_shape` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
-        call. = FALSE
-      )
-    }
-
-
-    # ----------------------------------------------------------
-    # Student-t rate
-    # ----------------------------------------------------------
-
-    if (is.null(nu_rate)) {
-
-      stop(
-        paste0(
-          "`nu_rate` must be supplied for ",
-          "`profile = 'custom'`."
-        ),
+        "For `profile = 'custom'`, supply: ",
+        paste(missing_custom, collapse = ", "),
+        ".",
         call. = FALSE
       )
     }
   }
-
 
   # ============================================================
   # VALIDATION
   # ============================================================
 
-  values <- list(
-
-    mu_time_mean =
-      mu_time_mean,
-
-    mu_time_sd =
-      mu_time_sd,
-
-    sigma_intercept_rate =
-      sigma_intercept_rate,
-
-    sigma_slope_rate =
-      sigma_slope_rate,
-
-    sigma_rate =
-      sigma_rate,
-
-    nu_shape =
-      nu_shape,
-
-    nu_rate =
-      nu_rate
+  finite_parameters <- list(
+    baseline_mean = baseline_mean,
+    beta_time_mean = beta_time_mean
   )
 
+  for (name in names(finite_parameters)) {
+    value <- finite_parameters[[name]]
 
-  for (name in names(values)) {
-
-    value <- values[[name]]
-
-
-    if (
-      length(value) != 1 ||
-      !is.numeric(value) ||
-      !is.finite(value)
-    ) {
-
+    if (length(value) != 1 ||
+        !is.numeric(value) ||
+        !is.finite(value)) {
       stop(
-        "`",
-        name,
-        "` must be a single finite numeric value.",
+        "`", name, "` must be a single finite numeric value.",
         call. = FALSE
       )
     }
   }
 
+  positive_parameters <- list(
+    baseline_sd = baseline_sd,
+    beta_time_sd = beta_time_sd,
+    tau_common_rate = tau_common_rate,
+    beta_treatment_sd = beta_treatment_sd,
+    tau_treatment_rate = tau_treatment_rate,
+    arm_baseline_sd_rate = arm_baseline_sd_rate,
+    sigma_intercept_rate = sigma_intercept_rate,
+    sigma_slope_rate = sigma_slope_rate,
+    sigma_rate = sigma_rate,
+    nu_shape = nu_shape,
+    nu_rate = nu_rate
+  )
 
-  # ============================================================
-  # POSITIVITY CHECKS
-  # ============================================================
+  for (name in names(positive_parameters)) {
+    value <- positive_parameters[[name]]
 
-  if (mu_time_sd <= 0) {
-
-    stop(
-      "`mu_time_sd` must be > 0.",
-      call. = FALSE
-    )
+    if (length(value) != 1 ||
+        !is.numeric(value) ||
+        !is.finite(value) ||
+        value <= 0) {
+      stop(
+        "`", name, "` must be a single positive finite numeric value.",
+        call. = FALSE
+      )
+    }
   }
-
-
-  if (sigma_intercept_rate <= 0) {
-
-    stop(
-      "`sigma_intercept_rate` must be > 0.",
-      call. = FALSE
-    )
-  }
-
-
-  if (sigma_slope_rate <= 0) {
-
-    stop(
-      "`sigma_slope_rate` must be > 0.",
-      call. = FALSE
-    )
-  }
-
-
-  if (sigma_rate <= 0) {
-
-    stop(
-      "`sigma_rate` must be > 0.",
-      call. = FALSE
-    )
-  }
-
-
-  if (nu_shape <= 0) {
-
-    stop(
-      "`nu_shape` must be > 0.",
-      call. = FALSE
-    )
-  }
-
-
-  if (nu_rate <= 0) {
-
-    stop(
-      "`nu_rate` must be > 0.",
-      call. = FALSE
-    )
-  }
-
 
   # ============================================================
   # BUILD PRIOR OBJECT
   # ============================================================
 
   prior <- list(
+    baseline_prior_mean = as.numeric(baseline_mean),
+    baseline_prior_sd = as.numeric(baseline_sd),
 
-    mu_time_prior_mean =
-      mu_time_mean,
+    beta_time_prior_mean = as.numeric(beta_time_mean),
+    beta_time_prior_sd = as.numeric(beta_time_sd),
 
-    mu_time_prior_sd =
-      mu_time_sd,
+    tau_common_prior_rate = as.numeric(tau_common_rate),
 
-    sigma_intercept_prior_rate =
-      sigma_intercept_rate,
+    beta_treatment_prior_sd = as.numeric(beta_treatment_sd),
+    tau_treatment_prior_rate = as.numeric(tau_treatment_rate),
 
-    sigma_slope_prior_rate =
-      sigma_slope_rate,
+    arm_baseline_sd_prior_rate = as.numeric(arm_baseline_sd_rate),
 
-    sigma_prior_rate =
-      sigma_rate,
+    sigma_intercept_prior_rate = as.numeric(sigma_intercept_rate),
+    sigma_slope_prior_rate = as.numeric(sigma_slope_rate),
 
-    nu_prior_shape =
-      nu_shape,
+    sigma_prior_rate = as.numeric(sigma_rate),
 
-    nu_prior_rate =
-      nu_rate,
+    nu_prior_shape = as.numeric(nu_shape),
+    nu_prior_rate = as.numeric(nu_rate),
 
-    profile =
-      profile
+    profile = profile,
+
+    # R-side metadata: useful for inspection but not sent to Stan.
+    reference_scales = list(
+      baseline_center = baseline_center,
+      outcome_scale = outcome_scale,
+      slope_scale = slope_scale,
+      rw_scale = rw_scale,
+      time_span = time_span
+    )
   )
 
+  class(prior) <- "mira_prior"
 
-  class(prior) <-
-    "mira_prior"
-
-
-  return(prior)
+  prior
 }
 
 
@@ -525,37 +420,67 @@ print.mira_prior <- function(
     ...
 ) {
 
+  mira_validate_prior(x)
+
   cat("\n")
   cat("MIRA prior specification\n")
   cat("========================\n\n")
 
+  cat("Profile: ", x$profile, "\n\n", sep = "")
 
+  cat("Reference-arm baseline:\n")
   cat(
-    "Profile: ",
-    x$profile,
-    "\n\n",
-    sep = ""
-  )
-
-
-  cat(
-    "Population time-specific means:\n"
-  )
-
-  cat(
-    "  mu_time[t] ~ Normal(",
-    x$mu_time_prior_mean,
+    "  baseline_mean ~ Normal(",
+    x$baseline_prior_mean,
     ", ",
-    x$mu_time_prior_sd,
+    x$baseline_prior_sd,
     ")\n\n",
     sep = ""
   )
 
-
+  cat("Reference-arm global time trend:\n")
   cat(
-    "Random intercept:\n"
+    "  beta_time ~ Normal(",
+    x$beta_time_prior_mean,
+    ", ",
+    x$beta_time_prior_sd,
+    ")\n\n",
+    sep = ""
   )
 
+  cat("Reference trajectory RW1 scale:\n")
+  cat(
+    "  tau_common ~ Exponential(",
+    x$tau_common_prior_rate,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Treatment slope deviations:\n")
+  cat(
+    "  beta_treatment[g] ~ Normal(0, ",
+    x$beta_treatment_prior_sd,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Treatment trajectory RW1 scales:\n")
+  cat(
+    "  tau_treatment[g] ~ Exponential(",
+    x$tau_treatment_prior_rate,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Baseline arm imbalance SD:\n")
+  cat(
+    "  arm_baseline_sd ~ Exponential(",
+    x$arm_baseline_sd_prior_rate,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Subject random intercept SD:\n")
   cat(
     "  sigma_intercept ~ Exponential(",
     x$sigma_intercept_prior_rate,
@@ -563,11 +488,7 @@ print.mira_prior <- function(
     sep = ""
   )
 
-
-  cat(
-    "Random slope:\n"
-  )
-
+  cat("Subject random slope SD:\n")
   cat(
     "  sigma_slope ~ Exponential(",
     x$sigma_slope_prior_rate,
@@ -575,11 +496,7 @@ print.mira_prior <- function(
     sep = ""
   )
 
-
-  cat(
-    "Residual SD:\n"
-  )
-
+  cat("Residual Student-t scale:\n")
   cat(
     "  sigma ~ Exponential(",
     x$sigma_prior_rate,
@@ -587,11 +504,7 @@ print.mira_prior <- function(
     sep = ""
   )
 
-
-  cat(
-    "Student-t degrees of freedom:\n"
-  )
-
+  cat("Student-t degrees of freedom:\n")
   cat(
     "  nu ~ Gamma(",
     x$nu_prior_shape,
@@ -601,9 +514,7 @@ print.mira_prior <- function(
     sep = ""
   )
 
-
   cat("\n")
-
 
   invisible(x)
 }
@@ -620,121 +531,79 @@ mira_validate_prior <- function(
     prior
 ) {
 
-  # ============================================================
-  # CLASS
-  # ============================================================
-
   if (!inherits(prior, "mira_prior")) {
-
     stop(
       "`prior` must be created with `mira_prior()`.",
       call. = FALSE
     )
   }
 
-
-  # ============================================================
-  # REQUIRED FIELDS
-  # ============================================================
-
   required <- c(
-
-    "mu_time_prior_mean",
-
-    "mu_time_prior_sd",
-
+    "baseline_prior_mean",
+    "baseline_prior_sd",
+    "beta_time_prior_mean",
+    "beta_time_prior_sd",
+    "tau_common_prior_rate",
+    "beta_treatment_prior_sd",
+    "tau_treatment_prior_rate",
+    "arm_baseline_sd_prior_rate",
     "sigma_intercept_prior_rate",
-
     "sigma_slope_prior_rate",
-
     "sigma_prior_rate",
-
     "nu_prior_shape",
-
     "nu_prior_rate"
   )
 
-
-  missing <- setdiff(
-    required,
-    names(prior)
-  )
-
+  missing <- setdiff(required, names(prior))
 
   if (length(missing) > 0) {
-
     stop(
       "Invalid MIRA prior. Missing fields: ",
-      paste(
-        missing,
-        collapse = ", "
-      ),
+      paste(missing, collapse = ", "),
       call. = FALSE
     )
   }
 
+  finite_parameters <- c(
+    "baseline_prior_mean",
+    "beta_time_prior_mean"
+  )
 
-  # ============================================================
-  # NUMERIC VALIDATION
-  # ============================================================
+  positive_parameters <- setdiff(
+    required,
+    finite_parameters
+  )
 
-  values <- prior[required]
+  for (name in finite_parameters) {
+    value <- prior[[name]]
 
-
-  for (name in names(values)) {
-
-    value <- values[[name]]
-
-
-    if (
-      length(value) != 1 ||
-      !is.numeric(value) ||
-      !is.finite(value)
-    ) {
-
+    if (length(value) != 1 ||
+        !is.numeric(value) ||
+        !is.finite(value)) {
       stop(
         "Invalid MIRA prior field `",
         name,
-        "`.",
+        "`: expected one finite numeric value.",
         call. = FALSE
       )
     }
   }
-
-
-  # ============================================================
-  # POSITIVITY
-  # ============================================================
-
-  positive_parameters <- c(
-
-    "mu_time_prior_sd",
-
-    "sigma_intercept_prior_rate",
-
-    "sigma_slope_prior_rate",
-
-    "sigma_prior_rate",
-
-    "nu_prior_shape",
-
-    "nu_prior_rate"
-  )
-
 
   for (name in positive_parameters) {
+    value <- prior[[name]]
 
-    if (prior[[name]] <= 0) {
-
+    if (length(value) != 1 ||
+        !is.numeric(value) ||
+        !is.finite(value) ||
+        value <= 0) {
       stop(
-        "`",
+        "Invalid MIRA prior field `",
         name,
-        "` must be > 0.",
+        "`: expected one positive finite numeric value.",
         call. = FALSE
       )
     }
   }
-
 
   invisible(TRUE)
 }
@@ -751,18 +620,32 @@ mira_prior_stan_data <- function(
     prior
 ) {
 
-  mira_validate_prior(
-    prior
-  )
-
+  mira_validate_prior(prior)
 
   list(
+    baseline_prior_mean =
+      prior$baseline_prior_mean,
 
-    mu_time_prior_mean =
-      prior$mu_time_prior_mean,
+    baseline_prior_sd =
+      prior$baseline_prior_sd,
 
-    mu_time_prior_sd =
-      prior$mu_time_prior_sd,
+    beta_time_prior_mean =
+      prior$beta_time_prior_mean,
+
+    beta_time_prior_sd =
+      prior$beta_time_prior_sd,
+
+    tau_common_prior_rate =
+      prior$tau_common_prior_rate,
+
+    beta_treatment_prior_sd =
+      prior$beta_treatment_prior_sd,
+
+    tau_treatment_prior_rate =
+      prior$tau_treatment_prior_rate,
+
+    arm_baseline_sd_prior_rate =
+      prior$arm_baseline_sd_prior_rate,
 
     sigma_intercept_prior_rate =
       prior$sigma_intercept_prior_rate,

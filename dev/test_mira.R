@@ -75,8 +75,14 @@ subject_effect <- rnorm(
 # Genera le tre misure per ogni paziente
 
 data <- data.frame(
-  patient = seq_len(n_patients)
+  patient = seq_len(n_patients),
+
+  arm = rep(
+    c("control", "treatment"),
+    length.out = n_patients
+  )
 )
+
 
 data$IOP_t0 <- rnorm(
   n_patients,
@@ -96,7 +102,6 @@ data$IOP_t2 <- rnorm(
   sd = true_sigma
 )
 
-
 data$IOP_t3 <- rnorm(
   n_patients,
   mean = true_t2 + subject_effect,
@@ -110,25 +115,50 @@ data$IOP_t4 <- rnorm(
 )
 
 
+res <- mira_info(
+  data = data,
+  reference_arm = "control",
+  improvement_direction = "lower"
+)
+
 
 res <- mira_info(
   data = data,
+
   id = "patient",
-  time_vars = c("IOP_t0", "IOP_t1", "IOP_t2", "IOP_t3", "IOP_t4"),
+
+  time_vars = c(
+    "IOP_t0",
+    "IOP_t1",
+    "IOP_t2",
+    "IOP_t3",
+    "IOP_t4"
+  ),
+
   time_labels = c(
     "Baseline",
-    "Time 1",
-    "Time 2",
-    "Time 3",
-    "Time 4"
+    "Month 3",
+    "Month 5",
+    "Month 12",
+    "Month 15"
   ),
+
+  arm = "arm",
+  reference_arm = "control",
+
+  improvement_direction = "lower",
+
   plots = TRUE,
   model = TRUE,
   outliers = TRUE,
   correlations = TRUE,
-  verbose = TRUE
-)
+  verbose = TRUE,
 
+  p_adjust_method = "holm",
+  stable_threshold = 0,
+  strict_id = TRUE,
+  arm_tests = TRUE
+)
 
 
 
@@ -153,7 +183,11 @@ res$model
 stan_data <- mira_prepare_data(
   data = data,
   time_value = c(0, 3, 5, 12, 15),
-  meaningful_change = 1
+  meaningful_change = 1,
+  meaningful_change_sd = 0.2,
+  direction = "lower",
+  arm_column = "arm",
+  reference_arm = "control"
 )
 
 
@@ -161,11 +195,17 @@ stan_data <- mira_prepare_data(
 # PRIOR
 # ============================================================
 
-
 prior <- mira_prior(
   stan_data,
   profile = "default"
 )
+
+print(prior)
+
+
+# ============================================================
+# FIT
+# ============================================================
 
 fit <- mira_fit(
   stan_data = stan_data,
@@ -177,32 +217,15 @@ fit <- mira_fit(
   seed = 123
 )
 
-# ============================================================
-# STAN MODEL
-# ============================================================
-
-stan_file <- system.file(
-  "stan",
-  "gaussian_longitudinal.stan",
-  package = "MIRA"
-)
-
-
-
 
 # ============================================================
-# PRINT RESULTS
+# SUMMARY
 # ============================================================
 
 summary <- mira_summary(
   fit = fit,
   stan_data = stan_data
 )
-
-
-summary$clinical
-summary$responders
-
 
 
 # ------------------------------------------------------------

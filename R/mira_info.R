@@ -1,5 +1,5 @@
 # ============================================================
-# MIRA_INFO v2.1 COMPLETE REPORT
+# MIRA_INFO v3.0 COMPLETE REPORT
 # Robust longitudinal analysis for wide-format repeated measures
 #
 # Expected longitudinal column names:
@@ -20,12 +20,23 @@
 #   - plotting requires ggplot2 only (no hidden dplyr dependency)
 #   - dynamic confidence-level labels (not hard-coded to 95%)
 #   - compact print(), summary(), and plot() S3 methods
+#   - automatic treatment-arm detection when a column named `arm` exists
+#   - arm x time descriptives and baseline balance diagnostics
+#   - Welch/Kruskal omnibus arm tests at each timepoint
+#   - multiplicity-adjusted pairwise arm comparisons with Hedges g
+#   - between-arm comparisons of baseline-to-follow-up change
+#   - differential missingness tests across treatment arms
+#   - mixed-effects arm x time interaction and global likelihood-ratio tests
+#   - arm-specific exploratory plots
 # ============================================================
 
 mira_info <- function(data,
                       id = "patient",
                       time_vars = NULL,
                       time_labels = NULL,
+                      arm = NULL,
+                      reference_arm = NULL,
+                      arm_tests = TRUE,
                       alpha = 0.05,
                       plots = TRUE,
                       model = TRUE,
@@ -75,6 +86,7 @@ mira_info <- function(data,
   scalar_flag(correlations, "correlations")
   scalar_flag(verbose, "verbose")
   scalar_flag(strict_id, "strict_id")
+  scalar_flag(arm_tests, "arm_tests")
 
   improvement_direction <- match.arg(improvement_direction)
 
@@ -132,6 +144,97 @@ mira_info <- function(data,
       ),
       call. = FALSE
     )
+  }
+
+  # ----------------------------------------------------------
+  # 0B. TREATMENT ARM DETECTION / VALIDATION
+  # ----------------------------------------------------------
+
+  # Backward compatible behaviour:
+  # - if arm is NULL and a column named "arm" exists, use it automatically;
+  # - if no arm column is available, all original single-cohort analyses remain available.
+  if (is.null(arm) && "arm" %in% names(data)) {
+    arm <- "arm"
+  }
+
+  arm_available <- !is.null(arm)
+  arm_levels <- character(0)
+  arm_counts <- NULL
+  missing_arm_n <- 0L
+
+  if (arm_available) {
+
+    if (!is.character(arm) || length(arm) != 1L || is.na(arm) || !nzchar(arm)) {
+      stop("arm deve essere NULL oppure il nome di una sola variabile.", call. = FALSE)
+    }
+
+    if (!arm %in% names(data)) {
+      stop(sprintf("La variabile di trattamento '%s' non esiste nel dataset.", arm), call. = FALSE)
+    }
+
+    arm_raw <- data[[arm]]
+    missing_arm_n <- sum(is.na(arm_raw) | !nzchar(trimws(as.character(arm_raw))))
+
+    arm_character <- as.character(arm_raw)
+    arm_character[is.na(arm_raw) | !nzchar(trimws(arm_character))] <- NA_character_
+
+    observed_arms <- unique(arm_character[!is.na(arm_character)])
+
+    if (length(observed_arms) < 2L) {
+      warning(
+        sprintf(
+          "La variabile '%s' contiene meno di due gruppi osservati; le analisi tra arm saranno disabilitate.",
+          arm
+        ),
+        call. = FALSE
+      )
+      arm_tests <- FALSE
+    }
+
+    if (is.null(reference_arm)) {
+      if (length(observed_arms) > 0L) {
+        reference_arm <- observed_arms[[1L]]
+      }
+    } else {
+      reference_arm <- as.character(reference_arm)
+
+      if (length(reference_arm) != 1L || is.na(reference_arm) || !nzchar(reference_arm)) {
+        stop("reference_arm deve identificare un singolo gruppo non vuoto.", call. = FALSE)
+      }
+
+      if (!reference_arm %in% observed_arms) {
+        stop(
+          sprintf(
+            "reference_arm='%s' non è presente nella variabile '%s'. Gruppi osservati: %s.",
+            reference_arm,
+            arm,
+            paste(observed_arms, collapse = ", ")
+          ),
+          call. = FALSE
+        )
+      }
+    }
+
+    if (length(observed_arms) > 0L) {
+      arm_levels <- c(reference_arm, setdiff(observed_arms, reference_arm))
+      arm_counts <- table(
+        factor(
+          arm_character,
+          levels = arm_levels
+        ),
+        useNA = "no"
+      )
+    }
+
+    if (missing_arm_n > 0L) {
+      warning(
+        sprintf(
+          "%d soggetti hanno arm mancante e saranno esclusi solo dalle analisi tra gruppi.",
+          missing_arm_n
+        ),
+        call. = FALSE
+      )
+    }
   }
 
   # ----------------------------------------------------------
@@ -383,6 +486,111 @@ mira_info <- function(data,
     ok <- is.finite(p)
     if (any(ok)) out[ok] <- stats::p.adjust(p[ok], method = p_adjust_method)
     out
+  }
+
+  safe_welch_test <- function(x, y) {
+    x <- x[is.finite(x)]
+    y <- y[is.finite(y)]
+
+    if (length(x) < 2L || length(y) < 2L) {
+      return(list(
+        p.value = NA_real_,
+        estimate = NA_real_,
+        conf.int = c(NA_real_, NA_real_)
+      ))
+    }
+
+    z <- tryCatch(
+      stats::t.test(y, x, paired = FALSE, var.equal = FALSE, conf.level = 1 - alpha),
+      error = function(e) NULL
+    )
+
+    if (is.null(z)) {
+      return(list(
+        p.value = NA_real_,
+        estimate = NA_real_,
+        conf.int = c(NA_real_, NA_real_)
+      ))
+    }
+
+    list(
+      p.value = unname(z$p.value),
+      estimate = mean(y) - mean(x),
+      conf.int = unname(z$conf.int)
+    )
+  }
+
+  safe_unpaired_wilcox_p <- function(x, y) {
+    x <- x[is.finite(x)]
+    y <- y[is.finite(y)]
+
+    if (length(x) < 1L || length(y) < 1L) return(NA_real_)
+
+    z <- tryCatch(
+      suppressWarnings(
+        stats::wilcox.test(y, x, paired = FALSE, exact = FALSE)
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(z)) NA_real_ else unname(z$p.value)
+  }
+
+  hedges_g <- function(x, y) {
+    x <- x[is.finite(x)]
+    y <- y[is.finite(y)]
+
+    nx <- length(x)
+    ny <- length(y)
+
+    if (nx < 2L || ny < 2L) return(NA_real_)
+
+    vx <- stats::var(x)
+    vy <- stats::var(y)
+    df <- nx + ny - 2L
+
+    if (!is.finite(vx) || !is.finite(vy) || df <= 0L) return(NA_real_)
+
+    pooled_var <- ((nx - 1L) * vx + (ny - 1L) * vy) / df
+
+    if (!is.finite(pooled_var) || pooled_var <= 0) return(NA_real_)
+
+    d <- (mean(y) - mean(x)) / sqrt(pooled_var)
+
+    # Small-sample correction.
+    J <- if (df > 1L) 1 - 3 / (4 * df - 1) else 1
+
+    J * d
+  }
+
+  safe_welch_anova_p <- function(value, group) {
+    keep <- is.finite(value) & !is.na(group)
+    value <- value[keep]
+    group <- droplevels(factor(group[keep]))
+
+    if (length(value) < 3L || nlevels(group) < 2L) return(NA_real_)
+
+    z <- tryCatch(
+      stats::oneway.test(value ~ group, var.equal = FALSE),
+      error = function(e) NULL
+    )
+
+    if (is.null(z)) NA_real_ else unname(z$p.value)
+  }
+
+  safe_kruskal_p <- function(value, group) {
+    keep <- is.finite(value) & !is.na(group)
+    value <- value[keep]
+    group <- droplevels(factor(group[keep]))
+
+    if (length(value) < 2L || nlevels(group) < 2L) return(NA_real_)
+
+    z <- tryCatch(
+      stats::kruskal.test(value ~ group),
+      error = function(e) NULL
+    )
+
+    if (is.null(z)) NA_real_ else unname(z$p.value)
   }
 
   improvement_counts <- function(delta) {
@@ -661,6 +869,7 @@ mira_info <- function(data,
       time = v,
       time_index = k,
       time_label = unname(time_labels[v]),
+      arm = if (arm_available) as.character(analysis_data[[arm]]) else NA_character_,
       value = analysis_data[[v]],
       stringsAsFactors = FALSE
     )
@@ -672,6 +881,353 @@ mira_info <- function(data,
     long_data$time_label,
     levels = unname(time_labels[time_vars])
   )
+
+  if (arm_available) {
+    long_data$arm <- factor(
+      long_data$arm,
+      levels = arm_levels
+    )
+  }
+
+  # ----------------------------------------------------------
+  # 10B. ARM-SPECIFIC EXPLORATORY ANALYSES
+  # ----------------------------------------------------------
+
+  arm_descriptives <- NULL
+  arm_time_omnibus <- NULL
+  arm_time_pairwise <- NULL
+  arm_change_descriptives <- NULL
+  arm_change_omnibus <- NULL
+  arm_change_pairwise <- NULL
+  arm_missingness <- NULL
+  baseline_balance <- NULL
+
+  if (arm_available && arm_tests && length(arm_levels) >= 2L) {
+
+    # --------------------------------------------------------
+    # Descriptives by arm x time
+    # --------------------------------------------------------
+
+    arm_desc_list <- list()
+    a_counter <- 1L
+
+    for (g in arm_levels) {
+      for (k in seq_along(time_vars)) {
+
+        v <- time_vars[[k]]
+        idx <- !is.na(analysis_data[[arm]]) &
+          as.character(analysis_data[[arm]]) == g
+
+        x_all <- analysis_data[[v]][idx]
+        x <- x_all[is.finite(x_all)]
+        group_n <- sum(idx)
+        n <- length(x)
+        unavailable_n <- sum(!is.finite(x_all) | is.na(x_all))
+
+        ci <- mean_ci(x)
+
+        arm_desc_list[[a_counter]] <- data.frame(
+          arm = g,
+          time = v,
+          time_index = k,
+          time_label = unname(time_labels[v]),
+          group_n = group_n,
+          n = n,
+          unavailable_n = unavailable_n,
+          unavailable_pct = if (group_n > 0L) unavailable_n / group_n * 100 else NA_real_,
+          mean = safe_mean(x),
+          sd = safe_sd(x),
+          se = unname(ci["se"]),
+          ci_lower = unname(ci["lower"]),
+          ci_upper = unname(ci["upper"]),
+          median = safe_median(x),
+          q1 = safe_quantile(x, 0.25),
+          q3 = safe_quantile(x, 0.75),
+          min = if (n > 0L) min(x) else NA_real_,
+          max = if (n > 0L) max(x) else NA_real_,
+          stringsAsFactors = FALSE
+        )
+
+        a_counter <- a_counter + 1L
+      }
+    }
+
+    arm_descriptives <- do.call(rbind, arm_desc_list)
+    rownames(arm_descriptives) <- NULL
+
+
+    # --------------------------------------------------------
+    # Missingness / availability by arm
+    # --------------------------------------------------------
+
+    arm_missing_list <- lapply(seq_along(time_vars), function(k) {
+
+      v <- time_vars[[k]]
+      group <- factor(
+        as.character(analysis_data[[arm]]),
+        levels = arm_levels
+      )
+      unavailable <- !is.finite(analysis_data[[v]]) | is.na(analysis_data[[v]])
+
+      keep <- !is.na(group)
+
+      tab <- table(
+        group[keep],
+        unavailable[keep]
+      )
+
+      test_p <- NA_real_
+      test_used <- NA_character_
+
+      if (nrow(tab) >= 2L && ncol(tab) >= 2L) {
+
+        expected <- tryCatch(
+          suppressWarnings(stats::chisq.test(tab)$expected),
+          error = function(e) NULL
+        )
+
+        if (!is.null(expected) && any(expected < 5)) {
+          ft <- tryCatch(stats::fisher.test(tab), error = function(e) NULL)
+          if (!is.null(ft)) {
+            test_p <- unname(ft$p.value)
+            test_used <- "Fisher"
+          }
+        } else {
+          ct <- tryCatch(
+            suppressWarnings(stats::chisq.test(tab, correct = FALSE)),
+            error = function(e) NULL
+          )
+          if (!is.null(ct)) {
+            test_p <- unname(ct$p.value)
+            test_used <- "Chi-square"
+          }
+        }
+      }
+
+      data.frame(
+        time = v,
+        time_index = k,
+        time_label = unname(time_labels[v]),
+        test = test_used,
+        p_value = test_p,
+        stringsAsFactors = FALSE
+      )
+    })
+
+    arm_missingness <- do.call(rbind, arm_missing_list)
+    arm_missingness$p_value_adj <- adjust_p(arm_missingness$p_value)
+
+
+    # --------------------------------------------------------
+    # Omnibus arm test at each timepoint
+    # --------------------------------------------------------
+
+    omnibus_list <- lapply(seq_along(time_vars), function(k) {
+      v <- time_vars[[k]]
+      value <- analysis_data[[v]]
+      group <- factor(
+        as.character(analysis_data[[arm]]),
+        levels = arm_levels
+      )
+
+      data.frame(
+        time = v,
+        time_index = k,
+        time_label = unname(time_labels[v]),
+        n = sum(is.finite(value) & !is.na(group)),
+        n_arms = length(unique(as.character(group[is.finite(value) & !is.na(group)]))),
+        welch_anova_p = safe_welch_anova_p(value, group),
+        kruskal_p = safe_kruskal_p(value, group),
+        stringsAsFactors = FALSE
+      )
+    })
+
+    arm_time_omnibus <- do.call(rbind, omnibus_list)
+    arm_time_omnibus$welch_anova_p_adj <- adjust_p(arm_time_omnibus$welch_anova_p)
+    arm_time_omnibus$kruskal_p_adj <- adjust_p(arm_time_omnibus$kruskal_p)
+
+
+    # --------------------------------------------------------
+    # Pairwise arm comparisons at each timepoint
+    # Difference is arm_b - arm_a.
+    # --------------------------------------------------------
+
+    pair_list <- list()
+    p_counter <- 1L
+    arm_pairs <- utils::combn(arm_levels, 2L, simplify = FALSE)
+
+    for (k in seq_along(time_vars)) {
+
+      v <- time_vars[[k]]
+
+      for (pair in arm_pairs) {
+
+        a <- pair[[1L]]
+        b <- pair[[2L]]
+
+        xa <- analysis_data[[v]][as.character(analysis_data[[arm]]) == a]
+        xb <- analysis_data[[v]][as.character(analysis_data[[arm]]) == b]
+
+        xa <- xa[is.finite(xa)]
+        xb <- xb[is.finite(xb)]
+
+        wt <- safe_welch_test(xa, xb)
+
+        pair_list[[p_counter]] <- data.frame(
+          time = v,
+          time_index = k,
+          time_label = unname(time_labels[v]),
+          arm_a = a,
+          arm_b = b,
+          n_a = length(xa),
+          n_b = length(xb),
+          mean_a = safe_mean(xa),
+          mean_b = safe_mean(xb),
+          mean_difference_b_minus_a = wt$estimate,
+          ci_lower = wt$conf.int[[1L]],
+          ci_upper = wt$conf.int[[2L]],
+          hedges_g = hedges_g(xa, xb),
+          welch_t_p = wt$p.value,
+          wilcoxon_p = safe_unpaired_wilcox_p(xa, xb),
+          stringsAsFactors = FALSE
+        )
+
+        p_counter <- p_counter + 1L
+      }
+    }
+
+    arm_time_pairwise <- do.call(rbind, pair_list)
+    arm_time_pairwise$welch_t_p_adj <- adjust_p(arm_time_pairwise$welch_t_p)
+    arm_time_pairwise$wilcoxon_p_adj <- adjust_p(arm_time_pairwise$wilcoxon_p)
+
+    baseline_balance <- arm_time_pairwise[
+      arm_time_pairwise$time_index == 1L,
+      ,
+      drop = FALSE
+    ]
+
+
+    # --------------------------------------------------------
+    # Baseline-to-follow-up change by arm
+    # --------------------------------------------------------
+
+    change_desc_list <- list()
+    change_omnibus_list <- list()
+    change_pair_list <- list()
+    cd_counter <- 1L
+    cp_counter <- 1L
+
+    baseline_v <- time_vars[[1L]]
+
+    for (k in seq.int(2L, length(time_vars))) {
+
+      follow_v <- time_vars[[k]]
+      baseline_values <- analysis_data[[baseline_v]]
+      follow_values <- analysis_data[[follow_v]]
+      delta_all <- follow_values - baseline_values
+
+      # Arm-specific change descriptives
+      for (g in arm_levels) {
+
+        idx <- as.character(analysis_data[[arm]]) == g
+        delta <- delta_all[idx]
+        delta <- delta[is.finite(delta)]
+        n <- length(delta)
+        ci <- mean_ci(delta)
+        counts <- improvement_counts(delta)
+
+        change_desc_list[[cd_counter]] <- data.frame(
+          arm = g,
+          from = baseline_v,
+          to = follow_v,
+          from_label = unname(time_labels[baseline_v]),
+          to_label = unname(time_labels[follow_v]),
+          time_index = k,
+          n = n,
+          mean_change = safe_mean(delta),
+          sd_change = safe_sd(delta),
+          se_change = unname(ci["se"]),
+          ci_lower = unname(ci["lower"]),
+          ci_upper = unname(ci["upper"]),
+          median_change = safe_median(delta),
+          improved_n = counts$improved_n,
+          improved_pct = pct(counts$improved_n, n),
+          worsened_n = counts$worsened_n,
+          worsened_pct = pct(counts$worsened_n, n),
+          stable_n = counts$stable_n,
+          stable_pct = pct(counts$stable_n, n),
+          stringsAsFactors = FALSE
+        )
+
+        cd_counter <- cd_counter + 1L
+      }
+
+      group <- factor(
+        as.character(analysis_data[[arm]]),
+        levels = arm_levels
+      )
+
+      change_omnibus_list[[k - 1L]] <- data.frame(
+        from = baseline_v,
+        to = follow_v,
+        to_label = unname(time_labels[follow_v]),
+        time_index = k,
+        n = sum(is.finite(delta_all) & !is.na(group)),
+        welch_anova_p = safe_welch_anova_p(delta_all, group),
+        kruskal_p = safe_kruskal_p(delta_all, group),
+        stringsAsFactors = FALSE
+      )
+
+      for (pair in arm_pairs) {
+
+        a <- pair[[1L]]
+        b <- pair[[2L]]
+
+        da <- delta_all[as.character(analysis_data[[arm]]) == a]
+        db <- delta_all[as.character(analysis_data[[arm]]) == b]
+
+        da <- da[is.finite(da)]
+        db <- db[is.finite(db)]
+
+        wt <- safe_welch_test(da, db)
+
+        change_pair_list[[cp_counter]] <- data.frame(
+          from = baseline_v,
+          to = follow_v,
+          to_label = unname(time_labels[follow_v]),
+          time_index = k,
+          arm_a = a,
+          arm_b = b,
+          n_a = length(da),
+          n_b = length(db),
+          mean_change_a = safe_mean(da),
+          mean_change_b = safe_mean(db),
+          difference_in_change_b_minus_a = wt$estimate,
+          ci_lower = wt$conf.int[[1L]],
+          ci_upper = wt$conf.int[[2L]],
+          hedges_g = hedges_g(da, db),
+          welch_t_p = wt$p.value,
+          wilcoxon_p = safe_unpaired_wilcox_p(da, db),
+          stringsAsFactors = FALSE
+        )
+
+        cp_counter <- cp_counter + 1L
+      }
+    }
+
+    arm_change_descriptives <- do.call(rbind, change_desc_list)
+    rownames(arm_change_descriptives) <- NULL
+
+    arm_change_omnibus <- do.call(rbind, change_omnibus_list)
+    rownames(arm_change_omnibus) <- NULL
+    arm_change_omnibus$welch_anova_p_adj <- adjust_p(arm_change_omnibus$welch_anova_p)
+    arm_change_omnibus$kruskal_p_adj <- adjust_p(arm_change_omnibus$kruskal_p)
+
+    arm_change_pairwise <- do.call(rbind, change_pair_list)
+    rownames(arm_change_pairwise) <- NULL
+    arm_change_pairwise$welch_t_p_adj <- adjust_p(arm_change_pairwise$welch_t_p)
+    arm_change_pairwise$wilcoxon_p_adj <- adjust_p(arm_change_pairwise$wilcoxon_p)
+  }
 
   # ----------------------------------------------------------
   # 11. WITHIN / BETWEEN SUBJECT VARIABILITY
@@ -732,6 +1288,8 @@ mira_info <- function(data,
   model_summary <- NULL
   model_anova <- NULL
   global_time_test <- NULL
+  global_arm_test <- NULL
+  arm_time_interaction_test <- NULL
   model_error <- NULL
   model_warnings <- character(0)
   model_singular <- NA
@@ -754,6 +1312,15 @@ mira_info <- function(data,
         levels = unname(time_labels[time_vars])
       )
 
+      if (arm_available) {
+        model_data$arm_factor <- factor(
+          as.character(model_data$arm),
+          levels = arm_levels
+        )
+        model_data <- model_data[!is.na(model_data$arm_factor), , drop = FALSE]
+        model_data$arm_factor <- droplevels(model_data$arm_factor)
+      }
+
       if (nrow(model_data) < 3L || nlevels(model_data$patient_factor) < 2L ||
           nlevels(model_data$time_factor) < 2L) {
         model_error <- "Dati insufficienti per stimare un mixed-effects model."
@@ -768,7 +1335,13 @@ mira_info <- function(data,
           )
         }
 
-        model_formula <- value ~ time_factor + (1 | patient_factor)
+        model_formula <- if (arm_available && arm_tests &&
+                             "arm_factor" %in% names(model_data) &&
+                             nlevels(model_data$arm_factor) >= 2L) {
+          value ~ time_factor * arm_factor + (1 | patient_factor)
+        } else {
+          value ~ time_factor + (1 | patient_factor)
+        }
 
         mixed_model <- tryCatch(
           fit_with_warnings(
@@ -823,26 +1396,104 @@ mira_info <- function(data,
             }
           }
 
-          # Robust global time test: ML likelihood-ratio full vs. no-time model.
-          global_time_test <- tryCatch({
-            full_ml <- fit_with_warnings(
-              lme4::lmer(
-                value ~ time_factor + (1 | patient_factor),
-                data = model_data,
-                REML = FALSE,
-                na.action = stats::na.omit
-              )
+          # Robust ML likelihood-ratio tests.
+          if (arm_available && arm_tests &&
+              "arm_factor" %in% names(model_data) &&
+              nlevels(model_data$arm_factor) >= 2L) {
+
+            full_ml <- tryCatch(
+              fit_with_warnings(
+                lme4::lmer(
+                  value ~ time_factor * arm_factor + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              ),
+              error = function(e) NULL
             )
-            null_ml <- fit_with_warnings(
-              lme4::lmer(
-                value ~ 1 + (1 | patient_factor),
-                data = model_data,
-                REML = FALSE,
-                na.action = stats::na.omit
-              )
+
+            additive_ml <- tryCatch(
+              fit_with_warnings(
+                lme4::lmer(
+                  value ~ time_factor + arm_factor + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              ),
+              error = function(e) NULL
             )
-            stats::anova(null_ml, full_ml)
-          }, error = function(e) NULL)
+
+            no_time_ml <- tryCatch(
+              fit_with_warnings(
+                lme4::lmer(
+                  value ~ arm_factor + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              ),
+              error = function(e) NULL
+            )
+
+            no_arm_ml <- tryCatch(
+              fit_with_warnings(
+                lme4::lmer(
+                  value ~ time_factor + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              ),
+              error = function(e) NULL
+            )
+
+            if (!is.null(full_ml) && !is.null(no_time_ml)) {
+              global_time_test <- tryCatch(
+                stats::anova(no_time_ml, full_ml),
+                error = function(e) NULL
+              )
+            }
+
+            if (!is.null(full_ml) && !is.null(no_arm_ml)) {
+              global_arm_test <- tryCatch(
+                stats::anova(no_arm_ml, full_ml),
+                error = function(e) NULL
+              )
+            }
+
+            if (!is.null(full_ml) && !is.null(additive_ml)) {
+              arm_time_interaction_test <- tryCatch(
+                stats::anova(additive_ml, full_ml),
+                error = function(e) NULL
+              )
+            }
+
+          } else {
+
+            global_time_test <- tryCatch({
+              full_ml <- fit_with_warnings(
+                lme4::lmer(
+                  value ~ time_factor + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              )
+
+              null_ml <- fit_with_warnings(
+                lme4::lmer(
+                  value ~ 1 + (1 | patient_factor),
+                  data = model_data,
+                  REML = FALSE,
+                  na.action = stats::na.omit
+                )
+              )
+
+              stats::anova(null_ml, full_ml)
+            }, error = function(e) NULL)
+          }
         }
       }
     }
@@ -953,6 +1604,7 @@ mira_info <- function(data,
   trajectory_summary <- data.frame(
     patient = analysis_data[[id]],
     outcome = outcome_name,
+    arm = if (arm_available) as.character(analysis_data[[arm]]) else NA_character_,
     baseline = baseline,
     final = final,
     absolute_change = absolute_change,
@@ -1198,7 +1850,7 @@ mira_info <- function(data,
           trajectory_plot_data,
           ggplot2::aes(x = "All patients", y = absolute_change)
         ) +
-        ggplot2::geom_boxplot(fill = "#59A14F", alpha = 0.7, na.rm = TRUE) +
+        ggplot2::geom_boxplot(alpha = 0.7, na.rm = TRUE) +
         ggplot2::geom_jitter(width = 0.08, alpha = 0.30, na.rm = TRUE) +
         ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
         ggplot2::labs(
@@ -1207,6 +1859,122 @@ mira_info <- function(data,
           title = paste("Individual", outcome_display, "Change")
         ) +
         ggplot2::theme_minimal()
+
+      if (arm_available && arm_tests && !is.null(arm_descriptives)) {
+
+        arm_plot_data <- arm_descriptives
+        arm_plot_data$time_label <- factor(
+          arm_plot_data$time_label,
+          levels = unname(time_labels[time_vars])
+        )
+        arm_plot_data$arm <- factor(
+          arm_plot_data$arm,
+          levels = arm_levels
+        )
+
+        plots_list$arm_mean_ci <-
+          ggplot2::ggplot(
+            arm_plot_data,
+            ggplot2::aes(
+              x = time_label,
+              y = mean,
+              group = arm,
+              linetype = arm,
+              shape = arm
+            )
+          ) +
+          ggplot2::geom_line(linewidth = 0.8, na.rm = TRUE) +
+          ggplot2::geom_point(size = 2.8, na.rm = TRUE) +
+          ggplot2::geom_errorbar(
+            ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
+            width = 0.08,
+            na.rm = TRUE
+          ) +
+          ggplot2::labs(
+            x = "Time",
+            y = paste("Mean", outcome_display),
+            title = paste(outcome_display, "by Treatment Arm Over Time"),
+            subtitle = paste("Mean and", ci_text),
+            linetype = "Arm",
+            shape = "Arm"
+          ) +
+          ggplot2::theme_minimal()
+
+        arm_long_plot <- long_plot[
+          !is.na(long_plot$arm),
+          ,
+          drop = FALSE
+        ]
+
+        plots_list$arm_boxplot <-
+          ggplot2::ggplot(
+            arm_long_plot,
+            ggplot2::aes(
+              x = time_label,
+              y = value,
+              group = interaction(time_label, arm)
+            )
+          ) +
+          ggplot2::geom_boxplot(
+            ggplot2::aes(linetype = arm),
+            position = ggplot2::position_dodge(width = 0.75),
+            width = 0.62,
+            outlier.shape = NA,
+            na.rm = TRUE
+          ) +
+          ggplot2::geom_jitter(
+            ggplot2::aes(shape = arm),
+            position = ggplot2::position_jitterdodge(
+              jitter.width = 0.10,
+              dodge.width = 0.75
+            ),
+            alpha = 0.25,
+            size = 1.3,
+            na.rm = TRUE
+          ) +
+          ggplot2::labs(
+            x = "Time",
+            y = outcome_display,
+            title = paste("Distribution of", outcome_display, "by Arm and Time"),
+            linetype = "Arm",
+            shape = "Arm"
+          ) +
+          ggplot2::theme_minimal()
+
+        arm_change_plot_data <- trajectory_summary[
+          is.finite(trajectory_summary$absolute_change) &
+            !is.na(trajectory_summary$arm),
+          ,
+          drop = FALSE
+        ]
+
+        arm_change_plot_data$arm <- factor(
+          arm_change_plot_data$arm,
+          levels = arm_levels
+        )
+
+        plots_list$arm_change <-
+          ggplot2::ggplot(
+            arm_change_plot_data,
+            ggplot2::aes(
+              x = arm,
+              y = absolute_change
+            )
+          ) +
+          ggplot2::geom_boxplot(outlier.shape = NA, na.rm = TRUE) +
+          ggplot2::geom_jitter(
+            width = 0.08,
+            alpha = 0.30,
+            na.rm = TRUE
+          ) +
+          ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+          ggplot2::labs(
+            x = "Treatment arm",
+            y = paste("Final - Baseline", outcome_display),
+            title = paste("Baseline-to-Final", outcome_display, "Change by Arm")
+          ) +
+          ggplot2::theme_minimal()
+      }
     }
   }
 
@@ -1228,12 +1996,18 @@ mira_info <- function(data,
     duplicated_ids = duplicated_id_n,
     complete_profiles = complete_profiles,
     complete_profiles_pct = complete_profiles / n_rows * 100,
-    non_finite_values = total_non_finite
+    non_finite_values = total_non_finite,
+    arm_variable = if (arm_available) arm else NULL,
+    reference_arm = if (arm_available) reference_arm else NULL,
+    arm_levels = arm_levels,
+    arm_counts = arm_counts,
+    missing_arm = missing_arm_n,
+    arm_analysis = arm_available && arm_tests && length(arm_levels) >= 2L
   )
 
   result <- list(
     call = match.call(),
-    version = "2.1.0",
+    version = "3.0.0",
     settings = list(
       alpha = alpha,
       confidence_level = confidence_level,
@@ -1241,6 +2015,9 @@ mira_info <- function(data,
       p_adjust_method = p_adjust_method,
       improvement_direction = improvement_direction,
       stable_threshold = stable_threshold,
+      arm_variable = if (arm_available) arm else NULL,
+      reference_arm = if (arm_available) reference_arm else NULL,
+      arm_tests = arm_tests,
       strict_id = strict_id,
       non_finite_handling = "Inf/-Inf treated as NA for analysis"
     ),
@@ -1252,6 +2029,21 @@ mira_info <- function(data,
     descriptives = descriptives,
     missing = list(by_time = missing_summary, by_patient = missing_by_patient),
     change = change,
+    arm_analysis = list(
+      enabled = arm_available && arm_tests && length(arm_levels) >= 2L,
+      arm_variable = if (arm_available) arm else NULL,
+      reference_arm = if (arm_available) reference_arm else NULL,
+      levels = arm_levels,
+      counts = arm_counts,
+      descriptives = arm_descriptives,
+      baseline_balance = baseline_balance,
+      missingness = arm_missingness,
+      time_omnibus = arm_time_omnibus,
+      time_pairwise = arm_time_pairwise,
+      change_descriptives = arm_change_descriptives,
+      change_omnibus = arm_change_omnibus,
+      change_pairwise = arm_change_pairwise
+    ),
     correlations = list(
       pearson = correlation_pearson,
       spearman = correlation_spearman,
@@ -1264,6 +2056,8 @@ mira_info <- function(data,
       summary = model_summary,
       anova = model_anova,
       global_time_test = global_time_test,
+      global_arm_test = global_arm_test,
+      arm_time_interaction_test = arm_time_interaction_test,
       singular = model_singular,
       converged = model_converged,
       warnings = model_warnings,
@@ -1371,6 +2165,15 @@ print.mira_info <- function(x,
   cat(sprintf("Strict ID checks: %s | Non-finite handling: %s\n",
               as.character(x$settings$strict_id), x$settings$non_finite_handling))
 
+  if (isTRUE(ov$arm_analysis)) {
+    cat(sprintf(
+      "Arm variable: %s | Reference arm: %s | Groups: %d\n",
+      ov$arm_variable,
+      ov$reference_arm,
+      length(ov$arm_levels)
+    ))
+  }
+
   # ------------------------------------------------------------------
   # DATASET OVERVIEW
   # ------------------------------------------------------------------
@@ -1381,6 +2184,14 @@ print.mira_info <- function(x,
               ov$complete_profiles, ov$n_rows, fmt_pct(ov$complete_profiles_pct)))
   cat(sprintf("Duplicated IDs: %d | Missing IDs: %d | Non-finite values: %d\n",
               ov$duplicated_ids, ov$missing_ids, ov$non_finite_values))
+
+  if (!is.null(ov$arm_variable)) {
+    cat(sprintf("Missing arm values: %d\n", ov$missing_arm))
+    if (!is.null(ov$arm_counts)) {
+      cat("Subjects by arm:\n")
+      print(ov$arm_counts)
+    }
+  }
 
   tp <- data.frame(
     Variable = ov$timepoints,
@@ -1417,6 +2228,170 @@ print.mira_info <- function(x,
   )
   print(desc_print, row.names = FALSE)
   cat(sprintf("Confidence intervals above: %s\n", conf_label))
+
+  # ------------------------------------------------------------------
+  # TREATMENT ARM EXPLORATION
+  # ------------------------------------------------------------------
+  if (isTRUE(ov$arm_analysis) && !is.null(x$arm_analysis)) {
+
+    section("TREATMENT ARM EXPLORATION")
+
+    cat(sprintf(
+      "Reference arm: %s | Groups: %s\n",
+      x$arm_analysis$reference_arm,
+      paste(x$arm_analysis$levels, collapse = ", ")
+    ))
+
+    if (!is.null(x$arm_analysis$descriptives) &&
+        nrow(x$arm_analysis$descriptives) > 0L) {
+
+      ad <- x$arm_analysis$descriptives
+
+      ad_print <- data.frame(
+        Arm = ad$arm,
+        Time = ad$time_label,
+        Group_N = ad$group_n,
+        Available_N = ad$n,
+        Unavailable_pct = round(ad$unavailable_pct, 1L),
+        Mean = round(ad$mean, digits),
+        SD = round(ad$sd, digits),
+        Median = round(ad$median, digits),
+        CI_low = round(ad$ci_lower, digits),
+        CI_high = round(ad$ci_upper, digits),
+        check.names = FALSE
+      )
+
+      cat("\nDescriptives by arm and time:\n")
+      print(limit_table(ad_print, "arm x time rows"), row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$missingness) &&
+        nrow(x$arm_analysis$missingness) > 0L) {
+
+      am <- x$arm_analysis$missingness
+
+      am_print <- data.frame(
+        Time = am$time_label,
+        Test = am$test,
+        p = vapply(am$p_value, fmt_p, character(1L)),
+        p_adj = vapply(am$p_value_adj, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nDifferential missingness across arms:\n")
+      print(am_print, row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$baseline_balance) &&
+        nrow(x$arm_analysis$baseline_balance) > 0L) {
+
+      bb <- x$arm_analysis$baseline_balance
+
+      bb_print <- data.frame(
+        Arm_A = bb$arm_a,
+        Arm_B = bb$arm_b,
+        Mean_A = round(bb$mean_a, digits),
+        Mean_B = round(bb$mean_b, digits),
+        Difference_B_minus_A = round(bb$mean_difference_b_minus_a, digits),
+        Hedges_g = round(bb$hedges_g, digits),
+        Welch_p = vapply(bb$welch_t_p, fmt_p, character(1L)),
+        Wilcoxon_p = vapply(bb$wilcoxon_p, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nBaseline balance (exploratory; arm B - arm A):\n")
+      print(limit_table(bb_print, "baseline comparisons"), row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$time_omnibus) &&
+        nrow(x$arm_analysis$time_omnibus) > 0L) {
+
+      ao <- x$arm_analysis$time_omnibus
+
+      ao_print <- data.frame(
+        Time = ao$time_label,
+        N = ao$n,
+        Welch_ANOVA_p = vapply(ao$welch_anova_p, fmt_p, character(1L)),
+        Welch_ANOVA_p_adj = vapply(ao$welch_anova_p_adj, fmt_p, character(1L)),
+        Kruskal_p = vapply(ao$kruskal_p, fmt_p, character(1L)),
+        Kruskal_p_adj = vapply(ao$kruskal_p_adj, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nOmnibus arm comparison at each timepoint:\n")
+      print(ao_print, row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$time_pairwise) &&
+        nrow(x$arm_analysis$time_pairwise) > 0L) {
+
+      ap <- x$arm_analysis$time_pairwise
+
+      ap_print <- data.frame(
+        Time = ap$time_label,
+        Arm_A = ap$arm_a,
+        Arm_B = ap$arm_b,
+        Difference_B_minus_A = round(ap$mean_difference_b_minus_a, digits),
+        CI_low = round(ap$ci_lower, digits),
+        CI_high = round(ap$ci_upper, digits),
+        Hedges_g = round(ap$hedges_g, digits),
+        Welch_p_adj = vapply(ap$welch_t_p_adj, fmt_p, character(1L)),
+        Wilcoxon_p_adj = vapply(ap$wilcoxon_p_adj, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nPairwise arm comparisons by timepoint:\n")
+      print(limit_table(ap_print, "arm pairwise comparisons"), row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$change_omnibus) &&
+        nrow(x$arm_analysis$change_omnibus) > 0L) {
+
+      co <- x$arm_analysis$change_omnibus
+
+      co_print <- data.frame(
+        Follow_up = co$to_label,
+        N = co$n,
+        Welch_ANOVA_p = vapply(co$welch_anova_p, fmt_p, character(1L)),
+        Welch_ANOVA_p_adj = vapply(co$welch_anova_p_adj, fmt_p, character(1L)),
+        Kruskal_p = vapply(co$kruskal_p, fmt_p, character(1L)),
+        Kruskal_p_adj = vapply(co$kruskal_p_adj, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nOmnibus between-arm comparison of baseline-to-follow-up change:\n")
+      print(co_print, row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$change_pairwise) &&
+        nrow(x$arm_analysis$change_pairwise) > 0L) {
+
+      cp <- x$arm_analysis$change_pairwise
+
+      cp_print <- data.frame(
+        Follow_up = cp$to_label,
+        Arm_A = cp$arm_a,
+        Arm_B = cp$arm_b,
+        Mean_change_A = round(cp$mean_change_a, digits),
+        Mean_change_B = round(cp$mean_change_b, digits),
+        Difference_in_change_B_minus_A =
+          round(cp$difference_in_change_b_minus_a, digits),
+        Hedges_g = round(cp$hedges_g, digits),
+        Welch_p_adj = vapply(cp$welch_t_p_adj, fmt_p, character(1L)),
+        Wilcoxon_p_adj = vapply(cp$wilcoxon_p_adj, fmt_p, character(1L)),
+        check.names = FALSE
+      )
+
+      cat("\nBetween-arm comparison of baseline-to-follow-up change:\n")
+      print(limit_table(cp_print, "change comparisons"), row.names = FALSE)
+    }
+
+    cat(
+      "\nInterpretation note: these are exploratory frequentist summaries; ",
+      "the primary longitudinal treatment inference can remain the Bayesian MIRA model.\n",
+      sep = ""
+    )
+  }
 
   # ------------------------------------------------------------------
   # MISSINGNESS
@@ -1630,16 +2605,44 @@ print.mira_info <- function(x,
   }
 
   # ------------------------------------------------------------------
+  # GLOBAL ARM / TIME TESTS
+  # ------------------------------------------------------------------
+
+  if (isTRUE(ov$arm_analysis)) {
+
+    section("GLOBAL ARM × TIME TESTS")
+
+    if (!is.null(x$model$arm_time_interaction_test)) {
+      cat("Likelihood-ratio test of the arm × time interaction (interaction model vs additive model):\n")
+      print(x$model$arm_time_interaction_test)
+    } else {
+      cat("Arm × time interaction test not available.\n")
+    }
+
+    if (!is.null(x$model$global_arm_test)) {
+      cat("\nGlobal contribution of arm (model without arm vs full arm × time model):\n")
+      print(x$model$global_arm_test)
+    }
+
+    if (!is.null(x$model$global_time_test)) {
+      cat("\nGlobal contribution of time (model without time vs full arm × time model):\n")
+      print(x$model$global_time_test)
+    }
+  }
+
+  # ------------------------------------------------------------------
   # GLOBAL TIME TEST
   # ------------------------------------------------------------------
-  section("GLOBAL TEST OF TIME")
-  if (!is.null(x$model$global_time_test)) {
-    cat("Likelihood-ratio test: ML full model with time vs. random-intercept model without time.\n")
-    print(x$model$global_time_test)
-  } else if (!is.null(x$model$error)) {
-    cat("Global test unavailable because the mixed model was not estimated.\n")
-  } else {
-    cat("Global time test not available.\n")
+  if (!isTRUE(ov$arm_analysis)) {
+    section("GLOBAL TEST OF TIME")
+    if (!is.null(x$model$global_time_test)) {
+      cat("Likelihood-ratio test: ML full model with time vs. random-intercept model without time.\n")
+      print(x$model$global_time_test)
+    } else if (!is.null(x$model$error)) {
+      cat("Global test unavailable because the mixed model was not estimated.\n")
+    } else {
+      cat("Global time test not available.\n")
+    }
   }
 
   # ------------------------------------------------------------------
@@ -1806,7 +2809,10 @@ summary.mira_info <- function(object, ...) {
     descriptives = object$descriptives,
     baseline_final = baseline_final,
     variability = object$variability,
+    arm_analysis = object$arm_analysis,
     global_time_test = object$model$global_time_test,
+    global_arm_test = object$model$global_arm_test,
+    arm_time_interaction_test = object$model$arm_time_interaction_test,
     model_singular = object$model$singular,
     model_converged = object$model$converged
   )
@@ -1832,6 +2838,14 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
               ifelse(is.na(x$variability$ICC[[1L]]), "NA",
                      formatC(x$variability$ICC[[1L]], format = "f", digits = digits))))
 
+  if (!is.null(x$arm_time_interaction_test)) {
+    cat("Arm × time interaction test available in $arm_time_interaction_test.\n")
+  }
+
+  if (!is.null(x$global_arm_test)) {
+    cat("Global arm test available in $global_arm_test.\n")
+  }
+
   if (!is.null(x$global_time_test)) {
     cat("Global time test available in $global_time_test.\n")
   }
@@ -1844,9 +2858,19 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
 # PLOT METHOD
 # ============================================================
 
-plot.mira_info <- function(x,
-                           which = c("boxplot", "spaghetti", "mean_ci", "change"),
-                           ...) {
+plot.mira_info <- function(
+    x,
+    which = c(
+      "boxplot",
+      "spaghetti",
+      "mean_ci",
+      "change",
+      "arm_mean_ci",
+      "arm_boxplot",
+      "arm_change"
+    ),
+    ...
+) {
   which <- match.arg(which)
 
   if (length(x$plots) == 0L || is.null(x$plots[[which]])) {

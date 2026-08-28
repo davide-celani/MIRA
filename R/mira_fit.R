@@ -1,332 +1,381 @@
-#' Fit MIRA longitudinal model
+#' Fit MIRA longitudinal treatment model
 #'
-#' Fits the longitudinal Student-t mixed-effects model using CmdStan.
+#' Fits the MIRA longitudinal Student-t mixed-effects model with
+#' treatment-specific trajectories using CmdStan.
 #'
-#' @param stan_data Data prepared for the MIRA Stan model.
-#' @param prior A `mira_prior` object. If omitted, the default
-#'   MIRA prior specification is used.
+#' @param stan_data Data prepared for the MIRA Stan model. The list may
+#'   contain additional R-side metadata (for example `mean_y`, `sd_y`, or
+#'   `arm_labels`); only variables required by Stan are passed to CmdStan.
+#' @param prior A `mira_prior` object, or a named list containing the Stan
+#'   prior fields required by the current model. If `NULL`, `mira_prior()`
+#'   is called with profile = "default", unless all prior fields are already
+#'   present in `stan_data`.
 #' @param chains Number of MCMC chains.
 #' @param parallel_chains Number of parallel chains.
 #' @param iter_warmup Number of warmup iterations.
 #' @param iter_sampling Number of sampling iterations.
 #' @param seed Random seed.
 #' @param refresh Number of iterations between progress messages.
+#' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
+#'   looks for `inst/stan/mira_longitudinal.stan` and then, for backwards
+#'   compatibility, `inst/stan/gaussian_longitudinal.stan`.
 #'
 #' @return A CmdStanMCMC object.
 #'
 #' @export
 mira_fit <- function(
     stan_data,
-    prior = mira_prior(
-      stan_data,
-      profile = "default"
-    ),
+    prior = NULL,
     chains = 4,
     parallel_chains = chains,
     iter_warmup = 1000,
     iter_sampling = 3000,
     seed = 123,
-    refresh = 100
+    refresh = 100,
+    stan_file = NULL
 ) {
 
   # ------------------------------------------------------------
-  # Check data
+  # Data object
   # ------------------------------------------------------------
 
   if (!is.list(stan_data)) {
-    stop(
-      "`stan_data` must be a list.",
-      call. = FALSE
-    )
+    stop("`stan_data` must be a list.", call. = FALSE)
   }
 
-
-  # ------------------------------------------------------------
-  # Required data for the Stan model
-  # ------------------------------------------------------------
-
-  required <- c(
-    "N",
-    "S",
-    "K",
-    "y",
-    "subject",
-    "time",
-    "time_value",
-    "meaningful_change",
-    "mean_y",
-    "sd_y"
+  model_data_names <- c(
+    "N", "S", "K", "G",
+    "y", "subject", "time", "arm", "time_value",
+    "direction",
+    "mcid_prior_mean", "mcid_prior_sd",
+    "meaningful_between_arm_difference"
   )
 
+  missing_data <- setdiff(model_data_names, names(stan_data))
 
-  missing <- setdiff(
-    required,
-    names(stan_data)
-  )
-
-
-  if (length(missing) > 0) {
+  if (length(missing_data) > 0) {
     stop(
-      "Missing Stan data: ",
-      paste(missing, collapse = ", "),
+      "Missing data required by the new MIRA Stan model: ",
+      paste(missing_data, collapse = ", "),
       call. = FALSE
     )
   }
-
 
   # ------------------------------------------------------------
-  # Basic dimension checks
+  # Dimensions and indices
   # ------------------------------------------------------------
 
-  if (stan_data$N < 1) {
-    stop(
-      "`N` must be >= 1.",
-      call. = FALSE
-    )
+  scalar_integer_names <- c("N", "S", "K", "G")
+
+  for (nm in scalar_integer_names) {
+    x <- stan_data[[nm]]
+    if (length(x) != 1 || !is.numeric(x) || !is.finite(x) || x != as.integer(x)) {
+      stop("`", nm, "` must be one finite integer.", call. = FALSE)
+    }
   }
 
+  if (stan_data$N < 1) stop("`N` must be >= 1.", call. = FALSE)
+  if (stan_data$S < 1) stop("`S` must be >= 1.", call. = FALSE)
+  if (stan_data$K < 2) stop("`K` must be >= 2.", call. = FALSE)
+  if (stan_data$G < 2) stop("`G` must be >= 2 for the current treatment model.", call. = FALSE)
 
-  if (stan_data$S < 1) {
-    stop(
-      "`S` must be >= 1.",
-      call. = FALSE
-    )
+  if (!is.numeric(stan_data$y) ||
+      length(stan_data$y) != stan_data$N ||
+      any(!is.finite(stan_data$y))) {
+    stop("`y` must contain exactly N finite numeric values.", call. = FALSE)
   }
-
-
-  if (stan_data$K < 2) {
-    stop(
-      "`K` must be >= 2.",
-      call. = FALSE
-    )
-  }
-
-
-  if (length(stan_data$y) != stan_data$N) {
-    stop(
-      "`length(y)` must equal `N`.",
-      call. = FALSE
-    )
-  }
-
 
   if (length(stan_data$subject) != stan_data$N) {
-    stop(
-      "`length(subject)` must equal `N`.",
-      call. = FALSE
-    )
+    stop("`length(subject)` must equal `N`.", call. = FALSE)
   }
-
 
   if (length(stan_data$time) != stan_data$N) {
-    stop(
-      "`length(time)` must equal `N`.",
-      call. = FALSE
-    )
+    stop("`length(time)` must equal `N`.", call. = FALSE)
   }
 
-
-  if (length(stan_data$time_value) != stan_data$K) {
-    stop(
-      "`length(time_value)` must equal `K`.",
-      call. = FALSE
-    )
+  if (length(stan_data$arm) != stan_data$S) {
+    stop("`length(arm)` must equal `S`.", call. = FALSE)
   }
 
-
-  if (any(stan_data$subject < 1) ||
+  if (any(!is.finite(stan_data$subject)) ||
+      any(stan_data$subject != as.integer(stan_data$subject)) ||
+      any(stan_data$subject < 1) ||
       any(stan_data$subject > stan_data$S)) {
-
-    stop(
-      "`subject` must contain integers between 1 and S.",
-      call. = FALSE
-    )
+    stop("`subject` must contain integers between 1 and S.", call. = FALSE)
   }
 
-
-  if (any(stan_data$time < 1) ||
+  if (any(!is.finite(stan_data$time)) ||
+      any(stan_data$time != as.integer(stan_data$time)) ||
+      any(stan_data$time < 1) ||
       any(stan_data$time > stan_data$K)) {
+    stop("`time` must contain integers between 1 and K.", call. = FALSE)
+  }
 
+  if (any(!is.finite(stan_data$arm)) ||
+      any(stan_data$arm != as.integer(stan_data$arm)) ||
+      any(stan_data$arm < 1) ||
+      any(stan_data$arm > stan_data$G)) {
+    stop("`arm` must contain integers between 1 and G.", call. = FALSE)
+  }
+
+  if (!is.numeric(stan_data$time_value) ||
+      length(stan_data$time_value) != stan_data$K ||
+      any(!is.finite(stan_data$time_value)) ||
+      is.unsorted(stan_data$time_value, strictly = TRUE)) {
     stop(
-      "`time` must contain integers between 1 and K.",
+      "`time_value` must contain exactly K finite, strictly increasing values.",
       call. = FALSE
     )
   }
 
+  # ------------------------------------------------------------
+  # Clinical inputs
+  # ------------------------------------------------------------
 
-  if (anyDuplicated(stan_data$time_value) > 0) {
-    stop(
-      "`time_value` must contain distinct measurement times.",
-      call. = FALSE
-    )
+  if (length(stan_data$direction) != 1 ||
+      !is.numeric(stan_data$direction) ||
+      !is.finite(stan_data$direction) ||
+      !(stan_data$direction %in% c(-1, 1))) {
+    stop("`direction` must be exactly +1 or -1.", call. = FALSE)
   }
 
+  positive_scalar <- function(x, name, allow_zero = FALSE) {
+    ok <- length(x) == 1 && is.numeric(x) && is.finite(x)
+    ok <- ok && if (allow_zero) x >= 0 else x > 0
+    if (!ok) {
+      comparator <- if (allow_zero) ">= 0" else "> 0"
+      stop("`", name, "` must be one finite numeric value ", comparator, ".", call. = FALSE)
+    }
+  }
 
-  # ------------------------------------------------------------
-  # Validate prior
-  # ------------------------------------------------------------
-
-  mira_validate_prior(prior)
-
-
-  # ------------------------------------------------------------
-  # Stan model
-  # ------------------------------------------------------------
-
-  stan_file <- system.file(
-    "stan",
-    "gaussian_longitudinal.stan",
-    package = "MIRA"
+  positive_scalar(stan_data$mcid_prior_mean, "mcid_prior_mean", allow_zero = TRUE)
+  positive_scalar(stan_data$mcid_prior_sd, "mcid_prior_sd")
+  positive_scalar(
+    stan_data$meaningful_between_arm_difference,
+    "meaningful_between_arm_difference",
+    allow_zero = TRUE
   )
 
+  # ------------------------------------------------------------
+  # Prior data required by Stan
+  # ------------------------------------------------------------
 
-  if (stan_file == "") {
+  prior_names <- c(
+    "baseline_prior_mean",
+    "baseline_prior_sd",
+    "beta_time_prior_mean",
+    "beta_time_prior_sd",
+    "tau_common_prior_rate",
+    "beta_treatment_prior_sd",
+    "tau_treatment_prior_rate",
+    "arm_baseline_sd_prior_rate",
+    "sigma_intercept_prior_rate",
+    "sigma_slope_prior_rate",
+    "sigma_prior_rate",
+    "nu_prior_shape",
+    "nu_prior_rate"
+  )
+
+  # Allow fully assembled Stan data as an advanced use case.
+  if (all(prior_names %in% names(stan_data))) {
+
+    stan_prior_data <- stan_data[prior_names]
+
+  } else {
+
+    if (is.null(prior)) {
+      prior <- mira_prior(
+        stan_data,
+        profile = "default"
+      )
+    }
+
+    # A direct named list is useful for development/testing of the new model.
+    if (is.list(prior) && all(prior_names %in% names(prior))) {
+      stan_prior_data <- prior[prior_names]
+    } else {
+      mira_validate_prior(prior)
+      stan_prior_data <- mira_prior_stan_data(prior)
+    }
+  }
+
+  missing_prior <- setdiff(prior_names, names(stan_prior_data))
+
+  if (length(missing_prior) > 0) {
     stop(
-      "Could not find ",
-      "`gaussian_longitdinal.stan` ",
-      "in the MIRA package.",
+      "The prior specification is not compatible with the new Stan model. ",
+      "Missing Stan prior fields: ",
+      paste(missing_prior, collapse = ", "),
+      ". Update `mira_prior()` / `mira_prior_stan_data()` or pass a named prior list.",
       call. = FALSE
     )
   }
 
+  stan_prior_data <- stan_prior_data[prior_names]
 
-  # ------------------------------------------------------------
-  # Compile Stan model
-  # ------------------------------------------------------------
+  finite_prior_names <- c("baseline_prior_mean", "beta_time_prior_mean")
+  for (nm in finite_prior_names) {
+    x <- stan_prior_data[[nm]]
+    if (length(x) != 1 || !is.numeric(x) || !is.finite(x)) {
+      stop("`", nm, "` must be one finite numeric value.", call. = FALSE)
+    }
+  }
 
-  message(
-    "Compiling MIRA Stan model: ",
-    "gaussian longitudinal"
+  positive_prior_names <- setdiff(prior_names, finite_prior_names)
+  for (nm in positive_prior_names) {
+    positive_scalar(stan_prior_data[[nm]], nm)
+  }
+
+  # Pass only objects declared in the Stan data block. This lets stan_data
+  # safely retain R-side metadata such as mean_y, sd_y and arm labels.
+  sampling_data <- c(
+    stan_data[model_data_names],
+    stan_prior_data
   )
 
+  sampling_data$N <- as.integer(sampling_data$N)
+  sampling_data$S <- as.integer(sampling_data$S)
+  sampling_data$K <- as.integer(sampling_data$K)
+  sampling_data$G <- as.integer(sampling_data$G)
+  sampling_data$subject <- as.integer(sampling_data$subject)
+  sampling_data$time <- as.integer(sampling_data$time)
+  sampling_data$arm <- as.integer(sampling_data$arm)
+  sampling_data$direction <- as.integer(sampling_data$direction)
+
+  # ------------------------------------------------------------
+  # Stan model file
+  # ------------------------------------------------------------
+
+  if (is.null(stan_file)) {
+
+    candidates <- c(
+      "mira_longitudinal.stan",
+      "gaussian_longitudinal.stan"
+    )
+
+    candidate_paths <- vapply(
+      candidates,
+      function(x) system.file("stan", x, package = "MIRA"),
+      character(1)
+    )
+
+    existing <- candidate_paths[nzchar(candidate_paths)]
+
+    # Also support sourcing the function from the package project before
+    # installation, when system.file() cannot yet resolve the package path.
+    if (length(existing) == 0) {
+      local_candidates <- file.path("inst", "stan", candidates)
+      existing <- local_candidates[file.exists(local_candidates)]
+    }
+
+    if (length(existing) == 0) {
+      stop(
+        "Could not find the MIRA Stan model in `inst/stan`. Expected ",
+        "`mira_longitudinal.stan` (preferred) or `gaussian_longitudinal.stan`.",
+        call. = FALSE
+      )
+    }
+
+    stan_file <- existing[[1]]
+
+  } else {
+
+    if (length(stan_file) != 1 || !is.character(stan_file) || !nzchar(stan_file)) {
+      stop("`stan_file` must be NULL or one non-empty character path.", call. = FALSE)
+    }
+
+    if (!file.exists(stan_file)) {
+      packaged_file <- system.file("stan", stan_file, package = "MIRA")
+      if (!nzchar(packaged_file)) {
+        stop("Could not find Stan file: ", stan_file, call. = FALSE)
+      }
+      stan_file <- packaged_file
+    }
+  }
+
+  message("Compiling MIRA Stan model: ", basename(stan_file))
 
   model <- cmdstanr::cmdstan_model(
     stan_file,
     quiet = TRUE
   )
 
-
-  # ------------------------------------------------------------
-  # Add prior specification to Stan data
-  # ------------------------------------------------------------
-
-  stan_prior_data <- mira_prior_stan_data(
-    prior
-  )
-
-
-  # Check for duplicated names before combining
-  duplicated_names <- intersect(
-    names(stan_data),
-    names(stan_prior_data)
-  )
-
-
-  if (length(duplicated_names) > 0) {
-    stop(
-      "Duplicated data names between `stan_data` ",
-      "and prior specification: ",
-      paste(duplicated_names, collapse = ", "),
-      call. = FALSE
-    )
-  }
-
-
-  stan_data <- c(
-    stan_data,
-    stan_prior_data
-  )
-
-
   # ------------------------------------------------------------
   # Initial values
   # ------------------------------------------------------------
 
+  y <- as.numeric(stan_data$y)
+  baseline_y <- y[stan_data$time == 1]
+
+  mean_y <- if (!is.null(stan_data$mean_y)) {
+    as.numeric(stan_data$mean_y)[1]
+  } else {
+    mean(y)
+  }
+
+  sd_y <- if (!is.null(stan_data$sd_y)) {
+    as.numeric(stan_data$sd_y)[1]
+  } else {
+    stats::sd(y)
+  }
+
+  if (!is.finite(mean_y)) mean_y <- mean(y)
+  if (!is.finite(sd_y) || sd_y <= 0) sd_y <- max(abs(mean_y) * 0.1, 1)
+
+  baseline_init <- if (length(baseline_y) > 0) mean(baseline_y) else mean_y
+  elapsed <- max(stan_data$time_value) - min(stan_data$time_value)
+  elapsed_safe <- max(elapsed, 1e-6)
+
+  slope_scale <- max(sd_y / elapsed_safe, 0.01)
+  rw_scale <- max(sd_y / sqrt(elapsed_safe) / 10, 0.01)
+
   init <- function() {
-
     list(
-
-      # Population mean at every measurement occasion
-      mu_time = rep(
-        stan_data$mean_y,
-        stan_data$K
+      baseline_mean = baseline_init,
+      beta_time = 0,
+      z_common_step = rep(0, stan_data$K - 1),
+      tau_common = rw_scale,
+      beta_treatment = rep(0, stan_data$G - 1),
+      z_treatment_step = matrix(
+        0,
+        nrow = stan_data$G - 1,
+        ncol = stan_data$K - 1
       ),
-
-
-      # Non-centered subject-level random effects
+      tau_treatment = rep(rw_scale, stan_data$G - 1),
+      z_arm_baseline = rep(0, stan_data$G - 1),
+      arm_baseline_sd = max(sd_y / 10, 0.01),
       z_subject = matrix(
         0,
         nrow = 2,
         ncol = stan_data$S
       ),
-
-
-      # Random-effect standard deviations:
-      # 1 = intercept
-      # 2 = slope
       sigma_subject = c(
-
-        max(
-          stan_data$sd_y,
-          0.1
-        ),
-
-        max(
-          stan_data$sd_y / 10,
-          0.01
-        )
+        max(sd_y / 2, 0.1),
+        max(slope_scale / 2, 0.01)
       ),
-
-
-      # Initial correlation matrix = identity
       L_subject = diag(2),
-
-
-      # Residual SD
-      sigma = max(
-        stan_data$sd_y,
-        0.1
-      ),
-
-
-      # Student-t degrees of freedom
-      nu = 10
+      sigma = max(sd_y / 2, 0.1),
+      nu = 10,
+      mcid = max(stan_data$mcid_prior_mean, 1e-6)
     )
   }
-
 
   # ------------------------------------------------------------
   # Sampling
   # ------------------------------------------------------------
 
-  message(
-    "Sampling posterior..."
-  )
-
+  message("Sampling posterior...")
 
   fit <- model$sample(
-
-    data = stan_data,
-
+    data = sampling_data,
     chains = chains,
-
     parallel_chains = parallel_chains,
-
     iter_warmup = iter_warmup,
-
     iter_sampling = iter_sampling,
-
     seed = seed,
-
     init = init,
-
     refresh = refresh
   )
-
-
-  # ------------------------------------------------------------
-  # Return
-  # ------------------------------------------------------------
 
   return(fit)
 }

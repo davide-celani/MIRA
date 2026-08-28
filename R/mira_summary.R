@@ -1,28 +1,27 @@
 #' Research-oriented summary of a MIRA Bayesian fit
 #'
-#' Produces a comprehensive research-oriented summary of a fitted
-#' MIRA longitudinal Student-t mixed-effects model.
-#'
-#' The function is fully dynamic with respect to the number of
-#' longitudinal measurement occasions K and the number of subjects S.
+#' Summarizes the current multi-arm MIRA longitudinal Student-t model.
+#' The function is dynamic in the number of treatment arms G, measurement
+#' occasions K and subjects S, and is aligned with the variables generated
+#' by the current Stan model.
 #'
 #' @param fit A fitted CmdStanMCMC object.
-#' @param stan_data Optional Stan data list returned by
-#'   [mira_prepare_data()]. If supplied, it is used to recover
-#'   N, S, K, time_value, y and MCID.
-#' @param meaningful_change Optional MCID. If NULL, it is taken
-#'   from `stan_data`.
-#' @param y Optional observed outcome vector. If NULL, it is taken
-#'   from `stan_data`.
+#' @param stan_data Optional data list used to fit the model. Supplying it is
+#'   strongly recommended because it provides arm membership, time values,
+#'   direction of improvement and clinical thresholds.
+#' @param meaningful_change Optional fixed MCID fallback for backwards
+#'   compatibility. In the current model the posterior draws of `mcid` are
+#'   used whenever available.
+#' @param y Optional observed outcome vector. If NULL, it is recovered from
+#'   `stan_data`.
 #' @param credible_level Width of posterior credible intervals.
-#' @param responder_thresholds Posterior probability thresholds
-#'   used for responder classification.
+#' @param responder_thresholds Posterior probability thresholds used for
+#'   existing-subject responder classification.
 #'
-#' @return A list containing population summaries, longitudinal
-#'   changes, clinical quantities, individual summaries, responder
-#'   analyses, heterogeneity, posterior predictive checks,
-#'   log-likelihood information, diagnostics, model information
-#'   and posterior draws.
+#' @return A list containing population trajectories, changes, new-subject
+#'   responder estimands, individual summaries, treatment contrasts,
+#'   heterogeneity, posterior predictive checks, log-likelihood information,
+#'   MCMC diagnostics, model information and raw posterior draws.
 #'
 #' @export
 mira_summary <- function(
@@ -31,11 +30,7 @@ mira_summary <- function(
     meaningful_change = NULL,
     y = NULL,
     credible_level = 0.90,
-    responder_thresholds = c(
-      0.50,
-      0.80,
-      0.95
-    )
+    responder_thresholds = c(0.50, 0.80, 0.95)
 ) {
 
   # ============================================================
@@ -43,166 +38,100 @@ mira_summary <- function(
   # ============================================================
 
   if (!inherits(fit, "CmdStanMCMC")) {
-
-    stop(
-      "`fit` must be a fitted CmdStanMCMC object.",
-      call. = FALSE
-    )
+    stop("`fit` must be a fitted CmdStanMCMC object.", call. = FALSE)
   }
 
-
-  if (
-    length(credible_level) != 1 ||
-    !is.numeric(credible_level) ||
-    !is.finite(credible_level) ||
-    credible_level <= 0 ||
-    credible_level >= 1
-  ) {
-
-    stop(
-      "`credible_level` must be between 0 and 1.",
-      call. = FALSE
-    )
+  if (length(credible_level) != 1 ||
+      !is.numeric(credible_level) ||
+      !is.finite(credible_level) ||
+      credible_level <= 0 ||
+      credible_level >= 1) {
+    stop("`credible_level` must be between 0 and 1.", call. = FALSE)
   }
 
-
-  if (
-    length(responder_thresholds) == 0 ||
-    any(!is.finite(responder_thresholds)) ||
-    any(
-      responder_thresholds <= 0 |
-      responder_thresholds >= 1
-    )
-  ) {
-
-    stop(
-      "`responder_thresholds` must contain values between 0 and 1.",
-      call. = FALSE
-    )
+  if (length(responder_thresholds) == 0 ||
+      !is.numeric(responder_thresholds) ||
+      any(!is.finite(responder_thresholds)) ||
+      any(responder_thresholds <= 0 | responder_thresholds >= 1)) {
+    stop("`responder_thresholds` must contain values between 0 and 1.", call. = FALSE)
   }
 
+  if (!is.null(stan_data) && !is.list(stan_data)) {
+    stop("`stan_data` must be NULL or a list.", call. = FALSE)
+  }
+
+  if (is.null(y) && !is.null(stan_data) && "y" %in% names(stan_data)) {
+    y <- stan_data$y
+  }
+
+  if (!is.null(y) &&
+      (!is.numeric(y) || length(y) == 0 || any(!is.finite(y)))) {
+    stop("`y` must be a non-empty numeric vector of finite values.", call. = FALSE)
+  }
 
   # ============================================================
-  # RECOVER DATA
-  # ============================================================
-
-  if (!is.null(stan_data)) {
-
-    if (!is.list(stan_data)) {
-
-      stop(
-        "`stan_data` must be a list.",
-        call. = FALSE
-      )
-    }
-
-
-    if (is.null(y) && "y" %in% names(stan_data)) {
-
-      y <- stan_data$y
-    }
-
-
-    if (
-      is.null(meaningful_change) &&
-      "meaningful_change" %in% names(stan_data)
-    ) {
-
-      meaningful_change <-
-        stan_data$meaningful_change
-    }
-  }
-
-
-  if (is.null(y)) {
-
-    stop(
-      "Observed outcome `y` must be supplied either directly ",
-      "or through `stan_data`.",
-      call. = FALSE
-    )
-  }
-
-
-  if (
-    !is.numeric(y) ||
-    length(y) == 0 ||
-    any(!is.finite(y))
-  ) {
-
-    stop(
-      "`y` must be a non-empty numeric vector containing finite values.",
-      call. = FALSE
-    )
-  }
-
-
-  if (is.null(meaningful_change)) {
-
-    stop(
-      "`meaningful_change` must be supplied either directly ",
-      "or through `stan_data`.",
-      call. = FALSE
-    )
-  }
-
-
-  if (
-    length(meaningful_change) != 1 ||
-    !is.numeric(meaningful_change) ||
-    !is.finite(meaningful_change)
-  ) {
-
-    stop(
-      "`meaningful_change` must be a single finite numeric value.",
-      call. = FALSE
-    )
-  }
-
-
-  # ============================================================
-  # EXTRACT ALL POSTERIOR DRAWS
-  #
-  # This is intentional:
-  #
-  # the current model contains many dynamic quantities whose
-  # names depend on K and S.
-  #
+  # POSTERIOR DRAWS
   # ============================================================
 
   draws_raw <- tryCatch(
-
-    fit$draws(
-      format = "draws_matrix"
-    ),
-
+    fit$draws(format = "draws_matrix"),
     error = function(e) {
-
       stop(
-        paste0(
-          "Could not extract posterior draws.\n\n",
-          "Original error: ",
-          conditionMessage(e)
-        ),
+        "Could not extract posterior draws. Original error: ",
+        conditionMessage(e),
         call. = FALSE
       )
     }
   )
 
+  draws <- as.data.frame(draws_raw)
 
-  draws <- as.data.frame(
-    draws_raw
-  )
-
+  if (nrow(draws) < 1) {
+    stop("No posterior draws were found.", call. = FALSE)
+  }
 
   # ============================================================
   # HELPERS
   # ============================================================
 
-  get_cols <- function(
-    prefix
-  ) {
+  alpha <- (1 - credible_level) / 2
 
+  posterior_stats <- function(x) {
+    x <- as.numeric(x)
+    q <- stats::quantile(
+      x,
+      probs = c(alpha, 1 - alpha),
+      names = FALSE,
+      na.rm = TRUE
+    )
+
+    c(
+      mean = mean(x, na.rm = TRUE),
+      median = stats::median(x, na.rm = TRUE),
+      sd = stats::sd(x, na.rm = TRUE),
+      mad = stats::mad(x, na.rm = TRUE),
+      lower = q[1],
+      upper = q[2],
+      CrI_width = q[2] - q[1]
+    )
+  }
+
+  summarize_vector <- function(x, parameter) {
+    s <- posterior_stats(x)
+    data.frame(
+      parameter = parameter,
+      mean = unname(s["mean"]),
+      median = unname(s["median"]),
+      sd = unname(s["sd"]),
+      mad = unname(s["mad"]),
+      lower = unname(s["lower"]),
+      upper = unname(s["upper"]),
+      CrI_width = unname(s["CrI_width"]),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  get_cols <- function(prefix) {
     grep(
       paste0("^", prefix, "\\["),
       names(draws),
@@ -210,1639 +139,906 @@ mira_summary <- function(
     )
   }
 
+  parse_indices <- function(columns) {
+    if (length(columns) == 0) {
+      return(list())
+    }
 
-  posterior_stats <- function(
-    x
-  ) {
-
-    x <- as.numeric(x)
-
-    alpha <-
-      (1 - credible_level) / 2
-
-    q <- stats::quantile(
-      x,
-      probs = c(
-        alpha,
-        1 - alpha
-      ),
-      names = FALSE
-    )
-
-    c(
-      mean = mean(x),
-      median = stats::median(x),
-      sd = stats::sd(x),
-      mad = stats::mad(x),
-      lower = q[1],
-      upper = q[2],
-      CrI_width = q[2] - q[1]
-    )
+    lapply(columns, function(x) {
+      inside <- sub("^.*\\[", "", x)
+      inside <- sub("\\]$", "", inside)
+      as.integer(strsplit(inside, ",", fixed = TRUE)[[1]])
+    })
   }
 
-
-  summarize_vector <- function(
-    x,
-    parameter
-  ) {
-
-    s <- posterior_stats(x)
-
-    data.frame(
-
-      parameter = parameter,
-
-      mean = unname(s["mean"]),
-
-      median = unname(s["median"]),
-
-      sd = unname(s["sd"]),
-
-      mad = unname(s["mad"]),
-
-      lower = unname(s["lower"]),
-
-      upper = unname(s["upper"]),
-
-      CrI_width = unname(s["CrI_width"]),
-
-      stringsAsFactors = FALSE
-    )
-  }
-
-
-  summarize_columns <- function(
-    columns,
-    prefix
-  ) {
+  summarize_indexed <- function(prefix, index_names) {
+    columns <- get_cols(prefix)
 
     if (length(columns) == 0) {
+      out <- data.frame(stringsAsFactors = FALSE)
+      for (nm in index_names) out[[nm]] <- integer(0)
+      out$mean <- numeric(0)
+      out$median <- numeric(0)
+      out$sd <- numeric(0)
+      out$mad <- numeric(0)
+      out$lower <- numeric(0)
+      out$upper <- numeric(0)
+      out$CrI_width <- numeric(0)
+      return(out)
+    }
 
-      return(
-        tibble::tibble()
+    idx <- parse_indices(columns)
+
+    if (any(vapply(idx, length, integer(1)) != length(index_names))) {
+      stop(
+        "Unexpected index structure for posterior variable `",
+        prefix,
+        "`.",
+        call. = FALSE
       )
     }
 
+    stats_list <- lapply(columns, function(col) posterior_stats(draws[[col]]))
+    stats_matrix <- do.call(rbind, stats_list)
 
-    result <- lapply(
+    index_matrix <- do.call(rbind, idx)
+    colnames(index_matrix) <- index_names
 
-      seq_along(columns),
-
-      function(i) {
-
-        s <-
-          posterior_stats(
-            draws[[columns[i]]]
-          )
-
-        data.frame(
-
-          index = i,
-
-          mean = unname(s["mean"]),
-
-          median = unname(s["median"]),
-
-          sd = unname(s["sd"]),
-
-          mad = unname(s["mad"]),
-
-          lower = unname(s["lower"]),
-
-          upper = unname(s["upper"]),
-
-          CrI_width =
-            unname(s["CrI_width"]),
-
-          stringsAsFactors = FALSE
-        )
-      }
+    out <- data.frame(
+      index_matrix,
+      mean = stats_matrix[, "mean"],
+      median = stats_matrix[, "median"],
+      sd = stats_matrix[, "sd"],
+      mad = stats_matrix[, "mad"],
+      lower = stats_matrix[, "lower"],
+      upper = stats_matrix[, "upper"],
+      CrI_width = stats_matrix[, "CrI_width"],
+      stringsAsFactors = FALSE,
+      check.names = FALSE
     )
 
-
-    result <-
-      dplyr::bind_rows(result)
-
-
-    result
+    out
   }
 
+  probability_indexed <- function(prefix, index_names, probability_name = "probability") {
+    out <- summarize_indexed(prefix, index_names)
+    if (nrow(out) > 0) {
+      out[[probability_name]] <- out$mean
+    } else {
+      out[[probability_name]] <- numeric(0)
+    }
+    out
+  }
+
+  first_existing <- function(x, fallback = NULL) {
+    if (length(x) > 0) x[[1]] else fallback
+  }
 
   # ============================================================
   # MODEL DIMENSIONS
   # ============================================================
 
-  mu_time_cols <-
-    get_cols("mu_time")
+  population_mean_cols <- get_cols("population_mean")
+  population_mean_idx <- parse_indices(population_mean_cols)
 
-
-  K <-
-    length(mu_time_cols)
-
-
-  if (K < 2) {
-
-    stop(
-      "Could not determine at least two measurement occasions ",
-      "from posterior variable `mu_time`.",
-      call. = FALSE
-    )
-  }
-
-
-  individual_change_cols <-
-    get_cols(
-      "individual_change_from_baseline"
-    )
-
-
-  if (length(individual_change_cols) == 0) {
-
-    stop(
-      "The fitted model does not contain ",
-      "`individual_change_from_baseline`.",
-      call. = FALSE
-    )
-  }
-
-
-  # ------------------------------------------------------------
-  # Infer S from individual slope
-  # ------------------------------------------------------------
-
-  individual_slope_cols <-
-    get_cols(
-      "individual_slope"
-    )
-
-
-  S <-
-    length(individual_slope_cols)
-
-
-  if (S < 1) {
-
-    stop(
-      "Could not determine the number of subjects.",
-      call. = FALSE
-    )
-  }
-
-
-  # ============================================================
-  # TIME VALUES
-  # ============================================================
-
-  if (
-    !is.null(stan_data) &&
-    "time_value" %in% names(stan_data)
-  ) {
-
-    time_value <-
-      as.numeric(
-        stan_data$time_value
-      )
-
+  if (!is.null(stan_data) && all(c("G", "K") %in% names(stan_data))) {
+    G <- as.integer(stan_data$G)
+    K <- as.integer(stan_data$K)
   } else {
-
-    time_value <-
-      seq_len(K) - 1
+    if (length(population_mean_idx) == 0) {
+      stop(
+        "Could not determine G and K. Supply `stan_data` or ensure ",
+        "`population_mean[g,k]` is present in the fitted model.",
+        call. = FALSE
+      )
+    }
+    G <- max(vapply(population_mean_idx, function(x) x[1], integer(1)))
+    K <- max(vapply(population_mean_idx, function(x) x[2], integer(1)))
   }
 
+  individual_change_cols <- get_cols("individual_change_from_baseline")
+  individual_change_idx <- parse_indices(individual_change_cols)
+
+  if (!is.null(stan_data) && "S" %in% names(stan_data)) {
+    S <- as.integer(stan_data$S)
+  } else if (length(individual_change_idx) > 0) {
+    S <- max(vapply(individual_change_idx, function(x) x[2], integer(1)))
+  } else {
+    stop(
+      "Could not determine the number of subjects. Supply `stan_data` or ",
+      "ensure `individual_change_from_baseline[k,s]` is present.",
+      call. = FALSE
+    )
+  }
+
+  if (!is.null(stan_data) && "N" %in% names(stan_data)) {
+    N <- as.integer(stan_data$N)
+  } else {
+    N <- length(get_cols("log_lik"))
+    if (N < 1 && !is.null(y)) N <- length(y)
+  }
+
+  # ============================================================
+  # METADATA
+  # ============================================================
+
+  time_value <- if (!is.null(stan_data) && "time_value" %in% names(stan_data)) {
+    as.numeric(stan_data$time_value)
+  } else {
+    seq_len(K) - 1
+  }
 
   if (length(time_value) != K) {
+    stop("`time_value` must contain exactly K values.", call. = FALSE)
+  }
 
+  direction <- if (!is.null(stan_data) && "direction" %in% names(stan_data)) {
+    as.integer(stan_data$direction)
+  } else {
+    NA_integer_
+  }
+
+  arm_labels <- if (!is.null(stan_data) &&
+                    "arm_labels" %in% names(stan_data) &&
+                    length(stan_data$arm_labels) == G) {
+    as.character(stan_data$arm_labels)
+  } else {
+    paste0("arm_", seq_len(G))
+  }
+
+  subject_arm <- if (!is.null(stan_data) &&
+                     "arm" %in% names(stan_data) &&
+                     length(stan_data$arm) == S) {
+    as.integer(stan_data$arm)
+  } else {
+    rep(NA_integer_, S)
+  }
+
+  between_arm_threshold <- if (!is.null(stan_data) &&
+                               "meaningful_between_arm_difference" %in% names(stan_data)) {
+    as.numeric(stan_data$meaningful_between_arm_difference)[1]
+  } else {
+    NA_real_
+  }
+
+  # Current model: MCID is a parameter. Fixed meaningful_change is fallback only.
+  if ("mcid" %in% names(draws)) {
+    mcid_draws <- as.numeric(draws$mcid)
+  } else if (!is.null(meaningful_change)) {
+    if (length(meaningful_change) != 1 ||
+        !is.numeric(meaningful_change) ||
+        !is.finite(meaningful_change)) {
+      stop("`meaningful_change` must be one finite numeric value.", call. = FALSE)
+    }
+    mcid_draws <- rep(as.numeric(meaningful_change), nrow(draws))
+  } else {
     stop(
-      "`time_value` must contain exactly K values.",
+      "The fitted model does not contain posterior variable `mcid`. ",
+      "For legacy fits, supply `meaningful_change`.",
       call. = FALSE
     )
   }
 
+  mcid_summary <- summarize_vector(mcid_draws, "mcid")
 
   # ============================================================
-  # POPULATION PARAMETERS
+  # SCALAR POPULATION / VARIANCE PARAMETERS
   # ============================================================
 
-  population_scalar_parameters <- c(
-
+  scalar_parameters <- c(
+    "baseline_mean",
+    "beta_time",
+    "tau_common",
+    "arm_baseline_sd",
     "sigma",
-
     "nu",
-
     "sigma_intercept",
-
     "sigma_slope",
-
-    "rho_subject"
+    "rho_subject",
+    "residual_sd",
+    "mcid"
   )
 
-
-  population_scalar_parameters <-
-    population_scalar_parameters[
-      population_scalar_parameters %in%
-        names(draws)
-    ]
-
-
-  population_summary <-
-    dplyr::bind_rows(
-
-      lapply(
-
-        population_scalar_parameters,
-
-        function(parameter) {
-
-          summarize_vector(
-            draws[[parameter]],
-            parameter
-          )
-        }
-      )
-    )
-
-
-  # ============================================================
-  # POPULATION TIME MEANS
-  # ============================================================
-
-  mu_time_summary <-
-    summarize_columns(
-      mu_time_cols,
-      "mu_time"
-    )
-
-
-  mu_time_summary$time <-
-    seq_len(K)
-
-
-  mu_time_summary$time_value <-
-    time_value
-
-
-  mu_time_summary <-
-    mu_time_summary[
-      c(
-        "index",
-        "time",
-        "time_value",
-        "mean",
-        "median",
-        "sd",
-        "mad",
-        "lower",
-        "upper",
-        "CrI_width"
-      )
-    ]
-
-
-  # ============================================================
-  # POPULATION CHANGES FROM BASELINE
-  # ============================================================
-
-  change_cols <-
-    get_cols(
-      "change_from_baseline"
-    )
-
-
-  population_change_summary <-
-    summarize_columns(
-      change_cols,
-      "change_from_baseline"
-    )
-
-
-  population_change_summary$time <-
-    seq_len(K)
-
-
-  population_change_summary$time_value <-
-    time_value
-
-
-  population_change_summary$P_positive <-
-    vapply(
-
-      change_cols,
-
-      function(column) {
-
-        mean(
-          draws[[column]] > 0
-        )
-      },
-
-      numeric(1)
-    )
-
-
-  population_change_summary$P_negative <-
-    vapply(
-
-      change_cols,
-
-      function(column) {
-
-        mean(
-          draws[[column]] < 0
-        )
-      },
-
-      numeric(1)
-    )
-
-
-  population_change_summary$P_MCID <-
-    vapply(
-
-      change_cols,
-
-      function(column) {
-
-        mean(
-          draws[[column]] >=
-            meaningful_change
-        )
-      },
-
-      numeric(1)
-    )
-
-
-  population_change_summary$distance_from_MCID_mean <-
-    vapply(
-
-      change_cols,
-
-      function(column) {
-
-        mean(
-          draws[[column]] -
-            meaningful_change
-        )
-      },
-
-      numeric(1)
-    )
-
-
-  population_change_summary <-
-    population_change_summary[
-      c(
-        "index",
-        "time",
-        "time_value",
-        "mean",
-        "median",
-        "sd",
-        "mad",
-        "lower",
-        "upper",
-        "CrI_width",
-        "P_positive",
-        "P_negative",
-        "P_MCID",
-        "distance_from_MCID_mean"
-      )
-    ]
-
-
-  # ============================================================
-  # CONSECUTIVE POPULATION CHANGES
-  # ============================================================
-
-  consecutive_cols <-
-    get_cols(
-      "consecutive_change"
-    )
-
-
-  consecutive_summary <-
-    summarize_columns(
-      consecutive_cols,
-      "consecutive_change"
-    )
-
-
-  if (length(consecutive_cols) > 0) {
-
-    consecutive_summary$from_time <-
-      seq_len(K - 1)
-
-    consecutive_summary$to_time <-
-      seq(2, K)
-
-    consecutive_summary$from_time_value <-
-      time_value[seq_len(K - 1)]
-
-    consecutive_summary$to_time_value <-
-      time_value[seq(2, K)]
-
-    consecutive_summary$P_positive <-
-      vapply(
-
-        consecutive_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]] > 0
-          )
-        },
-
-        numeric(1)
-      )
-
-
-    consecutive_summary$P_negative <-
-      vapply(
-
-        consecutive_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]] < 0
-          )
-        },
-
-        numeric(1)
-      )
-  }
-
-
-  # ============================================================
-  # POPULATION SLOPES
-  # ============================================================
-
-  slope_cols <-
-    get_cols(
-      "population_slope_from_baseline"
-    )
-
-
-  population_slope_summary <-
-    summarize_columns(
-      slope_cols,
-      "population_slope_from_baseline"
-    )
-
-
-  if (length(slope_cols) > 0) {
-
-    population_slope_summary$time <-
-      seq_len(K)
-
-    population_slope_summary$time_value <-
-      time_value
-  }
-
-
-  # ============================================================
-  # STANDARDIZED CHANGE
-  # ============================================================
-
-  standardized_cols <-
-    get_cols(
-      "standardized_change_from_baseline"
-    )
-
-
-  standardized_change_summary <-
-    summarize_columns(
-      standardized_cols,
-      "standardized_change_from_baseline"
-    )
-
-
-  if (length(standardized_cols) > 0) {
-
-    standardized_change_summary$time <-
-      seq_len(K)
-
-    standardized_change_summary$time_value <-
-      time_value
-  }
-
-
-  # ============================================================
-  # POPULATION CLINICAL RESPONSE
-  # ============================================================
-
-  population_any_cols <-
-    get_cols(
-      "population_any_improvement"
-    )
-
-
-  population_MCID_cols <-
-    get_cols(
-      "population_meaningful_improvement"
-    )
-
-
-  population_distance_cols <-
-    get_cols(
-      "population_change_minus_MCID"
-    )
-
-
-  population_clinical <- tibble::tibble(
-
-    time =
-      seq_len(K),
-
-    time_value =
-      time_value,
-
-    P_any_improvement =
-      vapply(
-
-        population_any_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]]
-          )
-        },
-
-        numeric(1)
-      ),
-
-    P_meaningful_improvement =
-      vapply(
-
-        population_MCID_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]]
-          )
-        },
-
-        numeric(1)
-      ),
-
-    mean_change_minus_MCID =
-      vapply(
-
-        population_distance_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]]
-          )
-        },
-
-        numeric(1)
-      ),
-
-    P_change_minus_MCID_ge_0 =
-      vapply(
-
-        population_distance_cols,
-
-        function(column) {
-
-          mean(
-            draws[[column]] >= 0
-          )
-        },
-
-        numeric(1)
-      )
+  scalar_parameters <- scalar_parameters[scalar_parameters %in% names(draws)]
+
+  population_summary <- do.call(
+    rbind,
+    lapply(scalar_parameters, function(parameter) {
+      summarize_vector(draws[[parameter]], parameter)
+    })
   )
 
-
-  # ============================================================
-  # INDIVIDUAL SLOPES
-  # ============================================================
-
-  individual_slope_summary <-
-    summarize_columns(
-      individual_slope_cols,
-      "individual_slope"
-    )
-
-
-  individual_slope_summary$subject <-
-    seq_len(S)
-
-
-  individual_slope_summary <-
-    individual_slope_summary[
-      c(
-        "subject",
-        "mean",
-        "median",
-        "sd",
-        "mad",
-        "lower",
-        "upper",
-        "CrI_width"
-      )
-    ]
-
-
-  # ============================================================
-  # INDIVIDUAL CHANGE FROM BASELINE
-  # ============================================================
-
-  individual_change_summary <-
-    summarize_columns(
-      individual_change_cols,
-      "individual_change_from_baseline"
-    )
-
-
-  # Parse [time,subject] from Stan column names
-
-  individual_indices <-
-    regmatches(
-
-      individual_change_cols,
-
-      regexec(
-        "\\[([0-9]+),([0-9]+)\\]",
-        individual_change_cols
-      )
-    )
-
-
-  individual_change_summary$time <-
-    vapply(
-      individual_indices,
-      function(x) as.integer(x[2]),
-      integer(1)
-    )
-
-
-  individual_change_summary$subject <-
-    vapply(
-      individual_indices,
-      function(x) as.integer(x[3]),
-      integer(1)
-    )
-
-
-  individual_change_summary$time_value <-
-    time_value[
-      individual_change_summary$time
-    ]
-
-
-  # ============================================================
-  # INDIVIDUAL CLINICAL PROBABILITIES
-  # ============================================================
-
-  individual_any_cols <-
-    get_cols(
-      "individual_any_improvement"
-    )
-
-
-  individual_MCID_cols <-
-    get_cols(
-      "individual_meaningful_improvement"
-    )
-
-
-  individual_distance_cols <-
-    get_cols(
-      "individual_change_minus_MCID"
-    )
-
-
-  individual_negative_cols <-
-    individual_change_cols
-
-
-  individual_clinical_summary <-
-    data.frame(
-
-      subject = integer(0),
-
-      time = integer(0),
-
-      time_value = numeric(0),
-
-      P_improvement = numeric(0),
-
-      P_MCID = numeric(0),
-
-      P_negative_change = numeric(0),
-
-      mean_change_minus_MCID = numeric(0),
-
-      P_change_minus_MCID_ge_0 = numeric(0),
-
-      stringsAsFactors = FALSE
-    )
-
-
-  if (length(individual_any_cols) > 0) {
-
-    indices <-
-      regmatches(
-
-        individual_any_cols,
-
-        regexec(
-          "\\[([0-9]+),([0-9]+)\\]",
-          individual_any_cols
-        )
-      )
-
-
-    individual_clinical_summary <-
-      data.frame(
-
-        subject =
-          vapply(
-            indices,
-            function(x) as.integer(x[3]),
-            integer(1)
-          ),
-
-        time =
-          vapply(
-            indices,
-            function(x) as.integer(x[2]),
-            integer(1)
-          ),
-
-        P_improvement =
-          vapply(
-            individual_any_cols,
-            function(column) {
-
-              mean(
-                draws[[column]]
-              )
-            },
-            numeric(1)
-          ),
-
-        P_MCID =
-          vapply(
-            individual_MCID_cols,
-            function(column) {
-
-              mean(
-                draws[[column]]
-              )
-            },
-            numeric(1)
-          ),
-
-        P_negative_change =
-          vapply(
-            individual_negative_cols,
-            function(column) {
-
-              mean(
-                draws[[column]] < 0
-              )
-            },
-            numeric(1)
-          ),
-
-        mean_change_minus_MCID =
-          vapply(
-            individual_distance_cols,
-            function(column) {
-
-              mean(
-                draws[[column]]
-              )
-            },
-            numeric(1)
-          ),
-
-        P_change_minus_MCID_ge_0 =
-          vapply(
-            individual_distance_cols,
-            function(column) {
-
-              mean(
-                draws[[column]] >= 0
-              )
-            },
-            numeric(1)
-          ),
-
-        stringsAsFactors = FALSE
-      )
-
-
-    individual_clinical_summary$time_value <-
-      time_value[
-        individual_clinical_summary$time
-      ]
-
-
-    individual_clinical_summary <-
-      individual_clinical_summary[
-        order(
-          individual_clinical_summary$subject,
-          individual_clinical_summary$time
-        ),
-      ]
+  if (is.null(population_summary)) {
+    population_summary <- data.frame()
   }
 
+  beta_treatment_summary <- summarize_indexed("beta_treatment", "contrast")
+  tau_treatment_summary <- summarize_indexed("tau_treatment", "contrast")
+  arm_baseline_offset_summary <- summarize_indexed("arm_baseline_offset", "contrast")
 
-  # ============================================================
-  # INDIVIDUAL RESPONDER CLASSIFICATION
-  # ============================================================
-
-  if (nrow(individual_clinical_summary) > 0) {
-
-    individual_clinical_summary$responder_class <-
-
-      cut(
-
-        individual_clinical_summary$P_MCID,
-
-        breaks = c(
-          -Inf,
-          0.20,
-          0.50,
-          0.80,
-          0.95,
-          Inf
-        ),
-
-        labels = c(
-          "very_unlikely",
-          "uncertain",
-          "probable",
-          "high_probability",
-          "very_high_probability"
-        ),
-
-        right = FALSE
-      )
-
-
-    individual_clinical_summary$response_80 <-
-      individual_clinical_summary$P_MCID >= 0.80
-
-
-    individual_clinical_summary$response_95 <-
-      individual_clinical_summary$P_MCID >= 0.95
-  }
-
-
-  # ============================================================
-  # RESPONDER PROPORTION
-  # ============================================================
-
-  responder_proportion_cols <-
-    get_cols(
-      "population_responder_proportion"
-    )
-
-
-  responder_proportion_summary <-
-    summarize_columns(
-      responder_proportion_cols,
-      "population_responder_proportion"
-    )
-
-
-  if (length(responder_proportion_cols) > 0) {
-
-    responder_proportion_summary$time <-
-      seq_len(K)
-
-    responder_proportion_summary$time_value <-
-      time_value
-  }
-
-
-  # ============================================================
-  # RESPONDER SUMMARY BY TIME
-  # ============================================================
-
-  responder_summary <- tibble::tibble(
-
-    time =
-      seq_len(K),
-
-    time_value =
-      time_value,
-
-    expected_responder_proportion =
-      NA_real_,
-
-    proportion_P_MCID_ge_50 =
-      NA_real_,
-
-    proportion_P_MCID_ge_80 =
-      NA_real_,
-
-    proportion_P_MCID_ge_95 =
-      NA_real_
-  )
-
-
-  if (nrow(individual_clinical_summary) > 0) {
-
-    for (k in seq_len(K)) {
-
-      x <-
-        individual_clinical_summary$P_MCID[
-          individual_clinical_summary$time == k
-        ]
-
-
-      responder_summary$expected_responder_proportion[k] <-
-        mean(x)
-
-
-      responder_summary$proportion_P_MCID_ge_50[k] <-
-        mean(x >= 0.50)
-
-
-      responder_summary$proportion_P_MCID_ge_80[k] <-
-        mean(x >= 0.80)
-
-
-      responder_summary$proportion_P_MCID_ge_95[k] <-
-        mean(x >= 0.95)
+  for (obj_name in c("beta_treatment_summary", "tau_treatment_summary", "arm_baseline_offset_summary")) {
+    obj <- get(obj_name)
+    if (nrow(obj) > 0) {
+      obj$treatment_arm <- obj$contrast + 1L
+      obj$treatment_label <- arm_labels[obj$treatment_arm]
+      obj$reference_arm <- 1L
+      obj$reference_label <- arm_labels[1]
+      assign(obj_name, obj)
     }
   }
 
+  # ============================================================
+  # POPULATION TRAJECTORIES BY ARM
+  # ============================================================
+
+  population_time_means <- summarize_indexed("population_mean", c("arm", "time"))
+
+  if (nrow(population_time_means) > 0) {
+    population_time_means$arm_label <- arm_labels[population_time_means$arm]
+    population_time_means$time_value <- time_value[population_time_means$time]
+    population_time_means <- population_time_means[order(
+      population_time_means$arm,
+      population_time_means$time
+    ), ]
+  }
+
+  population_change <- summarize_indexed(
+    "population_change_from_baseline",
+    c("arm", "time")
+  )
+
+  directional_change_cols <- get_cols("directional_population_change")
+  directional_change_idx <- parse_indices(directional_change_cols)
+
+  if (nrow(population_change) > 0) {
+    population_change$arm_label <- arm_labels[population_change$arm]
+    population_change$time_value <- time_value[population_change$time]
+    population_change$P_positive_raw <- NA_real_
+    population_change$P_negative_raw <- NA_real_
+    population_change$P_improvement <- NA_real_
+    population_change$P_responder <- NA_real_
+    population_change$mean_directional_change_minus_mcid <- NA_real_
+
+    raw_change_cols <- get_cols("population_change_from_baseline")
+    raw_change_idx <- parse_indices(raw_change_cols)
+
+    for (i in seq_len(nrow(population_change))) {
+      g <- population_change$arm[i]
+      k <- population_change$time[i]
+
+      raw_pos <- which(vapply(raw_change_idx, function(x) all(x == c(g, k)), logical(1)))
+      dir_pos <- which(vapply(directional_change_idx, function(x) all(x == c(g, k)), logical(1)))
+
+      if (length(raw_pos) == 1) {
+        x <- draws[[raw_change_cols[raw_pos]]]
+        population_change$P_positive_raw[i] <- mean(x > 0)
+        population_change$P_negative_raw[i] <- mean(x < 0)
+      }
+
+      if (length(dir_pos) == 1) {
+        d <- as.numeric(draws[[directional_change_cols[dir_pos]]])
+        population_change$P_improvement[i] <- mean(d > 0)
+        population_change$P_responder[i] <- mean(d >= mcid_draws)
+        population_change$mean_directional_change_minus_mcid[i] <- mean(d - mcid_draws)
+      }
+    }
+
+    population_change <- population_change[order(
+      population_change$arm,
+      population_change$time
+    ), ]
+  }
+
+  population_standardized_change <- summarize_indexed(
+    "standardized_population_change",
+    c("arm", "time")
+  )
+
+  if (nrow(population_standardized_change) > 0) {
+    population_standardized_change$arm_label <-
+      arm_labels[population_standardized_change$arm]
+    population_standardized_change$time_value <-
+      time_value[population_standardized_change$time]
+  }
+
+  directional_population_change <- summarize_indexed(
+    "directional_population_change",
+    c("arm", "time")
+  )
+
+  if (nrow(directional_population_change) > 0) {
+    directional_population_change$arm_label <-
+      arm_labels[directional_population_change$arm]
+    directional_population_change$time_value <-
+      time_value[directional_population_change$time]
+  }
+
+  # ============================================================
+  # NEW-SUBJECT RESPONDER ESTIMANDS
+  # ============================================================
+
+  latent_any_improvement <- summarize_indexed(
+    "latent_new_subject_any_improvement_prob",
+    c("arm", "time")
+  )
+
+  latent_responder <- summarize_indexed(
+    "latent_new_subject_responder_prob",
+    c("arm", "time")
+  )
+
+  new_subject_latent_responder <- probability_indexed(
+    "new_subject_latent_responder_draw",
+    c("arm", "time"),
+    "posterior_predictive_probability"
+  )
+
+  new_subject_predictive_responder <- probability_indexed(
+    "new_subject_predictive_responder_draw",
+    c("arm", "time"),
+    "posterior_predictive_probability"
+  )
+
+  new_subject_latent_change <- summarize_indexed(
+    "new_subject_latent_change_draw",
+    c("arm", "time")
+  )
+
+  new_subject_predictive_change <- summarize_indexed(
+    "new_subject_predictive_change_draw",
+    c("arm", "time")
+  )
+
+  add_arm_time_metadata <- function(x) {
+    if (nrow(x) > 0) {
+      x$arm_label <- arm_labels[x$arm]
+      x$time_value <- time_value[x$time]
+      x <- x[order(x$arm, x$time), ]
+    }
+    x
+  }
+
+  latent_any_improvement <- add_arm_time_metadata(latent_any_improvement)
+  latent_responder <- add_arm_time_metadata(latent_responder)
+  new_subject_latent_responder <- add_arm_time_metadata(new_subject_latent_responder)
+  new_subject_predictive_responder <- add_arm_time_metadata(new_subject_predictive_responder)
+  new_subject_latent_change <- add_arm_time_metadata(new_subject_latent_change)
+  new_subject_predictive_change <- add_arm_time_metadata(new_subject_predictive_change)
+
+  # ============================================================
+  # INDIVIDUAL CHANGE AND CLINICAL RESPONSE
+  # ============================================================
+
+  individual_change <- summarize_indexed(
+    "individual_change_from_baseline",
+    c("time", "subject")
+  )
+
+  individual_directional_change <- summarize_indexed(
+    "individual_directional_change",
+    c("time", "subject")
+  )
+
+  individual_any <- probability_indexed(
+    "individual_any_improvement_draw",
+    c("time", "subject"),
+    "P_improvement"
+  )
+
+  individual_responder <- probability_indexed(
+    "individual_meaningful_responder_draw",
+    c("time", "subject"),
+    "P_MCID"
+  )
+
+  individual_distance <- summarize_indexed(
+    "individual_change_minus_mcid",
+    c("time", "subject")
+  )
+
+  add_subject_metadata <- function(x) {
+    if (nrow(x) > 0) {
+      x$time_value <- time_value[x$time]
+      x$arm <- subject_arm[x$subject]
+      x$arm_label <- ifelse(
+        is.na(x$arm),
+        NA_character_,
+        arm_labels[x$arm]
+      )
+      x <- x[order(x$subject, x$time), ]
+    }
+    x
+  }
+
+  individual_change <- add_subject_metadata(individual_change)
+  individual_directional_change <- add_subject_metadata(individual_directional_change)
+  individual_any <- add_subject_metadata(individual_any)
+  individual_responder <- add_subject_metadata(individual_responder)
+  individual_distance <- add_subject_metadata(individual_distance)
+
+  individual_clinical <- data.frame()
+
+  if (nrow(individual_responder) > 0) {
+    individual_clinical <- individual_responder[
+      , c("time", "subject", "P_MCID", "time_value", "arm", "arm_label"),
+      drop = FALSE
+    ]
+
+    if (nrow(individual_any) > 0) {
+      key <- paste(individual_any$time, individual_any$subject, sep = ":")
+      target <- paste(individual_clinical$time, individual_clinical$subject, sep = ":")
+      m <- match(target, key)
+      individual_clinical$P_improvement <- individual_any$P_improvement[m]
+    } else {
+      individual_clinical$P_improvement <- NA_real_
+    }
+
+    if (nrow(individual_distance) > 0) {
+      key <- paste(individual_distance$time, individual_distance$subject, sep = ":")
+      target <- paste(individual_clinical$time, individual_clinical$subject, sep = ":")
+      m <- match(target, key)
+      individual_clinical$mean_change_minus_MCID <- individual_distance$mean[m]
+      individual_clinical$P_change_minus_MCID_ge_0 <- vapply(
+        seq_len(nrow(individual_clinical)),
+        function(i) {
+          col_name <- paste0(
+            "individual_change_minus_mcid[",
+            individual_clinical$time[i],
+            ",",
+            individual_clinical$subject[i],
+            "]"
+          )
+          if (col_name %in% names(draws)) mean(draws[[col_name]] >= 0) else NA_real_
+        },
+        numeric(1)
+      )
+    } else {
+      individual_clinical$mean_change_minus_MCID <- NA_real_
+      individual_clinical$P_change_minus_MCID_ge_0 <- NA_real_
+    }
+
+    individual_clinical$responder_class <- cut(
+      individual_clinical$P_MCID,
+      breaks = c(-Inf, 0.20, 0.50, 0.80, 0.95, Inf),
+      labels = c(
+        "very_unlikely",
+        "uncertain",
+        "probable",
+        "high_probability",
+        "very_high_probability"
+      ),
+      right = FALSE
+    )
+
+    for (threshold in responder_thresholds) {
+      nm <- paste0("response_", sprintf("%02d", round(100 * threshold)))
+      individual_clinical[[nm]] <- individual_clinical$P_MCID >= threshold
+    }
+  }
+
+  # Existing-subject responder overview by arm and time.
+  responder_summary <- data.frame()
+
+  if (nrow(individual_clinical) > 0) {
+    combinations <- unique(individual_clinical[, c("arm", "arm_label", "time", "time_value")])
+    combinations <- combinations[order(combinations$arm, combinations$time), ]
+
+    rows <- lapply(seq_len(nrow(combinations)), function(i) {
+      ix <- individual_clinical$arm == combinations$arm[i] &
+        individual_clinical$time == combinations$time[i]
+      p <- individual_clinical$P_MCID[ix]
+
+      out <- data.frame(
+        arm = combinations$arm[i],
+        arm_label = combinations$arm_label[i],
+        time = combinations$time[i],
+        time_value = combinations$time_value[i],
+        expected_responder_proportion = mean(p),
+        stringsAsFactors = FALSE
+      )
+
+      for (threshold in responder_thresholds) {
+        nm <- paste0("proportion_P_MCID_ge_", sprintf("%02d", round(100 * threshold)))
+        out[[nm]] <- mean(p >= threshold)
+      }
+
+      out
+    })
+
+    responder_summary <- do.call(rbind, rows)
+  }
+
+  # ============================================================
+  # TREATMENT EFFECTS VS REFERENCE ARM
+  # ============================================================
+
+  treatment_effects <- summarize_indexed(
+    "treatment_change_difference",
+    c("contrast", "time")
+  )
+
+  directional_treatment <- summarize_indexed(
+    "directional_treatment_benefit",
+    c("contrast", "time")
+  )
+
+  positive_treatment <- probability_indexed(
+    "treatment_benefit_positive_draw",
+    c("contrast", "time"),
+    "P_benefit_positive"
+  )
+
+  meaningful_treatment <- probability_indexed(
+    "treatment_benefit_meaningful_draw",
+    c("contrast", "time"),
+    "P_benefit_meaningful"
+  )
+
+  responder_uplift <- summarize_indexed(
+    "latent_responder_probability_difference",
+    c("contrast", "time")
+  )
+
+  if (nrow(treatment_effects) > 0) {
+    treatment_effects$treatment_arm <- treatment_effects$contrast + 1L
+    treatment_effects$treatment_label <- arm_labels[treatment_effects$treatment_arm]
+    treatment_effects$reference_arm <- 1L
+    treatment_effects$reference_label <- arm_labels[1]
+    treatment_effects$time_value <- time_value[treatment_effects$time]
+
+    treatment_key <- paste(treatment_effects$contrast, treatment_effects$time, sep = ":")
+
+    add_from_table <- function(base, table, value_column, output_name) {
+      if (nrow(table) == 0) {
+        base[[output_name]] <- NA_real_
+        return(base)
+      }
+      key <- paste(table$contrast, table$time, sep = ":")
+      base[[output_name]] <- table[[value_column]][match(treatment_key, key)]
+      base
+    }
+
+    treatment_effects <- add_from_table(
+      treatment_effects, directional_treatment, "mean", "mean_directional_benefit"
+    )
+    treatment_effects <- add_from_table(
+      treatment_effects, positive_treatment, "P_benefit_positive", "P_benefit_positive"
+    )
+    treatment_effects <- add_from_table(
+      treatment_effects, meaningful_treatment, "P_benefit_meaningful", "P_benefit_meaningful"
+    )
+    treatment_effects <- add_from_table(
+      treatment_effects, responder_uplift, "mean", "mean_responder_probability_difference"
+    )
+
+    treatment_effects <- treatment_effects[order(
+      treatment_effects$contrast,
+      treatment_effects$time
+    ), ]
+  }
+
+  treatment_responder_uplift <- responder_uplift
+  if (nrow(treatment_responder_uplift) > 0) {
+    treatment_responder_uplift$treatment_arm <- treatment_responder_uplift$contrast + 1L
+    treatment_responder_uplift$treatment_label <-
+      arm_labels[treatment_responder_uplift$treatment_arm]
+    treatment_responder_uplift$reference_label <- arm_labels[1]
+    treatment_responder_uplift$time_value <-
+      time_value[treatment_responder_uplift$time]
+  }
 
   # ============================================================
   # HETEROGENEITY
   # ============================================================
 
   heterogeneity_parameters <- c(
-
     "sigma_intercept",
-
     "sigma_slope",
-
-    "rho_subject"
+    "rho_subject",
+    "arm_baseline_sd",
+    "tau_common"
   )
 
+  heterogeneity_parameters <- heterogeneity_parameters[
+    heterogeneity_parameters %in% names(draws)
+  ]
 
-  heterogeneity_parameters <-
-    heterogeneity_parameters[
-      heterogeneity_parameters %in%
-        names(draws)
-    ]
+  heterogeneity <- do.call(
+    rbind,
+    lapply(heterogeneity_parameters, function(parameter) {
+      summarize_vector(draws[[parameter]], parameter)
+    })
+  )
 
+  if (is.null(heterogeneity)) heterogeneity <- data.frame()
 
-  heterogeneity <-
-    dplyr::bind_rows(
+  if (nrow(heterogeneity) > 0) {
+    heterogeneity$P_positive <- NA_real_
+    heterogeneity$P_negative <- NA_real_
 
-      lapply(
-
-        heterogeneity_parameters,
-
-        function(parameter) {
-
-          summarize_vector(
-            draws[[parameter]],
-            parameter
-          )
-        }
-      )
-    )
-
-
-  if ("rho_subject" %in% names(draws)) {
-
-    heterogeneity$P_positive <-
-      NA_real_
-
-    heterogeneity$P_negative <-
-      NA_real_
-
-
-    i <-
-      heterogeneity$parameter ==
-      "rho_subject"
-
-
-    heterogeneity$P_positive[i] <-
-      mean(
-        draws$rho_subject > 0
-      )
-
-
-    heterogeneity$P_negative[i] <-
-      mean(
-        draws$rho_subject < 0
-      )
+    for (i in seq_len(nrow(heterogeneity))) {
+      parameter <- heterogeneity$parameter[i]
+      heterogeneity$P_positive[i] <- mean(draws[[parameter]] > 0)
+      heterogeneity$P_negative[i] <- mean(draws[[parameter]] < 0)
+    }
   }
 
-
   # ============================================================
-  # CLINICAL SUMMARY
+  # CLINICAL FINAL-TIME SUMMARY
   # ============================================================
 
-  clinical_summary <-
-    tibble::tibble(
+  clinical_summary <- data.frame()
 
-      measure = c(
+  if (nrow(population_change) > 0) {
+    final_rows <- population_change$time == K
+    final_change <- population_change[final_rows, , drop = FALSE]
 
-        "MCID",
-
-        "Final time point",
-
-        "Final population change",
-
-        "P(final population change > 0)",
-
-        "P(final population change >= MCID)",
-
-        "P(final population change < MCID)",
-
-        "Mean final distance from MCID",
-
-        "P(final distance from MCID >= 0)"
-      ),
-
-      estimate = c(
-
-        meaningful_change,
-
-        K,
-
-        mean(draws[[change_cols[K]]]),
-
-        mean(draws[[change_cols[K]]] > 0),
-
-        mean(draws[[change_cols[K]]] >= meaningful_change),
-
-        mean(draws[[change_cols[K]]] < meaningful_change),
-
-        mean(draws[[change_cols[K]]] -  meaningful_change),
-
-        mean(draws[[change_cols[K]]] >= meaningful_change
-        )
-      )
+    clinical_summary <- data.frame(
+      arm = final_change$arm,
+      arm_label = final_change$arm_label,
+      final_time = K,
+      final_time_value = time_value[K],
+      final_population_change_mean = final_change$mean,
+      P_final_improvement = final_change$P_improvement,
+      P_final_responder = final_change$P_responder,
+      mean_final_directional_change_minus_mcid =
+        final_change$mean_directional_change_minus_mcid,
+      stringsAsFactors = FALSE
     )
-
-
-  # ============================================================
-  # STANDARDIZED FINAL CHANGE
-  # ============================================================
-
-  final_standardized_change <- draws[[standardized_cols[K]]]
-
-
-  clinical_summary <-
-    tibble::add_row(
-
-      clinical_summary,
-
-      measure =
-        "Standardized final population change",
-
-      estimate =
-        mean(
-          final_standardized_change
-        )
-    )
-
+  }
 
   # ============================================================
-  # PPC
+  # POSTERIOR PREDICTIVE CHECKS
   # ============================================================
 
-  y_rep_cols <-
-    get_cols(
-      "y_rep"
-    )
-
-
+  y_rep_cols <- get_cols("y_rep")
   ppc <- NULL
 
+  if (length(y_rep_cols) > 0 && !is.null(y)) {
+    y_rep_matrix <- as.matrix(draws[, y_rep_cols, drop = FALSE])
 
-  if (length(y_rep_cols) > 0) {
-
-    y_rep_matrix <-
-      as.matrix(
-        draws[
-          ,
-          y_rep_cols,
-          drop = FALSE
-        ]
-      )
-
-
-    predictive_mean <-
-      rowMeans(
-        y_rep_matrix
-      )
-
-
-    predictive_sd <-
-      apply(
-        y_rep_matrix,
-        1,
-        stats::sd
-      )
-
-
-    predictive_median <-
-      apply(
-        y_rep_matrix,
-        1,
-        stats::median
-      )
-
-
-    predictive_q05 <-
-      apply(
-        y_rep_matrix,
-        1,
-        stats::quantile,
-        probs = 0.05
-      )
-
-
-    predictive_q95 <-
-      apply(
-        y_rep_matrix,
-        1,
-        stats::quantile,
-        probs = 0.95
-      )
-
+    predictive_mean <- rowMeans(y_rep_matrix)
+    predictive_sd <- apply(y_rep_matrix, 1, stats::sd)
+    predictive_median <- apply(y_rep_matrix, 1, stats::median)
+    predictive_q05 <- apply(y_rep_matrix, 1, stats::quantile, probs = 0.05)
+    predictive_q95 <- apply(y_rep_matrix, 1, stats::quantile, probs = 0.95)
 
     observed <- c(
-
-      mean =
-        mean(y),
-
-      sd =
-        stats::sd(y),
-
-      median =
-        stats::median(y),
-
-      q05 =
-        as.numeric(
-          stats::quantile(
-            y,
-            0.05
-          )
-        ),
-
-      q95 =
-        as.numeric(
-          stats::quantile(
-            y,
-            0.95
-          )
-        )
+      mean = mean(y),
+      sd = stats::sd(y),
+      median = stats::median(y),
+      q05 = as.numeric(stats::quantile(y, 0.05)),
+      q95 = as.numeric(stats::quantile(y, 0.95))
     )
-
 
     ppc <- list(
-
       observed = observed,
-
       posterior_predictive = list(
-
-        mean =
-          posterior_stats(
-            predictive_mean
-          ),
-
-        sd =
-          posterior_stats(
-            predictive_sd
-          ),
-
-        median =
-          posterior_stats(
-            predictive_median
-          ),
-
-        q05 =
-          posterior_stats(
-            predictive_q05
-          ),
-
-        q95 =
-          posterior_stats(
-            predictive_q95
-          )
+        mean = posterior_stats(predictive_mean),
+        sd = posterior_stats(predictive_sd),
+        median = posterior_stats(predictive_median),
+        q05 = posterior_stats(predictive_q05),
+        q95 = posterior_stats(predictive_q95)
       ),
-
       bayesian_p_values = c(
-
-        mean =
-          mean(
-            predictive_mean >=
-              mean(y)
-          ),
-
-        sd =
-          mean(
-            predictive_sd >=
-              stats::sd(y)
-          ),
-
-        median =
-          mean(
-            predictive_median >=
-              stats::median(y)
-          )
+        mean = mean(predictive_mean >= mean(y)),
+        sd = mean(predictive_sd >= stats::sd(y)),
+        median = mean(predictive_median >= stats::median(y))
       ),
-
-      predictive_draws =
-        y_rep_matrix
+      predictive_draws = y_rep_matrix
     )
   }
 
-
   # ============================================================
-  # LOG LIKELIHOOD / LOO INFORMATION
+  # LOG-LIKELIHOOD INFORMATION
   # ============================================================
 
-  log_lik_cols <-
-    get_cols(
-      "log_lik"
-    )
-
-
+  log_lik_cols <- get_cols("log_lik")
   loo_information <- NULL
 
-
   if (length(log_lik_cols) > 0) {
-
-    log_lik_matrix <-
-      as.matrix(
-        draws[
-          ,
-          log_lik_cols,
-          drop = FALSE
-        ]
-      )
-
+    log_lik_matrix <- as.matrix(draws[, log_lik_cols, drop = FALSE])
 
     loo_information <- list(
-
-      n_observations =
-        length(log_lik_cols),
-
-      mean_total_log_lik =
-        mean(
-          rowSums(
-            log_lik_matrix
-          )
-        ),
-
-      pointwise_mean_log_lik =
-        colMeans(
-          log_lik_matrix
-        ),
-
-      draws =
-        log_lik_matrix
+      n_observations = length(log_lik_cols),
+      mean_total_log_lik = mean(rowSums(log_lik_matrix)),
+      pointwise_mean_log_lik = colMeans(log_lik_matrix),
+      draws = log_lik_matrix
     )
   }
-
 
   # ============================================================
   # MCMC DIAGNOSTICS
   # ============================================================
 
   diagnostics <- tryCatch({
+    s <- fit$summary()
 
-    s <-
-      fit$summary()
+    d <- data.frame(
+      parameter = s$variable,
+      Rhat = s$rhat,
+      ESS_bulk = s$ess_bulk,
+      ESS_tail = s$ess_tail,
+      stringsAsFactors = FALSE
+    )
 
+    d$Rhat_ok <- is.na(d$Rhat) | d$Rhat < 1.01
+    d$ESS_bulk_ok <- is.na(d$ESS_bulk) | d$ESS_bulk >= 400
+    d$ESS_tail_ok <- is.na(d$ESS_tail) | d$ESS_tail >= 400
 
-    d <-
-      data.frame(
-
-        parameter =
-          s$variable,
-
-        Rhat =
-          s$rhat,
-
-        ESS_bulk =
-          s$ess_bulk,
-
-        ESS_tail =
-          s$ess_tail,
-
-        stringsAsFactors = FALSE
-      )
-
-
-    d$Rhat_ok <-
-      d$Rhat < 1.01
-
-
-    d$ESS_bulk_ok <-
-      d$ESS_bulk >= 400
-
-
-    d$ESS_tail_ok <-
-      d$ESS_tail >= 400
-
+    finite_rhat <- d$Rhat[is.finite(d$Rhat)]
+    finite_bulk <- d$ESS_bulk[is.finite(d$ESS_bulk)]
+    finite_tail <- d$ESS_tail[is.finite(d$ESS_tail)]
 
     list(
-
       parameters = d,
-
-      max_Rhat =
-        max(
-          d$Rhat,
-          na.rm = TRUE
-        ),
-
-      min_ESS_bulk =
-        min(
-          d$ESS_bulk,
-          na.rm = TRUE
-        ),
-
-      min_ESS_tail =
-        min(
-          d$ESS_tail,
-          na.rm = TRUE
-        )
+      max_Rhat = if (length(finite_rhat)) max(finite_rhat) else NA_real_,
+      min_ESS_bulk = if (length(finite_bulk)) min(finite_bulk) else NA_real_,
+      min_ESS_tail = if (length(finite_tail)) min(finite_tail) else NA_real_
     )
-
   }, error = function(e) {
-
-    list(
-      error =
-        conditionMessage(e)
-    )
+    list(error = conditionMessage(e))
   })
 
-
-  # ============================================================
-  # GLOBAL QUALITY FLAGS
-  # ============================================================
-
   quality_flags <- list(
-
-    Rhat_ok =
-      if (
-        !is.null(diagnostics$max_Rhat)
-      ) {
-
-        diagnostics$max_Rhat < 1.01
-
-      } else {
-
-        NA
-      },
-
-    ESS_bulk_ok =
-      if (
-        !is.null(diagnostics$min_ESS_bulk)
-      ) {
-
-        diagnostics$min_ESS_bulk >= 400
-
-      } else {
-
-        NA
-      },
-
-    ESS_tail_ok =
-      if (
-        !is.null(diagnostics$min_ESS_tail)
-      ) {
-
-        diagnostics$min_ESS_tail >= 400
-
-      } else {
-
-        NA
-      }
+    Rhat_ok = if (!is.null(diagnostics$max_Rhat) && is.finite(diagnostics$max_Rhat)) {
+      diagnostics$max_Rhat < 1.01
+    } else {
+      NA
+    },
+    ESS_bulk_ok = if (!is.null(diagnostics$min_ESS_bulk) && is.finite(diagnostics$min_ESS_bulk)) {
+      diagnostics$min_ESS_bulk >= 400
+    } else {
+      NA
+    },
+    ESS_tail_ok = if (!is.null(diagnostics$min_ESS_tail) && is.finite(diagnostics$min_ESS_tail)) {
+      diagnostics$min_ESS_tail >= 400
+    } else {
+      NA
+    }
   )
-
 
   # ============================================================
   # MODEL INFORMATION
   # ============================================================
 
   model_information <- list(
-
-    n_observations =
-      length(y),
-
-    n_subjects =
-      S,
-
-    n_time_points =
-      K,
-
-    time_value =
-      time_value,
-
-    MCID =
-      meaningful_change,
-
-    credible_level =
-      credible_level,
-
-    responder_thresholds =
-      responder_thresholds,
-
-    observed_mean =
-      mean(y),
-
-    observed_sd =
-      stats::sd(y),
-
-    observed_median =
-      stats::median(y),
-
-    observed_q05 =
-      as.numeric(
-        stats::quantile(
-          y,
-          0.05
-        )
-      ),
-
-    observed_q95 =
-      as.numeric(
-        stats::quantile(
-          y,
-          0.95
-        )
-      )
+    n_observations = N,
+    n_subjects = S,
+    n_time_points = K,
+    n_arms = G,
+    arm_labels = arm_labels,
+    reference_arm = 1L,
+    reference_label = arm_labels[1],
+    time_value = time_value,
+    direction = direction,
+    direction_interpretation = if (is.na(direction)) {
+      NA_character_
+    } else if (direction == 1L) {
+      "higher outcome = better"
+    } else {
+      "lower outcome = better"
+    },
+    mcid = mcid_summary,
+    mcid_prior_mean = if (!is.null(stan_data) && "mcid_prior_mean" %in% names(stan_data)) {
+      stan_data$mcid_prior_mean
+    } else {
+      NA_real_
+    },
+    mcid_prior_sd = if (!is.null(stan_data) && "mcid_prior_sd" %in% names(stan_data)) {
+      stan_data$mcid_prior_sd
+    } else {
+      NA_real_
+    },
+    meaningful_between_arm_difference = between_arm_threshold,
+    credible_level = credible_level,
+    responder_thresholds = responder_thresholds,
+    observed_mean = if (!is.null(y)) mean(y) else NA_real_,
+    observed_sd = if (!is.null(y)) stats::sd(y) else NA_real_,
+    observed_median = if (!is.null(y)) stats::median(y) else NA_real_
   )
 
-
   # ============================================================
-  # ALL MODEL VARIABLES
-  #
-  # Useful for research/debugging:
-  # explicitly expose which variables were actually generated
-  # by Stan.
+  # VARIABLE INVENTORY
   # ============================================================
 
   variable_inventory <- list(
-
-    population =
-      c(
-        mu_time_cols,
-        change_cols,
-        consecutive_cols,
-        slope_cols,
-        standardized_cols
-      ),
-
-    population_clinical =
-      c(
-        population_any_cols,
-        population_MCID_cols,
-        population_distance_cols,
-        responder_proportion_cols
-      ),
-
-    individual =
-      c(
-        individual_slope_cols,
-        individual_change_cols
-      ),
-
-    individual_clinical =
-      c(
-        individual_any_cols,
-        individual_MCID_cols,
-        individual_distance_cols
-      ),
-
-    observation_level =
-      c(
-        log_lik_cols,
-        y_rep_cols
-      )
+    population = c(
+      get_cols("population_mean"),
+      get_cols("population_change_from_baseline"),
+      get_cols("directional_population_change"),
+      get_cols("standardized_population_change")
+    ),
+    new_subject = c(
+      get_cols("latent_new_subject_any_improvement_prob"),
+      get_cols("latent_new_subject_responder_prob"),
+      get_cols("new_subject_latent_change_draw"),
+      get_cols("new_subject_latent_responder_draw"),
+      get_cols("new_subject_predictive_change_draw"),
+      get_cols("new_subject_predictive_responder_draw")
+    ),
+    individual = c(
+      get_cols("individual_change_from_baseline"),
+      get_cols("individual_directional_change"),
+      get_cols("individual_any_improvement_draw"),
+      get_cols("individual_meaningful_responder_draw"),
+      get_cols("individual_change_minus_mcid")
+    ),
+    treatment = c(
+      get_cols("treatment_change_difference"),
+      get_cols("directional_treatment_benefit"),
+      get_cols("treatment_benefit_positive_draw"),
+      get_cols("treatment_benefit_meaningful_draw"),
+      get_cols("latent_responder_probability_difference")
+    ),
+    observation_level = c(
+      get_cols("log_lik"),
+      get_cols("y_rep")
+    )
   )
-
 
   # ============================================================
   # RETURN
   # ============================================================
 
   list(
+    # Core population parameters
+    population = population_summary,
+    beta_treatment = beta_treatment_summary,
+    tau_treatment = tau_treatment_summary,
+    arm_baseline_offset = arm_baseline_offset_summary,
 
-    # ----------------------------------------------------------
-    # Population-level results
-    # ----------------------------------------------------------
+    # Population trajectories
+    population_time_means = population_time_means,
+    population_change = population_change,
+    population_directional_change = directional_population_change,
+    population_standardized_change = population_standardized_change,
 
-    population =
-      population_summary,
+    # Kept for backwards-compatible list structure; these estimands are
+    # not explicitly generated by the new Stan model.
+    population_consecutive_change = data.frame(),
+    population_slope = data.frame(),
 
-    population_time_means =
-      mu_time_summary,
+    # New-subject clinical estimands
+    population_clinical = list(
+      latent_any_improvement = latent_any_improvement,
+      latent_responder = latent_responder,
+      latent_responder_draw = new_subject_latent_responder,
+      predictive_responder_draw = new_subject_predictive_responder,
+      latent_change_draw = new_subject_latent_change,
+      predictive_change_draw = new_subject_predictive_change
+    ),
 
-    population_change =
-      population_change_summary,
+    # Existing subjects
+    individual_change = individual_change,
+    individual_directional_change = individual_directional_change,
+    individual_clinical = individual_clinical,
+    individual_slope = data.frame(),
 
-    population_consecutive_change =
-      consecutive_summary,
-
-    population_slope =
-      population_slope_summary,
-
-    population_standardized_change =
-      standardized_change_summary,
-
-    population_clinical =
-      population_clinical,
-
-    # ----------------------------------------------------------
-    # Individual results
-    # ----------------------------------------------------------
-
-    individual_slope =
-      individual_slope_summary,
-
-    individual_change =
-      individual_change_summary,
-
-    individual_clinical =
-      individual_clinical_summary,
-
-    # ----------------------------------------------------------
     # Responders
-    # ----------------------------------------------------------
+    responder_proportion = latent_responder,
+    responders = responder_summary,
 
-    responder_proportion =
-      responder_proportion_summary,
+    # Treatment effects vs reference arm
+    treatment_effects = treatment_effects,
+    treatment_responder_uplift = treatment_responder_uplift,
 
-    responders =
-      responder_summary,
-
-    # ----------------------------------------------------------
     # Clinical interpretation
-    # ----------------------------------------------------------
+    clinical = clinical_summary,
+    mcid = mcid_summary,
 
-    clinical =
-      clinical_summary,
-
-    # ----------------------------------------------------------
     # Heterogeneity
-    # ----------------------------------------------------------
+    heterogeneity = heterogeneity,
 
-    heterogeneity =
-      heterogeneity,
+    # Model checking
+    ppc = ppc,
+    loo = loo_information,
+    diagnostics = diagnostics,
+    quality_flags = quality_flags,
 
-    # ----------------------------------------------------------
-    # Posterior predictive checks
-    # ----------------------------------------------------------
-
-    ppc =
-      ppc,
-
-    # ----------------------------------------------------------
-    # LOO / likelihood
-    # ----------------------------------------------------------
-
-    loo =
-      loo_information,
-
-    # ----------------------------------------------------------
-    # Diagnostics
-    # ----------------------------------------------------------
-
-    diagnostics =
-      diagnostics,
-
-    quality_flags =
-      quality_flags,
-
-    # ----------------------------------------------------------
-    # Model metadata
-    # ----------------------------------------------------------
-
-    model_information =
-      model_information,
-
-    variable_inventory =
-      variable_inventory,
-
-    # ----------------------------------------------------------
-    # Raw posterior draws
-    # ----------------------------------------------------------
-
-    draws =
-      draws
+    # Metadata and debugging
+    model_information = model_information,
+    variable_inventory = variable_inventory,
+    draws = draws
   )
 }

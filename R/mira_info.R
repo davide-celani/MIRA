@@ -1,5 +1,5 @@
 # ============================================================
-# MIRA_INFO v2
+# MIRA_INFO v2.1 COMPLETE REPORT
 # Robust longitudinal analysis for wide-format repeated measures
 #
 # Expected longitudinal column names:
@@ -1233,7 +1233,7 @@ mira_info <- function(data,
 
   result <- list(
     call = match.call(),
-    version = "2.0.0",
+    version = "2.1.0",
     settings = list(
       alpha = alpha,
       confidence_level = confidence_level,
@@ -1296,12 +1296,29 @@ print.mira_info <- function(x,
                             correlations = TRUE,
                             model = TRUE,
                             outliers = TRUE,
+                            trajectories = TRUE,
+                            missingness = TRUE,
+                            plots = TRUE,
                             ...) {
 
-  line <- function(char = "-", n = 76L) cat(strrep(char, n), "\n", sep = "")
+  if (!is.numeric(digits) || length(digits) != 1L || is.na(digits) || digits < 0) {
+    stop("digits deve essere un intero >= 0.", call. = FALSE)
+  }
+  digits <- as.integer(digits)
 
-  fmt_num <- function(z) {
-    ifelse(is.na(z), "NA", formatC(z, format = "f", digits = digits))
+  if (!is.numeric(max_rows) || length(max_rows) != 1L || is.na(max_rows) || max_rows <= 0) {
+    stop("max_rows deve essere > 0 oppure Inf.", call. = FALSE)
+  }
+
+  line <- function(char = "-", n = 84L) cat(strrep(char, n), "\n", sep = "")
+
+  section <- function(title) {
+    cat("\n", title, "\n", sep = "")
+    line()
+  }
+
+  fmt_num <- function(z, d = digits) {
+    ifelse(is.na(z), "NA", formatC(z, format = "f", digits = d))
   }
 
   fmt_pct <- function(z, d = 1L) {
@@ -1317,9 +1334,19 @@ print.mira_info <- function(x,
   }
 
   effect_label <- function(d) {
-    if (is.na(d)) return(NA_character_)
+    if (length(d) == 0L || is.na(d)) return(NA_character_)
     a <- abs(d)
     if (a < 0.20) "negligible" else if (a < 0.50) "small" else if (a < 0.80) "moderate" else "large"
+  }
+
+  limit_table <- function(z, label = "rows") {
+    if (!is.data.frame(z) || nrow(z) == 0L) return(z)
+    if (is.finite(max_rows) && nrow(z) > max_rows) {
+      cat(sprintf("Showing first %d of %d %s. Use print(result, max_rows = Inf) for all.\n",
+                  as.integer(max_rows), nrow(z), label))
+      return(utils::head(z, as.integer(max_rows)))
+    }
+    z
   }
 
   ov <- x$overview
@@ -1329,28 +1356,61 @@ print.mira_info <- function(x,
 
   cat("\n")
   line("=")
-  cat(sprintf("MIRA INFO v%s — %s\n", x$version, ov$outcome_display))
+  cat(sprintf("MIRA INFO v%s — COMPLETE REPORT — %s\n", x$version, ov$outcome_display))
   line("=")
 
-  cat(sprintf("Subjects: %d | Rows: %d | Timepoints: %d | Complete profiles: %s\n",
-              ov$n_patients, ov$n_rows, ov$n_timepoints, fmt_pct(ov$complete_profiles_pct)))
-  cat(sprintf("ID: %s | Duplicates: %d | Missing IDs: %d | Non-finite values: %d\n",
-              ov$id, ov$duplicated_ids, ov$missing_ids, ov$non_finite_values))
-  cat(sprintf("Improvement direction: %s | Stable threshold: %s | p-adjust: %s\n",
-              x$settings$improvement_direction,
-              fmt_num(x$settings$stable_threshold),
-              x$settings$p_adjust_method))
+  # ------------------------------------------------------------------
+  # ANALYSIS SETTINGS
+  # ------------------------------------------------------------------
+  section("ANALYSIS SETTINGS")
+  cat(sprintf("Outcome: %s | ID variable: %s\n", ov$outcome_display, ov$id))
+  cat(sprintf("Confidence level: %s | alpha: %s | p-adjust: %s\n",
+              conf_label, fmt_num(x$settings$alpha), x$settings$p_adjust_method))
+  cat(sprintf("Improvement direction: %s | Stable threshold: %s\n",
+              x$settings$improvement_direction, fmt_num(x$settings$stable_threshold)))
+  cat(sprintf("Strict ID checks: %s | Non-finite handling: %s\n",
+              as.character(x$settings$strict_id), x$settings$non_finite_handling))
 
-  cat("\nDESCRIPTIVES\n")
-  line()
+  # ------------------------------------------------------------------
+  # DATASET OVERVIEW
+  # ------------------------------------------------------------------
+  section("DATASET OVERVIEW")
+  cat(sprintf("Subjects: %d | Rows: %d | Timepoints: %d\n",
+              ov$n_patients, ov$n_rows, ov$n_timepoints))
+  cat(sprintf("Complete profiles: %d/%d (%s)\n",
+              ov$complete_profiles, ov$n_rows, fmt_pct(ov$complete_profiles_pct)))
+  cat(sprintf("Duplicated IDs: %d | Missing IDs: %d | Non-finite values: %d\n",
+              ov$duplicated_ids, ov$missing_ids, ov$non_finite_values))
+
+  tp <- data.frame(
+    Variable = ov$timepoints,
+    Label = unname(ov$time_labels[ov$timepoints]),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  cat("\nTimepoint map:\n")
+  print(tp, row.names = FALSE)
+
+  # ------------------------------------------------------------------
+  # DESCRIPTIVES
+  # ------------------------------------------------------------------
+  section("DESCRIPTIVE STATISTICS")
   desc_print <- data.frame(
     Time = d$label,
     N = d$n,
+    Missing = paste0(d$missing, " (", round(d$missing_pct, 1), "%)"),
+    Non_finite = paste0(d$non_finite, " (", round(d$non_finite_pct, 1), "%)"),
     Unavailable = paste0(d$unavailable, " (", round(d$unavailable_pct, 1), "%)"),
     Mean = round(d$mean, digits),
     SD = round(d$sd, digits),
+    SE = round(d$se, digits),
     Median = round(d$median, digits),
+    Q1 = round(d$q1, digits),
+    Q3 = round(d$q3, digits),
     IQR = round(d$iqr, digits),
+    Min = round(d$min, digits),
+    Max = round(d$max, digits),
+    CV_pct = round(d$cv_percent, 1L),
     CI_low = round(d$ci_lower, digits),
     CI_high = round(d$ci_upper, digits),
     check.names = FALSE
@@ -1358,10 +1418,54 @@ print.mira_info <- function(x,
   print(desc_print, row.names = FALSE)
   cat(sprintf("Confidence intervals above: %s\n", conf_label))
 
-  cat("\nLONGITUDINAL CHANGE\n")
-  line()
+  # ------------------------------------------------------------------
+  # MISSINGNESS
+  # ------------------------------------------------------------------
+  if (missingness && !is.null(x$missing)) {
+    section("MISSINGNESS / DATA AVAILABILITY")
 
-  if (nrow(x$change) == 0L) {
+    if (!is.null(x$missing$by_time) && nrow(x$missing$by_time) > 0L) {
+      mbt <- x$missing$by_time
+      mbt_print <- data.frame(
+        Time = mbt$label,
+        Missing_n = mbt$missing_n,
+        Missing_pct = round(mbt$missing_pct, 1L),
+        Non_finite_n = mbt$non_finite_n,
+        Non_finite_pct = round(mbt$non_finite_pct, 1L),
+        Unavailable_n = mbt$unavailable_n,
+        Unavailable_pct = round(mbt$unavailable_pct, 1L),
+        check.names = FALSE
+      )
+      cat("By timepoint:\n")
+      print(mbt_print, row.names = FALSE)
+    }
+
+    if (!is.null(x$missing$by_patient) && nrow(x$missing$by_patient) > 0L) {
+      mbp <- x$missing$by_patient
+      affected <- mbp[mbp$unavailable_n > 0L | mbp$missing_n > 0L | mbp$non_finite_n > 0L, , drop = FALSE]
+      cat(sprintf("\nSubjects with >=1 unavailable longitudinal value: %d/%d (%s)\n",
+                  sum(mbp$unavailable_n > 0L), nrow(mbp),
+                  fmt_pct(mean(mbp$unavailable_n > 0L) * 100)))
+      cat(sprintf("Total unavailable cells: %d of %d (%s)\n",
+                  sum(mbp$unavailable_n), nrow(mbp) * ov$n_timepoints,
+                  fmt_pct(sum(mbp$unavailable_n) / (nrow(mbp) * ov$n_timepoints) * 100)))
+
+      if (nrow(affected) == 0L) {
+        cat("No subjects have missing or non-finite longitudinal values.\n")
+      } else {
+        cat("\nAffected subjects:\n")
+        affected <- limit_table(affected, "affected subjects")
+        print(affected, row.names = FALSE)
+      }
+    }
+  }
+
+  # ------------------------------------------------------------------
+  # LONGITUDINAL CHANGE
+  # ------------------------------------------------------------------
+  section("LONGITUDINAL CHANGE")
+
+  if (is.null(x$change) || nrow(x$change) == 0L) {
     cat("No longitudinal comparisons available.\n")
   } else {
     ch <- x$change
@@ -1376,16 +1480,20 @@ print.mira_info <- function(x,
       bf <- baseline_final[1L, ]
       cat(sprintf("Baseline -> Final: %s -> %s (N=%d)\n",
                   bf$from_label, bf$to_label, bf$n))
-      cat(sprintf("Mean change: %s | %s: [%s, %s] | Cohen dz: %s (%s)\n",
-                  fmt_num(bf$mean_change), conf_label,
-                  fmt_num(bf$ci_lower), fmt_num(bf$ci_upper),
+      cat(sprintf("Mean: %s -> %s | Mean change: %s | SD change: %s | SE change: %s\n",
+                  fmt_num(bf$mean_from), fmt_num(bf$mean_to), fmt_num(bf$mean_change),
+                  fmt_num(bf$sd_change), fmt_num(bf$se_change)))
+      cat(sprintf("%s: [%s, %s] | Cohen dz: %s (%s)\n",
+                  conf_label, fmt_num(bf$ci_lower), fmt_num(bf$ci_upper),
                   fmt_num(bf$cohens_dz), effect_label(bf$cohens_dz)))
       cat(sprintf("Increase / decrease / stable: %s / %s / %s\n",
                   fmt_pct(bf$increased_pct), fmt_pct(bf$decreased_pct), fmt_pct(bf$stable_pct)))
 
       if (x$settings$improvement_direction != "unknown") {
-        cat(sprintf("Improved / worsened: %s / %s\n",
-                    fmt_pct(bf$improved_pct), fmt_pct(bf$worsened_pct)))
+        cat(sprintf("Improved / worsened / stable: %s / %s / %s\n",
+                    fmt_pct(bf$improved_pct), fmt_pct(bf$worsened_pct), fmt_pct(bf$stable_pct)))
+      } else {
+        cat("Clinical improvement/worsening not classified because improvement_direction='unknown'.\n")
       }
 
       cat(sprintf("Paired t p: %s (adjusted %s) | Wilcoxon p: %s (adjusted %s)\n",
@@ -1397,75 +1505,274 @@ print.mira_info <- function(x,
       From = ch$from_label,
       To = ch$to_label,
       N = ch$n,
+      Mean_from = round(ch$mean_from, digits),
+      Mean_to = round(ch$mean_to, digits),
       Mean_change = round(ch$mean_change, digits),
+      CI_low = round(ch$ci_lower, digits),
+      CI_high = round(ch$ci_upper, digits),
       Cohen_dz = round(ch$cohens_dz, digits),
       Increase_pct = round(ch$increased_pct, 1L),
       Decrease_pct = round(ch$decreased_pct, 1L),
+      Stable_pct = round(ch$stable_pct, 1L),
+      t_p = vapply(ch$paired_t_p, fmt_p, character(1L)),
       t_p_adj = vapply(ch$paired_t_p_adj, fmt_p, character(1L)),
+      Wilcoxon_p = vapply(ch$wilcoxon_p, fmt_p, character(1L)),
       Wilcoxon_p_adj = vapply(ch$wilcoxon_p_adj, fmt_p, character(1L)),
       check.names = FALSE
     )
 
-    if (nrow(pairwise_print) > max_rows) {
-      cat(sprintf("\nShowing first %d of %d pairwise comparisons.\n", max_rows, nrow(pairwise_print)))
-      pairwise_print <- utils::head(pairwise_print, max_rows)
+    if (x$settings$improvement_direction != "unknown") {
+      pairwise_print$Improved_pct <- round(ch$improved_pct, 1L)
+      pairwise_print$Worsened_pct <- round(ch$worsened_pct, 1L)
     }
 
-    cat("\nPAIRWISE COMPARISONS\n")
+    cat("\nALL PAIRWISE COMPARISONS\n")
+    pairwise_print <- limit_table(pairwise_print, "pairwise comparisons")
     print(pairwise_print, row.names = FALSE)
   }
 
-  cat("\nVARIABILITY\n")
-  line()
-  v <- x$variability[1L, ]
-  cat(sprintf("Grand mean: %s | Between-subject SD: %s | Within-subject SD: %s\n",
-              fmt_num(v$grand_mean), fmt_num(v$between_subject_sd), fmt_num(v$within_subject_sd)))
-  cat(sprintf("ICC (preferred available estimate): %s | Model ICC: %s | Complete-profile ANOVA ICC: %s\n",
-              fmt_num(v$ICC), fmt_num(v$ICC_model), fmt_num(v$ICC_anova_complete_profiles)))
+  # ------------------------------------------------------------------
+  # CORRELATIONS
+  # ------------------------------------------------------------------
+  if (correlations) {
+    section("CORRELATIONS")
 
-  if (correlations && !is.null(x$correlations$pearson)) {
-    cat("\nPEARSON CORRELATIONS\n")
-    line()
-    print(round(x$correlations$pearson, digits))
-    cat("Pairwise N:\n")
-    print(x$correlations$pairwise_n)
-  }
+    if (!is.null(x$correlations$pearson)) {
+      cat("Pearson correlation matrix:\n")
+      print(round(x$correlations$pearson, digits))
+    } else {
+      cat("Pearson correlations not available.\n")
+    }
 
-  if (model) {
-    cat("\nMIXED MODEL\n")
-    line()
-    if (!is.null(x$model$error)) {
-      cat("Model not estimated: ", x$model$error, "\n", sep = "")
-    } else if (!is.null(x$model$fitted_model)) {
-      cat(sprintf("Converged: %s | Singular: %s\n",
-                  as.character(x$model$converged), as.character(x$model$singular)))
-      if (length(x$model$warnings) > 0L) {
-        cat("Warnings:\n")
-        cat(paste0("  - ", x$model$warnings, collapse = "\n"), "\n")
-      }
-      if (!is.null(x$model$global_time_test)) {
-        cat("Global time likelihood-ratio test (ML full vs. no-time model):\n")
-        print(x$model$global_time_test)
-      }
-      cat("Full fitted model: result$model$fitted_model\n")
+    if (!is.null(x$correlations$spearman)) {
+      cat("\nSpearman correlation matrix:\n")
+      print(round(x$correlations$spearman, digits))
+    } else {
+      cat("\nSpearman correlations not available.\n")
+    }
+
+    if (!is.null(x$correlations$pairwise_n)) {
+      cat("\nPairwise N matrix:\n")
+      print(x$correlations$pairwise_n)
     }
   }
 
-  if (outliers && !is.null(x$outliers$by_time)) {
-    cat("\nOUTLIER FLAGS\n")
-    line()
-    counts <- vapply(x$outliers$by_time, nrow, integer(1L))
-    cat(sprintf("Timepoint IQR flags: %d total\n", sum(counts)))
-    if (length(counts) > 0L) print(counts)
-    cat("Note: these are diagnostic flags, not automatic exclusion criteria.\n")
+  # ------------------------------------------------------------------
+  # VARIABILITY / ICC
+  # ------------------------------------------------------------------
+  section("WITHIN- / BETWEEN-SUBJECT VARIABILITY")
+  v <- x$variability[1L, ]
+  ratio <- if (is.finite(v$between_subject_sd) && v$between_subject_sd != 0) {
+    v$within_subject_sd / v$between_subject_sd
+  } else {
+    NA_real_
+  }
+  cat(sprintf("Grand mean: %s\n", fmt_num(v$grand_mean)))
+  cat(sprintf("Between-subject SD: %s\n", fmt_num(v$between_subject_sd)))
+  cat(sprintf("Within-subject SD:  %s\n", fmt_num(v$within_subject_sd)))
+  cat(sprintf("Within / Between ratio: %s\n", fmt_num(ratio)))
+  cat(sprintf("ICC (preferred available estimate): %s\n", fmt_num(v$ICC)))
+  cat(sprintf("Model-based ICC: %s\n", fmt_num(v$ICC_model)))
+  cat(sprintf("Complete-profile ANOVA ICC: %s\n", fmt_num(v$ICC_anova_complete_profiles)))
+  if (all(c("ms_between", "ms_within", "df_between", "df_within") %in% names(v))) {
+    cat(sprintf("ANOVA components — MS between: %s | MS within: %s | df: %s / %s\n",
+                fmt_num(v$ms_between), fmt_num(v$ms_within),
+                fmt_num(v$df_between, 0L), fmt_num(v$df_within, 0L)))
   }
 
-  if (!is.null(x$plot_error)) {
-    cat("\nPlot note: ", x$plot_error, "\n", sep = "")
+  # ------------------------------------------------------------------
+  # MIXED MODEL
+  # ------------------------------------------------------------------
+  if (model) {
+    section("MIXED-EFFECTS MODEL")
+
+    if (!is.null(x$model$error)) {
+      cat("Model not estimated: ", x$model$error, "\n", sep = "")
+    } else if (is.null(x$model$fitted_model)) {
+      cat("Mixed model not available.\n")
+    } else {
+      fit <- x$model$fitted_model
+      cat(sprintf("Converged: %s | Singular: %s\n",
+                  as.character(x$model$converged), as.character(x$model$singular)))
+
+      nobs_fit <- tryCatch(stats::nobs(fit), error = function(e) NA_integer_)
+      ll <- tryCatch(as.numeric(stats::logLik(fit)), error = function(e) NA_real_)
+      aic <- tryCatch(stats::AIC(fit), error = function(e) NA_real_)
+      bic <- tryCatch(stats::BIC(fit), error = function(e) NA_real_)
+      cat(sprintf("Observations used: %s | logLik: %s | AIC: %s | BIC: %s\n",
+                  ifelse(is.na(nobs_fit), "NA", as.character(nobs_fit)),
+                  fmt_num(ll), fmt_num(aic), fmt_num(bic)))
+
+      if (length(x$model$warnings) > 0L) {
+        cat("\nModel warnings:\n")
+        cat(paste0("  - ", x$model$warnings, collapse = "\n"), "\n")
+      }
+
+      coef_table <- tryCatch(as.data.frame(coef(summary(fit))), error = function(e) NULL)
+      if (!is.null(coef_table)) {
+        cat("\nFixed effects:\n")
+        coef_table$Term <- rownames(coef_table)
+        rownames(coef_table) <- NULL
+        coef_table <- coef_table[c("Term", setdiff(names(coef_table), "Term"))]
+        numeric_cols <- vapply(coef_table, is.numeric, logical(1L))
+        coef_table[numeric_cols] <- lapply(coef_table[numeric_cols], round, digits = digits)
+        print(coef_table, row.names = FALSE)
+      }
+
+      if (!is.null(x$model$anova)) {
+        cat("\nREML model ANOVA / fixed-effect test:\n")
+        print(x$model$anova)
+      }
+
+      cat("\nFull fitted model object: result$model$fitted_model\n")
+      cat("Full model summary:       result$model$summary\n")
+    }
   }
 
-  cat("\nKey objects: $descriptives, $missing, $change, $correlations, $variability,\n")
-  cat("             $trajectories, $model, $outliers, $plots, $long_data\n")
+  # ------------------------------------------------------------------
+  # GLOBAL TIME TEST
+  # ------------------------------------------------------------------
+  section("GLOBAL TEST OF TIME")
+  if (!is.null(x$model$global_time_test)) {
+    cat("Likelihood-ratio test: ML full model with time vs. random-intercept model without time.\n")
+    print(x$model$global_time_test)
+  } else if (!is.null(x$model$error)) {
+    cat("Global test unavailable because the mixed model was not estimated.\n")
+  } else {
+    cat("Global time test not available.\n")
+  }
+
+  # ------------------------------------------------------------------
+  # OUTLIERS
+  # ------------------------------------------------------------------
+  if (outliers) {
+    section("OUTLIER FLAGS")
+
+    if (is.null(x$outliers$by_time)) {
+      cat("Outlier detection was disabled.\n")
+    } else {
+      counts <- vapply(x$outliers$by_time, nrow, integer(1L))
+      cat(sprintf("Timepoint IQR flags: %d total\n", sum(counts)))
+      if (length(counts) > 0L) print(counts)
+
+      flagged_time <- do.call(rbind, lapply(names(x$outliers$by_time), function(nm) {
+        z <- x$outliers$by_time[[nm]]
+        if (nrow(z) == 0L) return(NULL)
+        z$time <- nm
+        z[, c("time", setdiff(names(z), "time")), drop = FALSE]
+      }))
+
+      if (!is.null(flagged_time) && nrow(flagged_time) > 0L) {
+        cat("\nDetailed timepoint flags:\n")
+        flagged_time <- limit_table(flagged_time, "timepoint outlier flags")
+        print(flagged_time, row.names = FALSE)
+      }
+
+      if (!is.null(x$outliers$change)) {
+        change_counts <- vapply(x$outliers$change, nrow, integer(1L))
+        cat(sprintf("\nChange IQR flags: %d total\n", sum(change_counts)))
+        if (length(change_counts) > 0L) print(change_counts)
+
+        flagged_change <- do.call(rbind, lapply(names(x$outliers$change), function(nm) {
+          z <- x$outliers$change[[nm]]
+          if (nrow(z) == 0L) return(NULL)
+          z$comparison <- nm
+          z[, c("comparison", setdiff(names(z), "comparison")), drop = FALSE]
+        }))
+
+        if (!is.null(flagged_change) && nrow(flagged_change) > 0L) {
+          cat("\nDetailed change flags:\n")
+          flagged_change <- limit_table(flagged_change, "change outlier flags")
+          print(flagged_change, row.names = FALSE)
+        }
+      }
+
+      cat("\nNote: IQR flags are diagnostic flags and are not automatic exclusion criteria.\n")
+    }
+  }
+
+  # ------------------------------------------------------------------
+  # INDIVIDUAL TRAJECTORIES
+  # ------------------------------------------------------------------
+  if (trajectories && !is.null(x$trajectories)) {
+    section("INDIVIDUAL TRAJECTORIES")
+    tr <- x$trajectories
+    finite_change <- tr$absolute_change[is.finite(tr$absolute_change)]
+
+    cat(sprintf("Subjects with baseline-final data: %d/%d (%s)\n",
+                length(finite_change), nrow(tr), fmt_pct(length(finite_change) / nrow(tr) * 100)))
+
+    if (length(finite_change) > 0L) {
+      cat(sprintf("Mean individual change: %s | SD: %s | Median: %s\n",
+                  fmt_num(mean(finite_change)), fmt_num(stats::sd(finite_change)),
+                  fmt_num(stats::median(finite_change))))
+      cat(sprintf("Range: [%s, %s]\n", fmt_num(min(finite_change)), fmt_num(max(finite_change))))
+    }
+
+    direction_tab <- table(tr$direction, useNA = "no")
+    if (length(direction_tab) > 0L) {
+      cat("\nNumeric direction counts:\n")
+      print(direction_tab)
+    }
+
+    if (x$settings$improvement_direction != "unknown") {
+      clinical_tab <- table(tr$clinical_direction, useNA = "no")
+      if (length(clinical_tab) > 0L) {
+        cat("\nClinical direction counts:\n")
+        print(clinical_tab)
+      }
+    }
+
+    tr_print <- tr[c(
+      "patient", "baseline", "final", "absolute_change",
+      "relative_change_percent", "direction", "clinical_direction"
+    )]
+    numeric_cols <- vapply(tr_print, is.numeric, logical(1L))
+    tr_print[numeric_cols] <- lapply(tr_print[numeric_cols], round, digits = digits)
+    cat("\nPatient-level trajectories:\n")
+    tr_print <- limit_table(tr_print, "patient trajectories")
+    print(tr_print, row.names = FALSE)
+  }
+
+  # ------------------------------------------------------------------
+  # PLOTS
+  # ------------------------------------------------------------------
+  if (plots) {
+    section("PLOTS AVAILABLE")
+    if (length(x$plots) == 0L) {
+      cat("No plot objects available.\n")
+    } else {
+      available_plots <- names(x$plots)[vapply(x$plots, function(z) !is.null(z), logical(1L))]
+      if (length(available_plots) == 0L) {
+        cat("No plot objects available.\n")
+      } else {
+        for (nm in available_plots) {
+          cat(sprintf("  %-12s -> plot(result, which = \"%s\")  /  result$plots$%s\n", nm, nm, nm))
+        }
+      }
+    }
+    if (!is.null(x$plot_error)) cat("Plot note: ", x$plot_error, "\n", sep = "")
+  }
+
+  # ------------------------------------------------------------------
+  # COMPLETE OUTPUT GUIDE
+  # ------------------------------------------------------------------
+  section("COMPLETE OUTPUT GUIDE")
+  cat(sprintf("  $outcome        Detected outcome (%s)\n", ov$outcome_display))
+  cat("  $overview       Dataset structure, IDs, completeness and timepoints\n")
+  cat("  $settings       Confidence level, p-adjustment and clinical direction settings\n")
+  cat("  $descriptives   Detailed statistics for every timepoint\n")
+  cat("  $missing        Missing/non-finite/unavailable data by timepoint and subject\n")
+  cat("  $change         All longitudinal pairwise comparisons and adjusted tests\n")
+  cat("  $correlations   Pearson, Spearman and pairwise sample-size matrices\n")
+  cat("  $variability    Within/between-subject variability and ICC estimates\n")
+  cat("  $trajectories   Subject-level baseline-to-final changes and direction\n")
+  cat("  $model          Mixed-effects model, diagnostics, ANOVA and global time test\n")
+  cat("  $outliers       Timepoint and change IQR diagnostic flags\n")
+  cat("  $plots          ggplot objects generated by mira_info()\n")
+  cat("  $long_data      Long-format analysis dataset\n")
+  cat("\nUse names(result) for all top-level components.\n")
+  cat("Use print(result, max_rows = Inf) to print every patient/comparison/flag.\n")
   line("=")
   invisible(x)
 }

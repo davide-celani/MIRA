@@ -228,12 +228,27 @@ fit <- mira_fit(
   prior = prior
 )
 
+
+fit <- mira_fit(
+  stan_data = stan_data,
+  prior = prior,
+  chains = 2,
+  parallel_chains = 2,
+  iter_warmup = 500,
+  iter_sampling = 500,
+  seed = 123,
+  refresh = 100
+)
+
+
+
 summary <- mira_summary(
   fit,
   stan_data = stan_data
 )
 
-summary
+summary$population_time_means
+summary$change_from_baseline
 
 
 

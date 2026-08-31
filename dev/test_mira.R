@@ -228,6 +228,8 @@ summary <- mira_summary(
 )
 
 
+summary$population_time_means
+summary$population_change
 # ------------------------------------------------------------
 # 6. Verifica il fit
 # ------------------------------------------------------------
@@ -235,16 +237,6 @@ summary <- mira_summary(
 
 print(class(fit))
 
-
-# ------------------------------------------------------------
-# 7. Posterior summary
-# ------------------------------------------------------------
-
-summary_mira <- mira_summary(
-  fit = fit,
-  meaningful_change = stan_data$meaningful_change,
-  y = stan_data$y
-)
 
 
 

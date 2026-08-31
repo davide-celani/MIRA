@@ -20,6 +20,9 @@
 #' @param iter_sampling Number of sampling iterations.
 #' @param seed Random seed.
 #' @param refresh Number of iterations between progress messages.
+#' @param verbose Logical. If TRUE (default), print a compact MIRA fit report
+#'   automatically after successful sampling. The fitted CmdStanMCMC object is
+#'   still returned invisibly and can be assigned normally.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
 #'   looks for `inst/stan/gaussian_longitudinal_gender_age.stan`, then the
 #'   legacy MIRA Stan filenames for backwards compatibility.
@@ -36,7 +39,8 @@ mira_fit <- function(
     iter_sampling = 3000,
     seed = 123,
     refresh = 100,
-    stan_file = NULL
+    stan_file = NULL,
+    verbose = TRUE
 ) {
 
   # ------------------------------------------------------------
@@ -356,9 +360,15 @@ mira_fit <- function(
 
   message("Compiling MIRA Stan model: ", basename(stan_file))
 
+  compile_started <- Sys.time()
+
   model <- cmdstanr::cmdstan_model(
     stan_file,
     quiet = TRUE
+  )
+
+  compile_elapsed_seconds <- as.numeric(
+    difftime(Sys.time(), compile_started, units = "secs")
   )
 
   # ------------------------------------------------------------
@@ -440,6 +450,8 @@ mira_fit <- function(
 
   message("Sampling posterior...")
 
+  sampling_started <- Sys.time()
+
   fit <- model$sample(
     data = sampling_data,
     chains = chains,
@@ -451,5 +463,495 @@ mira_fit <- function(
     refresh = refresh
   )
 
-  return(fit)
+  sampling_elapsed_seconds <- as.numeric(
+    difftime(Sys.time(), sampling_started, units = "secs")
+  )
+
+  # ------------------------------------------------------------
+  # Attach lightweight MIRA metadata to the CmdStanMCMC object.
+  #
+  # The object remains a CmdStanMCMC object, so existing code such as
+  # mira_summary(fit, ...) and all CmdStanR $methods continue to work.
+  # ------------------------------------------------------------
+
+  arm_labels <- if (!is.null(stan_data$arm_labels) &&
+                    length(stan_data$arm_labels) == stan_data$G) {
+    as.character(stan_data$arm_labels)
+  } else {
+    paste0("arm_", seq_len(stan_data$G))
+  }
+
+  arm_counts <- table(
+    factor(
+      stan_data$arm,
+      levels = seq_len(stan_data$G),
+      labels = arm_labels
+    )
+  )
+
+  gender_counts <- c(
+    Female = sum(stan_data$male == 0L),
+    Male = sum(stan_data$male == 1L)
+  )
+
+  age_threshold <- if (!is.null(stan_data$age_threshold)) {
+    as.numeric(stan_data$age_threshold)[1]
+  } else {
+    NA_real_
+  }
+
+  age_counts <- c(
+    at_or_below_threshold = sum(stan_data$age_above_threshold == 0L),
+    above_threshold = sum(stan_data$age_above_threshold == 1L)
+  )
+
+  prior_profile <- if (!is.null(prior) && !is.null(prior$profile)) {
+    as.character(prior$profile)[1]
+  } else if (all(prior_names %in% names(stan_data))) {
+    "embedded in stan_data"
+  } else {
+    "named/custom prior list"
+  }
+
+  mira_fit_info <- list(
+    model_file = basename(stan_file),
+    model_path = tryCatch(
+      normalizePath(stan_file, winslash = "/", mustWork = FALSE),
+      error = function(e) stan_file
+    ),
+    n_observations = as.integer(stan_data$N),
+    n_subjects = as.integer(stan_data$S),
+    n_time_points = as.integer(stan_data$K),
+    n_arms = as.integer(stan_data$G),
+    arm_labels = arm_labels,
+    arm_counts = arm_counts,
+    gender_counts = gender_counts,
+    age_threshold = age_threshold,
+    age_counts = age_counts,
+    time_value = as.numeric(stan_data$time_value),
+    direction = as.integer(stan_data$direction),
+    direction_interpretation = if (stan_data$direction == 1L) {
+      "higher outcome = better"
+    } else {
+      "lower outcome = better"
+    },
+    mcid_prior_mean = as.numeric(stan_data$mcid_prior_mean),
+    mcid_prior_sd = as.numeric(stan_data$mcid_prior_sd),
+    meaningful_between_arm_difference =
+      as.numeric(stan_data$meaningful_between_arm_difference),
+    prior_profile = prior_profile,
+    chains = as.integer(chains),
+    parallel_chains = as.integer(parallel_chains),
+    iter_warmup = as.integer(iter_warmup),
+    iter_sampling = as.integer(iter_sampling),
+    post_warmup_draws = as.integer(chains * iter_sampling),
+    seed = as.integer(seed),
+    compile_elapsed_seconds = compile_elapsed_seconds,
+    sampling_elapsed_seconds = sampling_elapsed_seconds
+  )
+
+  attr(fit, "mira_fit_info") <- mira_fit_info
+  class(fit) <- unique(c("mira_fit", class(fit)))
+
+  if (isTRUE(verbose)) {
+    print(fit)
+  }
+
+  invisible(fit)
+}
+
+
+#' Print a fitted MIRA model
+#'
+#' Compact technical report for a fitted MIRA CmdStanMCMC object. The report
+#' focuses on model setup, sampling quality and core posterior parameters.
+#' Detailed clinical estimands are intentionally left to [mira_summary()].
+#'
+#' @param x A fitted object returned by [mira_fit()].
+#' @param digits Number of digits used for numeric output.
+#' @param parameters Logical; print core posterior parameter summaries.
+#' @param diagnostics Logical; print MCMC diagnostics.
+#' @param guide Logical; print a guide to useful CmdStanR methods and the next
+#'   MIRA analysis step.
+#' @param ... Additional arguments (currently ignored).
+#'
+#' @return Invisibly returns `x`.
+#'
+#' @export
+print.mira_fit <- function(
+    x,
+    digits = 3,
+    parameters = TRUE,
+    diagnostics = TRUE,
+    guide = TRUE,
+    ...
+) {
+
+  if (!inherits(x, "CmdStanMCMC")) {
+    stop("`x` must inherit from CmdStanMCMC.", call. = FALSE)
+  }
+
+  if (!is.numeric(digits) || length(digits) != 1L ||
+      is.na(digits) || digits < 0) {
+    stop("`digits` must be one integer >= 0.", call. = FALSE)
+  }
+
+  digits <- as.integer(digits)
+
+  info <- attr(x, "mira_fit_info")
+
+  if (is.null(info)) {
+    info <- list()
+  }
+
+  line <- function(char = "-", n = 92L) {
+    cat(strrep(char, n), "\n", sep = "")
+  }
+
+  section <- function(title) {
+    cat("\n", title, "\n", sep = "")
+    line()
+  }
+
+  fmt_num <- function(z, d = digits) {
+    if (length(z) == 0L || is.na(z) || !is.finite(z)) {
+      return("NA")
+    }
+    formatC(z, format = "f", digits = d)
+  }
+
+  fmt_time <- function(seconds) {
+    if (length(seconds) == 0L || is.na(seconds) || !is.finite(seconds)) {
+      return("NA")
+    }
+    if (seconds < 60) {
+      return(sprintf("%.1f sec", seconds))
+    }
+    if (seconds < 3600) {
+      return(sprintf("%.1f min", seconds / 60))
+    }
+    sprintf("%.2f h", seconds / 3600)
+  }
+
+  fmt_flag <- function(ok) {
+    if (length(ok) == 0L || is.na(ok)) return("UNKNOWN")
+    if (isTRUE(ok)) "OK" else "CHECK"
+  }
+
+  safe_metadata <- tryCatch(x$metadata(), error = function(e) NULL)
+
+  # ============================================================
+  # HEADER
+  # ============================================================
+
+  cat("\n")
+  line("=")
+  cat("MIRA BAYESIAN LONGITUDINAL MODEL - FIT REPORT\n")
+  line("=")
+
+  # ============================================================
+  # MODEL / DATA
+  # ============================================================
+
+  section("MODEL AND DATA")
+
+  if (!is.null(info$model_file)) {
+    cat(sprintf("Stan model: %s\n", info$model_file))
+  }
+
+  if (!is.null(info$n_subjects)) {
+    cat(sprintf(
+      "Subjects: %d | Observations: %d | Timepoints: %d | Arms: %d\n",
+      info$n_subjects,
+      info$n_observations,
+      info$n_time_points,
+      info$n_arms
+    ))
+  }
+
+  if (!is.null(info$time_value)) {
+    cat("Time values: ", paste(info$time_value, collapse = ", "), "\n", sep = "")
+  }
+
+  if (!is.null(info$direction_interpretation)) {
+    cat("Clinical direction: ", info$direction_interpretation, "\n", sep = "")
+  }
+
+  if (!is.null(info$prior_profile)) {
+    cat("Prior profile: ", info$prior_profile, "\n", sep = "")
+  }
+
+  if (!is.null(info$mcid_prior_mean)) {
+    cat(sprintf(
+      "MCID prior: mean %s | SD %s | Between-arm meaningful threshold: %s\n",
+      fmt_num(info$mcid_prior_mean),
+      fmt_num(info$mcid_prior_sd),
+      fmt_num(info$meaningful_between_arm_difference)
+    ))
+  }
+
+  if (!is.null(info$arm_counts)) {
+    cat("\nSubjects by treatment arm:\n")
+    print(info$arm_counts)
+  }
+
+  if (!is.null(info$gender_counts)) {
+    cat("\nSubjects by gender (Female reference):\n")
+    print(info$gender_counts)
+  }
+
+  if (!is.null(info$age_counts)) {
+    if (!is.null(info$age_threshold) && is.finite(info$age_threshold)) {
+      names(info$age_counts) <- c(
+        paste0("age <= ", info$age_threshold),
+        paste0("age > ", info$age_threshold)
+      )
+    }
+    cat("\nSubjects by age-threshold group:\n")
+    print(info$age_counts)
+  }
+
+  # ============================================================
+  # SAMPLING
+  # ============================================================
+
+  section("SAMPLING")
+
+  if (!is.null(info$chains)) {
+    cat(sprintf(
+      "Chains: %d | Parallel chains: %d | Warmup: %d | Sampling: %d per chain\n",
+      info$chains,
+      info$parallel_chains,
+      info$iter_warmup,
+      info$iter_sampling
+    ))
+    cat(sprintf(
+      "Post-warmup draws: %d | Seed: %d\n",
+      info$post_warmup_draws,
+      info$seed
+    ))
+    cat(sprintf(
+      "Compilation: %s | Sampling: %s\n",
+      fmt_time(info$compile_elapsed_seconds),
+      fmt_time(info$sampling_elapsed_seconds)
+    ))
+  } else if (!is.null(safe_metadata)) {
+    cat("CmdStanR metadata are available via fit$metadata().\n")
+  }
+
+  # ============================================================
+  # DIAGNOSTICS
+  # ============================================================
+
+  if (isTRUE(diagnostics)) {
+    section("MCMC DIAGNOSTICS")
+
+    diagnostic_table <- tryCatch(
+      x$diagnostic_summary(),
+      error = function(e) NULL
+    )
+
+    divergences <- NA_real_
+    treedepth_hits <- NA_real_
+    min_ebfmi <- NA_real_
+
+    if (!is.null(diagnostic_table)) {
+      diagnostic_df <- as.data.frame(diagnostic_table)
+      nm <- names(diagnostic_df)
+
+      div_col <- grep("diverg", nm, ignore.case = TRUE, value = TRUE)[1]
+      tree_col <- grep("treedepth", nm, ignore.case = TRUE, value = TRUE)[1]
+      ebfmi_col <- grep("ebfmi|bfmi", nm, ignore.case = TRUE, value = TRUE)[1]
+
+      if (!is.na(div_col) && nzchar(div_col)) {
+        divergences <- sum(diagnostic_df[[div_col]], na.rm = TRUE)
+      }
+
+      if (!is.na(tree_col) && nzchar(tree_col)) {
+        treedepth_hits <- sum(diagnostic_df[[tree_col]], na.rm = TRUE)
+      }
+
+      if (!is.na(ebfmi_col) && nzchar(ebfmi_col)) {
+        z <- diagnostic_df[[ebfmi_col]]
+        z <- z[is.finite(z)]
+        if (length(z) > 0L) min_ebfmi <- min(z)
+      }
+    }
+
+    model_param_names <- NULL
+    if (!is.null(safe_metadata) && !is.null(safe_metadata$model_params)) {
+      model_param_names <- safe_metadata$model_params
+    }
+
+    diagnostic_parameter_summary <- tryCatch(
+      {
+        if (!is.null(model_param_names) && length(model_param_names) > 0L) {
+          x$summary(variables = model_param_names)
+        } else {
+          NULL
+        }
+      },
+      error = function(e) NULL
+    )
+
+    max_rhat <- NA_real_
+    min_ess_bulk <- NA_real_
+    min_ess_tail <- NA_real_
+
+    if (!is.null(diagnostic_parameter_summary)) {
+      ds <- as.data.frame(diagnostic_parameter_summary)
+
+      if ("rhat" %in% names(ds)) {
+        z <- ds$rhat[is.finite(ds$rhat)]
+        if (length(z) > 0L) max_rhat <- max(z)
+      }
+
+      if ("ess_bulk" %in% names(ds)) {
+        z <- ds$ess_bulk[is.finite(ds$ess_bulk)]
+        if (length(z) > 0L) min_ess_bulk <- min(z)
+      }
+
+      if ("ess_tail" %in% names(ds)) {
+        z <- ds$ess_tail[is.finite(ds$ess_tail)]
+        if (length(z) > 0L) min_ess_tail <- min(z)
+      }
+    }
+
+    cat(sprintf(
+      "Divergences: %s [%s] | Max-treedepth hits: %s [%s]\n",
+      ifelse(is.finite(divergences), as.character(divergences), "NA"),
+      fmt_flag(if (is.finite(divergences)) divergences == 0 else NA),
+      ifelse(is.finite(treedepth_hits), as.character(treedepth_hits), "NA"),
+      fmt_flag(if (is.finite(treedepth_hits)) treedepth_hits == 0 else NA)
+    ))
+
+    cat(sprintf(
+      "Max R-hat: %s [%s] | Min bulk ESS: %s [%s] | Min tail ESS: %s [%s]\n",
+      fmt_num(max_rhat),
+      fmt_flag(if (is.finite(max_rhat)) max_rhat < 1.01 else NA),
+      fmt_num(min_ess_bulk, 0L),
+      fmt_flag(if (is.finite(min_ess_bulk)) min_ess_bulk >= 400 else NA),
+      fmt_num(min_ess_tail, 0L),
+      fmt_flag(if (is.finite(min_ess_tail)) min_ess_tail >= 400 else NA)
+    ))
+
+    cat(sprintf(
+      "Minimum E-BFMI: %s [%s]\n",
+      fmt_num(min_ebfmi),
+      fmt_flag(if (is.finite(min_ebfmi)) min_ebfmi > 0.30 else NA)
+    ))
+
+    checks <- c(
+      if (is.finite(divergences)) divergences == 0 else NA,
+      if (is.finite(treedepth_hits)) treedepth_hits == 0 else NA,
+      if (is.finite(max_rhat)) max_rhat < 1.01 else NA,
+      if (is.finite(min_ess_bulk)) min_ess_bulk >= 400 else NA,
+      if (is.finite(min_ess_tail)) min_ess_tail >= 400 else NA,
+      if (is.finite(min_ebfmi)) min_ebfmi > 0.30 else NA
+    )
+
+    known_checks <- checks[!is.na(checks)]
+
+    overall <- if (length(known_checks) == 0L) {
+      "DIAGNOSTICS UNAVAILABLE"
+    } else if (all(known_checks)) {
+      "NO OBVIOUS MCMC PROBLEMS DETECTED"
+    } else {
+      "CHECK MCMC DIAGNOSTICS BEFORE INTERPRETATION"
+    }
+
+    cat("Overall: ", overall, "\n", sep = "")
+  }
+
+  # ============================================================
+  # CORE PARAMETERS
+  # ============================================================
+
+  if (isTRUE(parameters)) {
+    section("CORE POSTERIOR PARAMETERS")
+
+    core_candidates <- c(
+      "baseline_mean",
+      "beta_time",
+      "tau_common",
+      "beta_treatment",
+      "tau_treatment",
+      "arm_baseline_sd",
+      "gender_baseline_effect",
+      "beta_gender_time",
+      "tau_gender",
+      "age_baseline_effect",
+      "beta_age_time",
+      "tau_age",
+      "sigma_subject",
+      "sigma",
+      "nu",
+      "mcid"
+    )
+
+    available_core <- core_candidates
+
+    if (!is.null(safe_metadata) && !is.null(safe_metadata$model_params)) {
+      available_core <- intersect(core_candidates, safe_metadata$model_params)
+    }
+
+    core_summary <- tryCatch(
+      x$summary(variables = available_core),
+      error = function(e) NULL
+    )
+
+    if (is.null(core_summary) || nrow(core_summary) == 0L) {
+      cat("Core parameter summary unavailable. Use fit$summary() for the full CmdStanR summary.\n")
+    } else {
+      cs <- as.data.frame(core_summary)
+
+      wanted <- intersect(
+        c(
+          "variable", "mean", "median", "sd",
+          "q5", "q95", "rhat", "ess_bulk", "ess_tail"
+        ),
+        names(cs)
+      )
+
+      cs <- cs[, wanted, drop = FALSE]
+
+      numeric_cols <- vapply(cs, is.numeric, logical(1L))
+      cs[numeric_cols] <- lapply(
+        cs[numeric_cols],
+        function(z) round(z, digits)
+      )
+
+      names(cs)[names(cs) == "q5"] <- "CrI_5%"
+      names(cs)[names(cs) == "q95"] <- "CrI_95%"
+
+      print(cs, row.names = FALSE)
+      cat("Credible interval columns above use CmdStanR's default 5%-95% posterior quantiles.\n")
+    }
+  }
+
+  # ============================================================
+  # GUIDE
+  # ============================================================
+
+  if (isTRUE(guide)) {
+    section("FIT OUTPUT GUIDE")
+
+    cat(
+      "  fit$summary()              Full posterior summary of selected/all variables\n",
+      "  fit$draws()                Posterior draws in posterior package formats\n",
+      "  fit$diagnostic_summary()   Divergences, treedepth and E-BFMI by chain\n",
+      "  fit$cmdstan_diagnose()     Full CmdStan diagnostic report\n",
+      "  fit$metadata()             CmdStan model and sampling metadata\n",
+      "  fit$time()                 CmdStan timing information\n",
+      "  attr(fit, 'mira_fit_info') MIRA data/sampling metadata attached to this fit\n",
+      "\n",
+      "  mira_summary(fit, stan_data = stan_data)\n",
+      "      -> treatment, longitudinal change, gender, age, responder and clinical estimands\n",
+      sep = ""
+    )
+  }
+
+  line("=")
+
+  invisible(x)
 }

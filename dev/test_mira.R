@@ -249,7 +249,7 @@ summary <- mira_summary(
 
 summary$population_time_means
 summary$change_from_baseline
-
+summary$gender$change
 
 
 # ------------------------------------------------------------

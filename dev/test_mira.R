@@ -108,7 +108,7 @@ res$model
 
 stan_data <- mira_prepare_data(
   data = data,
-  time_value = c(0, 1, 2, 3, 4),
+  time_value = c(0, 1, 4, 11, 15),
   meaningful_change = 2,
   meaningful_change_sd = 0.5,
   direction = "lower",
@@ -121,19 +121,16 @@ prior <- mira_prior(
   profile = "default"
 )
 
-fit <- mira_fit(
-  stan_data = stan_data,
-  prior = prior
-)
+
 
 
 fit <- mira_fit(
   stan_data = stan_data,
   prior = prior,
-  chains = 2,
-  parallel_chains = 2,
-  iter_warmup = 500,
-  iter_sampling = 500,
+  chains = 3,
+  parallel_chains = 3,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
   seed = 123,
   refresh = 100
 )

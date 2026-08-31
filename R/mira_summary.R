@@ -20,7 +20,9 @@
 #'
 #' @return A list containing population trajectories, changes, new-subject
 #'   responder estimands, individual summaries, treatment contrasts,
-#'   heterogeneity, posterior predictive checks, log-likelihood information,
+#'   time-specific gender and age-threshold contrasts (with group sizes when
+#'   `stan_data` is supplied), heterogeneity,
+#'   posterior predictive checks, log-likelihood information,
 #'   MCMC diagnostics, model information and raw posterior draws.
 #'
 #' @export
@@ -294,6 +296,57 @@ mira_summary <- function(
     rep(NA_integer_, S)
   }
 
+  subject_male <- if (!is.null(stan_data) &&
+                      "male" %in% names(stan_data) &&
+                      length(stan_data$male) == S) {
+    as.integer(stan_data$male)
+  } else {
+    rep(NA_integer_, S)
+  }
+
+  subject_age_above_threshold <- if (!is.null(stan_data) &&
+                                     "age_above_threshold" %in% names(stan_data) &&
+                                     length(stan_data$age_above_threshold) == S) {
+    as.integer(stan_data$age_above_threshold)
+  } else {
+    rep(NA_integer_, S)
+  }
+
+  gender_labels <- if (!is.null(stan_data) &&
+                       "gender_labels" %in% names(stan_data) &&
+                       length(stan_data$gender_labels) >= 2) {
+    c(
+      reference = as.character(stan_data$gender_labels[[1]]),
+      comparison = as.character(stan_data$gender_labels[[2]])
+    )
+  } else {
+    c(reference = "Female", comparison = "Male")
+  }
+
+  age_threshold <- if (!is.null(stan_data) &&
+                       "age_threshold" %in% names(stan_data) &&
+                       length(stan_data$age_threshold) >= 1) {
+    as.numeric(stan_data$age_threshold)[1]
+  } else {
+    NA_real_
+  }
+
+  age_group_labels <- if (!is.null(stan_data) &&
+                          "age_group_labels" %in% names(stan_data) &&
+                          length(stan_data$age_group_labels) >= 2) {
+    c(
+      reference = as.character(stan_data$age_group_labels[[1]]),
+      comparison = as.character(stan_data$age_group_labels[[2]])
+    )
+  } else if (is.finite(age_threshold)) {
+    c(
+      reference = paste0("<=", age_threshold),
+      comparison = paste0(">", age_threshold)
+    )
+  } else {
+    c(reference = "age_reference", comparison = "age_above_threshold")
+  }
+
   between_arm_threshold <- if (!is.null(stan_data) &&
                                "meaningful_between_arm_difference" %in% names(stan_data)) {
     as.numeric(stan_data$meaningful_between_arm_difference)[1]
@@ -330,6 +383,12 @@ mira_summary <- function(
     "beta_time",
     "tau_common",
     "arm_baseline_sd",
+    "gender_baseline_effect",
+    "beta_gender_time",
+    "tau_gender",
+    "age_baseline_effect",
+    "beta_age_time",
+    "tau_age",
     "sigma",
     "nu",
     "sigma_intercept",
@@ -454,6 +513,170 @@ mira_summary <- function(
   }
 
   # ============================================================
+  # GENDER AND AGE-THRESHOLD DIFFERENCES BY TIME
+  # ============================================================
+
+  add_time_metadata <- function(x) {
+    if (nrow(x) > 0) {
+      x$time_value <- time_value[x$time]
+      x <- x[order(x$time), ]
+    }
+    x
+  }
+
+  add_time_probability <- function(x, prefix, output_name, predicate) {
+    if (nrow(x) == 0) {
+      x[[output_name]] <- numeric(0)
+      return(x)
+    }
+
+    columns <- get_cols(prefix)
+    idx <- parse_indices(columns)
+
+    x[[output_name]] <- vapply(
+      x$time,
+      function(k) {
+        pos <- which(vapply(
+          idx,
+          function(z) length(z) == 1 && z[1] == k,
+          logical(1)
+        ))
+
+        if (length(pos) != 1) return(NA_real_)
+        mean(predicate(as.numeric(draws[[columns[pos]]])), na.rm = TRUE)
+      },
+      numeric(1)
+    )
+
+    x
+  }
+
+  gender_level_difference <- summarize_indexed(
+    "male_vs_female_difference",
+    "time"
+  )
+  gender_change_difference <- summarize_indexed(
+    "male_vs_female_change_difference",
+    "time"
+  )
+  gender_directional_change_difference <- summarize_indexed(
+    "directional_male_vs_female_change_difference",
+    "time"
+  )
+
+  gender_level_difference <- add_time_metadata(gender_level_difference)
+  gender_change_difference <- add_time_metadata(gender_change_difference)
+  gender_directional_change_difference <- add_time_metadata(
+    gender_directional_change_difference
+  )
+
+  if (nrow(gender_level_difference) > 0) {
+    gender_level_difference$comparison_group <- gender_labels[["comparison"]]
+    gender_level_difference$reference_group <- gender_labels[["reference"]]
+    gender_level_difference <- add_time_probability(
+      gender_level_difference,
+      "male_vs_female_difference",
+      "P_comparison_minus_reference_gt_0",
+      function(z) z > 0
+    )
+  }
+
+  if (nrow(gender_change_difference) > 0) {
+    gender_change_difference$comparison_group <- gender_labels[["comparison"]]
+    gender_change_difference$reference_group <- gender_labels[["reference"]]
+    gender_change_difference <- add_time_probability(
+      gender_change_difference,
+      "male_vs_female_change_difference",
+      "P_change_difference_gt_0",
+      function(z) z > 0
+    )
+  }
+
+  if (nrow(gender_directional_change_difference) > 0) {
+    gender_directional_change_difference$comparison_group <-
+      gender_labels[["comparison"]]
+    gender_directional_change_difference$reference_group <-
+      gender_labels[["reference"]]
+    gender_directional_change_difference <- add_time_probability(
+      gender_directional_change_difference,
+      "directional_male_vs_female_change_difference",
+      "P_comparison_has_better_change",
+      function(z) z > 0
+    )
+  }
+
+  age_level_difference <- summarize_indexed(
+    "older_vs_younger_difference",
+    "time"
+  )
+  age_change_difference <- summarize_indexed(
+    "older_vs_younger_change_difference",
+    "time"
+  )
+  age_directional_change_difference <- summarize_indexed(
+    "directional_older_vs_younger_change_difference",
+    "time"
+  )
+
+  age_level_difference <- add_time_metadata(age_level_difference)
+  age_change_difference <- add_time_metadata(age_change_difference)
+  age_directional_change_difference <- add_time_metadata(
+    age_directional_change_difference
+  )
+
+  if (nrow(age_level_difference) > 0) {
+    age_level_difference$comparison_group <- age_group_labels[["comparison"]]
+    age_level_difference$reference_group <- age_group_labels[["reference"]]
+    age_level_difference$age_threshold <- age_threshold
+    age_level_difference <- add_time_probability(
+      age_level_difference,
+      "older_vs_younger_difference",
+      "P_comparison_minus_reference_gt_0",
+      function(z) z > 0
+    )
+  }
+
+  if (nrow(age_change_difference) > 0) {
+    age_change_difference$comparison_group <- age_group_labels[["comparison"]]
+    age_change_difference$reference_group <- age_group_labels[["reference"]]
+    age_change_difference$age_threshold <- age_threshold
+    age_change_difference <- add_time_probability(
+      age_change_difference,
+      "older_vs_younger_change_difference",
+      "P_change_difference_gt_0",
+      function(z) z > 0
+    )
+  }
+
+  if (nrow(age_directional_change_difference) > 0) {
+    age_directional_change_difference$comparison_group <-
+      age_group_labels[["comparison"]]
+    age_directional_change_difference$reference_group <-
+      age_group_labels[["reference"]]
+    age_directional_change_difference$age_threshold <- age_threshold
+    age_directional_change_difference <- add_time_probability(
+      age_directional_change_difference,
+      "directional_older_vs_younger_change_difference",
+      "P_comparison_has_better_change",
+      function(z) z > 0
+    )
+  }
+
+  covariate_effects <- list(
+    gender = list(
+      level_difference = gender_level_difference,
+      change_difference = gender_change_difference,
+      directional_change_difference = gender_directional_change_difference
+    ),
+    age_threshold = list(
+      threshold = age_threshold,
+      level_difference = age_level_difference,
+      change_difference = age_change_difference,
+      directional_change_difference = age_directional_change_difference
+    )
+  )
+
+  # ============================================================
   # NEW-SUBJECT RESPONDER ESTIMANDS
   # ============================================================
 
@@ -493,6 +716,8 @@ mira_summary <- function(
     if (nrow(x) > 0) {
       x$arm_label <- arm_labels[x$arm]
       x$time_value <- time_value[x$time]
+      x$gender_profile <- gender_labels[["reference"]]
+      x$age_group_profile <- age_group_labels[["reference"]]
       x <- x[order(x$arm, x$time), ]
     }
     x
@@ -545,6 +770,26 @@ mira_summary <- function(
         NA_character_,
         arm_labels[x$arm]
       )
+      x$male <- subject_male[x$subject]
+      x$gender_label <- ifelse(
+        is.na(x$male),
+        NA_character_,
+        ifelse(
+          x$male == 1L,
+          gender_labels[["comparison"]],
+          gender_labels[["reference"]]
+        )
+      )
+      x$age_above_threshold <- subject_age_above_threshold[x$subject]
+      x$age_group_label <- ifelse(
+        is.na(x$age_above_threshold),
+        NA_character_,
+        ifelse(
+          x$age_above_threshold == 1L,
+          age_group_labels[["comparison"]],
+          age_group_labels[["reference"]]
+        )
+      )
       x <- x[order(x$subject, x$time), ]
     }
     x
@@ -560,7 +805,10 @@ mira_summary <- function(
 
   if (nrow(individual_responder) > 0) {
     individual_clinical <- individual_responder[
-      , c("time", "subject", "P_MCID", "time_value", "arm", "arm_label"),
+      , c(
+        "time", "subject", "P_MCID", "time_value", "arm", "arm_label",
+        "male", "gender_label", "age_above_threshold", "age_group_label"
+      ),
       drop = FALSE
     ]
 
@@ -736,7 +984,9 @@ mira_summary <- function(
     "sigma_slope",
     "rho_subject",
     "arm_baseline_sd",
-    "tau_common"
+    "tau_common",
+    "tau_gender",
+    "tau_age"
   )
 
   heterogeneity_parameters <- heterogeneity_parameters[
@@ -778,6 +1028,8 @@ mira_summary <- function(
       arm_label = final_change$arm_label,
       final_time = K,
       final_time_value = time_value[K],
+      gender_profile = gender_labels[["reference"]],
+      age_group_profile = age_group_labels[["reference"]],
       final_population_change_mean = final_change$mean,
       P_final_improvement = final_change$P_improvement,
       P_final_responder = final_change$P_responder,
@@ -902,6 +1154,33 @@ mira_summary <- function(
   # MODEL INFORMATION
   # ============================================================
 
+  gender_counts <- if (all(!is.na(subject_male))) {
+    stats::setNames(
+      c(sum(subject_male == 0L), sum(subject_male == 1L)),
+      c(gender_labels[["reference"]], gender_labels[["comparison"]])
+    )
+  } else {
+    stats::setNames(
+      c(NA_integer_, NA_integer_),
+      c(gender_labels[["reference"]], gender_labels[["comparison"]])
+    )
+  }
+
+  age_group_counts <- if (all(!is.na(subject_age_above_threshold))) {
+    stats::setNames(
+      c(
+        sum(subject_age_above_threshold == 0L),
+        sum(subject_age_above_threshold == 1L)
+      ),
+      c(age_group_labels[["reference"]], age_group_labels[["comparison"]])
+    )
+  } else {
+    stats::setNames(
+      c(NA_integer_, NA_integer_),
+      c(age_group_labels[["reference"]], age_group_labels[["comparison"]])
+    )
+  }
+
   model_information <- list(
     n_observations = N,
     n_subjects = S,
@@ -910,6 +1189,20 @@ mira_summary <- function(
     arm_labels = arm_labels,
     reference_arm = 1L,
     reference_label = arm_labels[1],
+    gender_labels = gender_labels,
+    gender_reference = gender_labels[["reference"]],
+    gender_comparison = gender_labels[["comparison"]],
+    gender_counts = gender_counts,
+    age_threshold = age_threshold,
+    age_group_labels = age_group_labels,
+    age_reference = age_group_labels[["reference"]],
+    age_comparison = age_group_labels[["comparison"]],
+    age_group_counts = age_group_counts,
+    population_reference_profile = paste0(
+      gender_labels[["reference"]],
+      ", age ",
+      age_group_labels[["reference"]]
+    ),
     time_value = time_value,
     direction = direction,
     direction_interpretation = if (is.na(direction)) {
@@ -931,6 +1224,18 @@ mira_summary <- function(
       NA_real_
     },
     meaningful_between_arm_difference = between_arm_threshold,
+    covariate_prior_structure = list(
+      gender = c(
+        "gender_baseline_prior_sd",
+        "beta_gender_prior_sd",
+        "tau_gender_prior_rate"
+      ),
+      age_threshold = c(
+        "age_baseline_prior_sd",
+        "beta_age_prior_sd",
+        "tau_age_prior_rate"
+      )
+    ),
     credible_level = credible_level,
     responder_thresholds = responder_thresholds,
     observed_mean = if (!is.null(y)) mean(y) else NA_real_,
@@ -948,6 +1253,16 @@ mira_summary <- function(
       get_cols("population_change_from_baseline"),
       get_cols("directional_population_change"),
       get_cols("standardized_population_change")
+    ),
+    covariates = c(
+      get_cols("gender_effect"),
+      get_cols("age_threshold_effect"),
+      get_cols("male_vs_female_difference"),
+      get_cols("male_vs_female_change_difference"),
+      get_cols("directional_male_vs_female_change_difference"),
+      get_cols("older_vs_younger_difference"),
+      get_cols("older_vs_younger_change_difference"),
+      get_cols("directional_older_vs_younger_change_difference")
     ),
     new_subject = c(
       get_cols("latent_new_subject_any_improvement_prob"),
@@ -993,6 +1308,11 @@ mira_summary <- function(
     population_change = population_change,
     population_directional_change = directional_population_change,
     population_standardized_change = population_standardized_change,
+
+    # Time-specific adjusted gender and age-threshold contrasts
+    covariate_effects = covariate_effects,
+    gender_effects = covariate_effects$gender,
+    age_threshold_effects = covariate_effects$age_threshold,
 
     # Kept for backwards-compatible list structure; these estimands are
     # not explicitly generated by the new Stan model.

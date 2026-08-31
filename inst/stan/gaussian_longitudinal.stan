@@ -15,6 +15,13 @@ data {
   array[N] int<lower=1, upper=K> time;
   array[S] int<lower=1, upper=G> arm;
 
+  // Subject-level covariates.
+  // male = 0: Female (reference), 1: Male.
+  // age_above_threshold = 0: age <= threshold (reference),
+  //                       1: age > threshold.
+  array[S] int<lower=0, upper=1> male;
+  array[S] int<lower=0, upper=1> age_above_threshold;
+
   // Strictly increasing actual times, e.g. 0, 3, 5, 12
   vector[K] time_value;
 
@@ -110,6 +117,25 @@ parameters {
   real<lower=0> arm_baseline_sd;
 
   // ============================================================
+  // GENDER-BY-TIME TRAJECTORY: MALE - FEMALE
+  // ============================================================
+  // Female is the reference category. The effect is allowed to
+  // vary smoothly over time using the same continuous-time RW1
+  // structure as the population/treatment trajectories.
+  real gender_baseline_effect;
+  real beta_gender_time;
+  vector[K - 1] z_gender_step;
+  real<lower=0> tau_gender;
+
+  // ============================================================
+  // AGE-GROUP-BY-TIME TRAJECTORY: ABOVE vs BELOW/EQUAL THRESHOLD
+  // ============================================================
+  real age_baseline_effect;
+  real beta_age_time;
+  vector[K - 1] z_age_step;
+  real<lower=0> tau_age;
+
+  // ============================================================
   // SUBJECT RANDOM INTERCEPT + RANDOM SLOPE
   // ============================================================
   matrix[2, S] z_subject;
@@ -132,6 +158,8 @@ transformed parameters {
   vector[K] mu_reference;
   matrix[G - 1, K] treatment_change;
   vector[G - 1] arm_baseline_offset;
+  vector[K] gender_effect;
+  vector[K] age_threshold_effect;
   matrix[2, S] b_subject;
 
   // ------------------------------------------------------------
@@ -163,6 +191,30 @@ transformed parameters {
   }
 
   arm_baseline_offset = arm_baseline_sd * z_arm_baseline;
+
+  // ------------------------------------------------------------
+  // Male - Female trajectory.
+  // ------------------------------------------------------------
+  gender_effect[1] = gender_baseline_effect;
+
+  for (k in 2:K) {
+    gender_effect[k] =
+      gender_effect[k - 1]
+      + beta_gender_time * dt[k - 1]
+      + tau_gender * sqrt(dt[k - 1]) * z_gender_step[k - 1];
+  }
+
+  // ------------------------------------------------------------
+  // Age > threshold - age <= threshold trajectory.
+  // ------------------------------------------------------------
+  age_threshold_effect[1] = age_baseline_effect;
+
+  for (k in 2:K) {
+    age_threshold_effect[k] =
+      age_threshold_effect[k - 1]
+      + beta_age_time * dt[k - 1]
+      + tau_age * sqrt(dt[k - 1]) * z_age_step[k - 1];
+  }
 
   // ------------------------------------------------------------
   // Correlated subject random effects, non-centered.
@@ -197,6 +249,21 @@ model {
   arm_baseline_sd ~ exponential(arm_baseline_sd_prior_rate);
 
   // ============================================================
+  // PRIORS: GENDER- AND AGE-BY-TIME EFFECTS
+  // ============================================================
+  // Reuse existing population/treatment prior scales to avoid
+  // requiring new prior inputs from the fitting wrapper.
+  gender_baseline_effect ~ normal(0, baseline_prior_sd);
+  beta_gender_time ~ normal(0, beta_treatment_prior_sd);
+  z_gender_step ~ std_normal();
+  tau_gender ~ exponential(tau_treatment_prior_rate);
+
+  age_baseline_effect ~ normal(0, baseline_prior_sd);
+  beta_age_time ~ normal(0, beta_treatment_prior_sd);
+  z_age_step ~ std_normal();
+  tau_age ~ exponential(tau_treatment_prior_rate);
+
+  // ============================================================
   // PRIORS: SUBJECT RANDOM EFFECTS
   // ============================================================
   to_vector(z_subject) ~ std_normal();
@@ -228,6 +295,10 @@ model {
         + treatment_change[g - 1, k];
     }
 
+    population_mu +=
+      male[s] * gender_effect[k]
+      + age_above_threshold[s] * age_threshold_effect[k];
+
     mu[i] =
       population_mu
       + b_subject[1, s]
@@ -256,6 +327,19 @@ generated quantities {
   matrix[G, K] population_change_from_baseline;
   matrix[G, K] directional_population_change;
   matrix[G, K] standardized_population_change;
+
+  // ============================================================
+  // COVARIATE DIFFERENCES BY TIME
+  // ============================================================
+  // Raw mean differences at each time, adjusted for treatment and
+  // the other additive covariate. Because no treatment interaction
+  // is included, these contrasts are common to all treatment arms.
+  vector[K] male_vs_female_difference;
+  vector[K] male_vs_female_change_difference;
+  vector[K] older_vs_younger_difference;
+  vector[K] older_vs_younger_change_difference;
+  vector[K] directional_male_vs_female_change_difference;
+  vector[K] directional_older_vs_younger_change_difference;
 
   // ============================================================
   // RESPONDER ESTIMANDS FOR A NEW SUBJECT
@@ -297,7 +381,28 @@ generated quantities {
   vector[N] y_rep;
 
   // ------------------------------------------------------------
+  // Covariate contrasts by time.
+  // ------------------------------------------------------------
+  for (k in 1:K) {
+    male_vs_female_difference[k] = gender_effect[k];
+    male_vs_female_change_difference[k] =
+      gender_effect[k] - gender_effect[1];
+
+    older_vs_younger_difference[k] = age_threshold_effect[k];
+    older_vs_younger_change_difference[k] =
+      age_threshold_effect[k] - age_threshold_effect[1];
+
+    directional_male_vs_female_change_difference[k] =
+      direction * male_vs_female_change_difference[k];
+
+    directional_older_vs_younger_change_difference[k] =
+      direction * older_vs_younger_change_difference[k];
+  }
+
+  // ------------------------------------------------------------
   // Population means and changes by arm.
+  // These correspond to the covariate reference profile:
+  // Female and age <= threshold.
   // ------------------------------------------------------------
   for (g in 1:G) {
     real baseline_offset = 0;
@@ -393,6 +498,9 @@ generated quantities {
       real elapsed = time_value[k] - time_value[1];
       real latent_change =
         population_change_from_baseline[g, k]
+        + male[s] * (gender_effect[k] - gender_effect[1])
+        + age_above_threshold[s]
+          * (age_threshold_effect[k] - age_threshold_effect[1])
         + b_subject[2, s] * elapsed;
       real dchange = direction * latent_change;
 
@@ -447,6 +555,10 @@ generated quantities {
         arm_baseline_offset[g - 1]
         + treatment_change[g - 1, k];
     }
+
+    population_mu +=
+      male[s] * gender_effect[k]
+      + age_above_threshold[s] * age_threshold_effect[k];
 
     mu_i =
       population_mu

@@ -28,10 +28,19 @@
 #' @param arm_column Name of the treatment-arm column in `data`.
 #' @param reference_arm Value identifying the reference arm. If NULL, the
 #'   first observed arm is used and a warning is emitted.
+#' @param gender_column Name of the sex/gender column in `data`.
+#' @param female_label Value identifying the Female reference category.
+#' @param male_label Value identifying the Male category. The Stan model
+#'   estimates the Male - Female difference at each measurement occasion.
+#' @param age_column Name of the age column in `data`.
+#' @param age_threshold Numeric age threshold used to define two groups.
+#'   Subjects with age > `age_threshold` are coded as the older group;
+#'   subjects with age <= `age_threshold` are the reference group.
 #'
 #' @return A named list containing the variables required by the MIRA Stan
 #'   model plus R-side metadata (`mean_y`, `sd_y`, `arm_labels`,
-#'   `outcome_name`, `measurement_columns`).
+#'   `outcome_name`, `measurement_columns`, gender coding, age threshold,
+#'   and observed group counts used for interpretation of covariate effects).
 #'
 #' @export
 mira_prepare_data <- function(
@@ -42,7 +51,12 @@ mira_prepare_data <- function(
     direction,
     meaningful_between_arm_difference = meaningful_change,
     arm_column = "arm",
-    reference_arm = NULL
+    reference_arm = NULL,
+    gender_column = "gender",
+    female_label = "Female",
+    male_label = "Male",
+    age_column = "age",
+    age_threshold = 60
 ) {
 
   # ============================================================
@@ -57,6 +71,14 @@ mira_prepare_data <- function(
     stop("`arm_column` must be one non-empty character string.", call. = FALSE)
   }
 
+  if (!is.character(gender_column) || length(gender_column) != 1 || !nzchar(gender_column)) {
+    stop("`gender_column` must be one non-empty character string.", call. = FALSE)
+  }
+
+  if (!is.character(age_column) || length(age_column) != 1 || !nzchar(age_column)) {
+    stop("`age_column` must be one non-empty character string.", call. = FALSE)
+  }
+
   if (!"patient" %in% names(data)) {
     stop("The data frame must contain a `patient` column.", call. = FALSE)
   }
@@ -65,6 +87,24 @@ mira_prepare_data <- function(
     stop(
       "The data frame must contain the treatment-arm column `",
       arm_column,
+      "`.",
+      call. = FALSE
+    )
+  }
+
+  if (!gender_column %in% names(data)) {
+    stop(
+      "The data frame must contain the gender column `",
+      gender_column,
+      "`.",
+      call. = FALSE
+    )
+  }
+
+  if (!age_column %in% names(data)) {
+    stop(
+      "The data frame must contain the age column `",
+      age_column,
       "`.",
       call. = FALSE
     )
@@ -157,6 +197,102 @@ mira_prepare_data <- function(
 
   if (anyNA(arm) || any(arm < 1L) || any(arm > G)) {
     stop("Internal error while encoding treatment arms.", call. = FALSE)
+  }
+
+  # ============================================================
+  # GENDER: FEMALE REFERENCE, MALE INDICATOR
+  # ============================================================
+
+  if (
+    length(female_label) != 1 ||
+    is.na(female_label) ||
+    !nzchar(as.character(female_label))
+  ) {
+    stop("`female_label` must identify one non-missing category.", call. = FALSE)
+  }
+
+  if (
+    length(male_label) != 1 ||
+    is.na(male_label) ||
+    !nzchar(as.character(male_label))
+  ) {
+    stop("`male_label` must identify one non-missing category.", call. = FALSE)
+  }
+
+  female_label_chr <- as.character(female_label)
+  male_label_chr <- as.character(male_label)
+
+  if (identical(female_label_chr, male_label_chr)) {
+    stop("`female_label` and `male_label` must be different.", call. = FALSE)
+  }
+
+  gender_raw <- data[[gender_column]]
+
+  if (anyNA(gender_raw)) {
+    stop("`", gender_column, "` contains missing values.", call. = FALSE)
+  }
+
+  gender_chr <- as.character(gender_raw)
+  allowed_gender <- c(female_label_chr, male_label_chr)
+
+  if (any(!gender_chr %in% allowed_gender)) {
+    bad_gender <- unique(gender_chr[!gender_chr %in% allowed_gender])
+
+    stop(
+      paste0(
+        "`", gender_column, "` contains unsupported categories: ",
+        paste(bad_gender, collapse = ", "),
+        ". Expected only `", female_label_chr, "` and `", male_label_chr, "`."
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!all(allowed_gender %in% unique(gender_chr))) {
+    stop(
+      paste0(
+        "Both gender categories are required to estimate the Male - Female ",
+        "difference. Expected `", female_label_chr, "` and `", male_label_chr, "`."
+      ),
+      call. = FALSE
+    )
+  }
+
+  male <- as.integer(gender_chr == male_label_chr)
+
+  # ============================================================
+  # AGE THRESHOLD GROUP
+  # ============================================================
+
+  age_raw <- data[[age_column]]
+
+  if (!is.numeric(age_raw)) {
+    stop("`", age_column, "` must be numeric.", call. = FALSE)
+  }
+
+  if (anyNA(age_raw) || any(!is.finite(age_raw))) {
+    stop("`", age_column, "` must contain only finite non-missing values.", call. = FALSE)
+  }
+
+  if (
+    length(age_threshold) != 1 ||
+    !is.numeric(age_threshold) ||
+    !is.finite(age_threshold)
+  ) {
+    stop("`age_threshold` must be one finite numeric value.", call. = FALSE)
+  }
+
+  age_above_threshold <- as.integer(age_raw > age_threshold)
+
+  if (length(unique(age_above_threshold)) < 2) {
+    stop(
+      paste0(
+        "`age_threshold` = ", age_threshold,
+        " does not create two observed age groups. Choose a threshold with ",
+        "at least one subject on each side."
+      ),
+      call. = FALSE
+    )
   }
 
   # ============================================================
@@ -387,7 +523,7 @@ mira_prepare_data <- function(
     )
   }
 
-  if (anyNA(data[c("patient", arm_column, measurement_columns)])) {
+  if (anyNA(data[c("patient", arm_column, gender_column, age_column, measurement_columns)])) {
     stop(
       "Missing values are not currently supported in the MIRA model.",
       call. = FALSE
@@ -449,6 +585,8 @@ mira_prepare_data <- function(
     subject = as.integer(subject),
     time = as.integer(time),
     arm = as.integer(arm),
+    male = as.integer(male),
+    age_above_threshold = as.integer(age_above_threshold),
     time_value = as.numeric(time_value),
     direction = as.integer(direction),
     mcid_prior_mean = as.numeric(meaningful_change),
@@ -463,6 +601,22 @@ mira_prepare_data <- function(
     meaningful_change = as.numeric(meaningful_change),
     arm_labels = arm_labels,
     reference_arm = reference_arm_chr,
+    gender_column = gender_column,
+    gender_labels = c(reference = female_label_chr, comparison = male_label_chr),
+    gender_counts = stats::setNames(
+      c(sum(male == 0L), sum(male == 1L)),
+      c(female_label_chr, male_label_chr)
+    ),
+    age_column = age_column,
+    age_threshold = as.numeric(age_threshold),
+    age_group_labels = c(
+      reference = paste0("<=", age_threshold),
+      comparison = paste0(">", age_threshold)
+    ),
+    age_group_counts = stats::setNames(
+      c(sum(age_above_threshold == 0L), sum(age_above_threshold == 1L)),
+      c(paste0("<=", age_threshold), paste0(">", age_threshold))
+    ),
     outcome_name = outcome_name,
     measurement_columns = measurement_columns
   )

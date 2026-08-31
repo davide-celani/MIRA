@@ -1,13 +1,17 @@
 #' Fit MIRA longitudinal treatment model
 #'
 #' Fits the MIRA longitudinal Student-t mixed-effects model with
-#' treatment-specific trajectories using CmdStan.
+#' treatment-, gender-, and age-threshold-specific trajectories using CmdStan.
 #'
 #' @param stan_data Data prepared for the MIRA Stan model. The list may
 #'   contain additional R-side metadata (for example `mean_y`, `sd_y`, or
-#'   `arm_labels`); only variables required by Stan are passed to CmdStan.
+#'   `arm_labels`, gender labels, or the age threshold); only variables required
+#'   by Stan are passed to CmdStan. The current model requires subject-level
+#'   binary indicators `male` (0 = Female reference, 1 = Male) and
+#'   `age_above_threshold` (0 = age <= threshold, 1 = age > threshold).
 #' @param prior A `mira_prior` object, or a named list containing the Stan
-#'   prior fields required by the current model. If `NULL`, `mira_prior()`
+#'   prior fields required by the current model, including dedicated priors
+#'   for gender- and age-threshold trajectories. If `NULL`, `mira_prior()`
 #'   is called with profile = "default", unless all prior fields are already
 #'   present in `stan_data`.
 #' @param chains Number of MCMC chains.
@@ -17,8 +21,8 @@
 #' @param seed Random seed.
 #' @param refresh Number of iterations between progress messages.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
-#'   looks for `inst/stan/mira_longitudinal.stan` and then, for backwards
-#'   compatibility, `inst/stan/gaussian_longitudinal.stan`.
+#'   looks for `inst/stan/gaussian_longitudinal_gender_age.stan`, then the
+#'   legacy MIRA Stan filenames for backwards compatibility.
 #'
 #' @return A CmdStanMCMC object.
 #'
@@ -45,7 +49,8 @@ mira_fit <- function(
 
   model_data_names <- c(
     "N", "S", "K", "G",
-    "y", "subject", "time", "arm", "time_value",
+    "y", "subject", "time", "arm",
+    "male", "age_above_threshold", "time_value",
     "direction",
     "mcid_prior_mean", "mcid_prior_sd",
     "meaningful_between_arm_difference"
@@ -118,6 +123,50 @@ mira_fit <- function(
     stop("`arm` must contain integers between 1 and G.", call. = FALSE)
   }
 
+  # ------------------------------------------------------------
+  # Subject-level gender and age-group indicators
+  # ------------------------------------------------------------
+
+  validate_binary_subject_indicator <- function(x, name) {
+    if (!is.numeric(x) || length(x) != stan_data$S) {
+      stop(
+        "`", name, "` must be a numeric/integer vector of length S.",
+        call. = FALSE
+      )
+    }
+
+    if (any(!is.finite(x)) ||
+        any(x != as.integer(x)) ||
+        any(!x %in% c(0, 1))) {
+      stop(
+        "`", name, "` must contain exactly S binary integer values (0/1).",
+        call. = FALSE
+      )
+    }
+  }
+
+  validate_binary_subject_indicator(stan_data$male, "male")
+  validate_binary_subject_indicator(
+    stan_data$age_above_threshold,
+    "age_above_threshold"
+  )
+
+  if (length(unique(stan_data$male)) < 2) {
+    warning(
+      "`male` contains only one observed category; the gender-by-time effect ",
+      "will be weakly/non-identified by these data.",
+      call. = FALSE
+    )
+  }
+
+  if (length(unique(stan_data$age_above_threshold)) < 2) {
+    warning(
+      "`age_above_threshold` contains only one observed group; the age-group-by-time ",
+      "effect will be weakly/non-identified by these data.",
+      call. = FALSE
+    )
+  }
+
   if (!is.numeric(stan_data$time_value) ||
       length(stan_data$time_value) != stan_data$K ||
       any(!is.finite(stan_data$time_value)) ||
@@ -169,6 +218,12 @@ mira_fit <- function(
     "beta_treatment_prior_sd",
     "tau_treatment_prior_rate",
     "arm_baseline_sd_prior_rate",
+    "gender_baseline_prior_sd",
+    "beta_gender_prior_sd",
+    "tau_gender_prior_rate",
+    "age_baseline_prior_sd",
+    "beta_age_prior_sd",
+    "tau_age_prior_rate",
     "sigma_intercept_prior_rate",
     "sigma_slope_prior_rate",
     "sigma_prior_rate",
@@ -206,7 +261,7 @@ mira_fit <- function(
       "The prior specification is not compatible with the new Stan model. ",
       "Missing Stan prior fields: ",
       paste(missing_prior, collapse = ", "),
-      ". Update `mira_prior()` / `mira_prior_stan_data()` or pass a named prior list.",
+      ". Update `mira_prior()` / `mira_prior_stan_data()` so that gender and age priors are included, or pass a complete named prior list.",
       call. = FALSE
     )
   }
@@ -240,6 +295,10 @@ mira_fit <- function(
   sampling_data$subject <- as.integer(sampling_data$subject)
   sampling_data$time <- as.integer(sampling_data$time)
   sampling_data$arm <- as.integer(sampling_data$arm)
+  sampling_data$male <- as.integer(sampling_data$male)
+  sampling_data$age_above_threshold <- as.integer(
+    sampling_data$age_above_threshold
+  )
   sampling_data$direction <- as.integer(sampling_data$direction)
 
   # ------------------------------------------------------------
@@ -249,6 +308,7 @@ mira_fit <- function(
   if (is.null(stan_file)) {
 
     candidates <- c(
+      "gaussian_longitudinal_gender_age.stan",
       "mira_longitudinal.stan",
       "gaussian_longitudinal.stan"
     )
@@ -271,7 +331,8 @@ mira_fit <- function(
     if (length(existing) == 0) {
       stop(
         "Could not find the MIRA Stan model in `inst/stan`. Expected ",
-        "`mira_longitudinal.stan` (preferred) or `gaussian_longitudinal.stan`.",
+        "`gaussian_longitudinal_gender_age.stan` (preferred), ",
+        "`mira_longitudinal.stan`, or `gaussian_longitudinal.stan`.",
         call. = FALSE
       )
     }
@@ -344,6 +405,19 @@ mira_fit <- function(
       tau_treatment = rep(rw_scale, stan_data$G - 1),
       z_arm_baseline = rep(0, stan_data$G - 1),
       arm_baseline_sd = max(sd_y / 10, 0.01),
+
+      # Gender-by-time trajectory: Male - Female.
+      gender_baseline_effect = 0,
+      beta_gender_time = 0,
+      z_gender_step = rep(0, stan_data$K - 1),
+      tau_gender = rw_scale,
+
+      # Age-group-by-time trajectory: age > threshold - age <= threshold.
+      age_baseline_effect = 0,
+      beta_age_time = 0,
+      z_age_step = rep(0, stan_data$K - 1),
+      tau_age = rw_scale,
+
       z_subject = matrix(
         0,
         nrow = 2,

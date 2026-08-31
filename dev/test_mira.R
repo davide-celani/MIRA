@@ -210,54 +210,33 @@ res$model
 
 stan_data <- mira_prepare_data(
   data = data,
-  time_value = c(0, 3, 5, 12, 15),
-  meaningful_change = 1,
-  meaningful_change_sd = 0.2,
+  time_value = c(0, 1, 2, 3, 4),
+  meaningful_change = 2,
+  meaningful_change_sd = 0.5,
   direction = "lower",
-  arm_column = "arm",
-  reference_arm = "control"
+  reference_arm = "control",
+  age_threshold = 60
 )
-
-
-# ============================================================
-# PRIOR
-# ============================================================
 
 prior <- mira_prior(
   stan_data,
   profile = "default"
 )
 
-print(prior)
-
-
-# ============================================================
-# FIT
-# ============================================================
-
 fit <- mira_fit(
   stan_data = stan_data,
-  prior = prior,
-  chains = 4,
-  parallel_chains = 4,
-  iter_warmup = 300,
-  iter_sampling = 1000,
-  seed = 123
+  prior = prior
 )
 
-
-# ============================================================
-# SUMMARY
-# ============================================================
-
 summary <- mira_summary(
-  fit = fit,
+  fit,
   stan_data = stan_data
 )
 
+summary
 
-summary$population_time_means
-summary$population_change
+
+
 # ------------------------------------------------------------
 # 6. Verifica il fit
 # ------------------------------------------------------------
@@ -268,17 +247,7 @@ print(class(fit))
 
 
 
-summary_mira$population
-summary_mira$clinical
-summary_mira$individual
-summary_mira$responders
-summary_mira$heterogeneity
-summary_mira$draws
-summary_mira$ppc
-summary_mira$loo
-summary_mira$diagnostics
-summary_mira$quality_flags
-summary_mira$model_information
+
 
 # ------------------------------------------------------------
 # 8. Controllo semplice dei parametri

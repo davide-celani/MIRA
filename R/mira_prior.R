@@ -1,7 +1,8 @@
 #' Create a MIRA prior specification
 #'
 #' Creates prior specifications for the MIRA longitudinal multi-arm
-#' Student-t model.
+#' Student-t model with treatment-, gender-, and age-threshold-specific
+#' longitudinal effects.
 #'
 #' Priors are scaled using the observed outcome SD and the total elapsed
 #' follow-up time, so the specification remains applicable with any
@@ -23,6 +24,23 @@
 #'   deviations.
 #' @param arm_baseline_sd_rate Exponential rate for baseline imbalance SD
 #'   between treatment arms.
+#' @param gender_baseline_sd Prior SD for the Male - Female baseline
+#'   difference. For predefined profiles, defaults to the same scale as
+#'   `baseline_sd`; for `profile = "custom"`, NULL inherits `baseline_sd`.
+#' @param beta_gender_sd Prior SD for the Male - Female global time-slope
+#'   difference. For predefined profiles, defaults to the treatment-slope
+#'   scale; for `profile = "custom"`, NULL inherits `beta_treatment_sd`.
+#' @param tau_gender_rate Exponential rate for the gender-specific RW1 scale.
+#'   For `profile = "custom"`, NULL inherits `tau_treatment_rate`.
+#' @param age_baseline_sd Prior SD for the baseline difference between
+#'   subjects above versus at/below the age threshold. For predefined profiles,
+#'   defaults to the same scale as `baseline_sd`; for `profile = "custom"`,
+#'   NULL inherits `baseline_sd`.
+#' @param beta_age_sd Prior SD for the age-group global time-slope difference.
+#'   For predefined profiles, defaults to the treatment-slope scale; for
+#'   `profile = "custom"`, NULL inherits `beta_treatment_sd`.
+#' @param tau_age_rate Exponential rate for the age-group-specific RW1 scale.
+#'   For `profile = "custom"`, NULL inherits `tau_treatment_rate`.
 #' @param sigma_intercept_rate Exponential rate for subject random-intercept SD.
 #' @param sigma_slope_rate Exponential rate for subject random-slope SD.
 #' @param sigma_rate Exponential rate for residual Student-t scale.
@@ -51,6 +69,12 @@ mira_prior <- function(
     beta_treatment_sd = NULL,
     tau_treatment_rate = NULL,
     arm_baseline_sd_rate = NULL,
+    gender_baseline_sd = NULL,
+    beta_gender_sd = NULL,
+    tau_gender_rate = NULL,
+    age_baseline_sd = NULL,
+    beta_age_sd = NULL,
+    tau_age_rate = NULL,
     sigma_intercept_rate = NULL,
     sigma_slope_rate = NULL,
     sigma_rate = NULL,
@@ -182,6 +206,16 @@ mira_prior <- function(
 
     arm_baseline_sd_rate <- 1 / outcome_scale
 
+    # Covariate effects are centered at zero. Dedicated scales default to
+    # the analogous baseline/treatment scales for this profile.
+    gender_baseline_sd <- baseline_sd
+    beta_gender_sd <- beta_treatment_sd
+    tau_gender_rate <- tau_treatment_rate
+
+    age_baseline_sd <- baseline_sd
+    beta_age_sd <- beta_treatment_sd
+    tau_age_rate <- tau_treatment_rate
+
     sigma_intercept_rate <- 1 / outcome_scale
     sigma_slope_rate <- 1 / slope_scale
 
@@ -206,6 +240,14 @@ mira_prior <- function(
     tau_treatment_rate <- 0.5 / rw_scale
 
     arm_baseline_sd_rate <- 0.5 / outcome_scale
+
+    gender_baseline_sd <- baseline_sd
+    beta_gender_sd <- beta_treatment_sd
+    tau_gender_rate <- tau_treatment_rate
+
+    age_baseline_sd <- baseline_sd
+    beta_age_sd <- beta_treatment_sd
+    tau_age_rate <- tau_treatment_rate
 
     sigma_intercept_rate <- 0.5 / outcome_scale
     sigma_slope_rate <- 0.5 / slope_scale
@@ -232,6 +274,14 @@ mira_prior <- function(
 
     arm_baseline_sd_rate <- 2 / outcome_scale
 
+    gender_baseline_sd <- baseline_sd
+    beta_gender_sd <- beta_treatment_sd
+    tau_gender_rate <- tau_treatment_rate
+
+    age_baseline_sd <- baseline_sd
+    beta_age_sd <- beta_treatment_sd
+    tau_age_rate <- tau_treatment_rate
+
     sigma_intercept_rate <- 2 / outcome_scale
     sigma_slope_rate <- 2 / slope_scale
 
@@ -256,6 +306,14 @@ mira_prior <- function(
     tau_treatment_rate <- 5 / rw_scale
 
     arm_baseline_sd_rate <- 5 / outcome_scale
+
+    gender_baseline_sd <- baseline_sd
+    beta_gender_sd <- beta_treatment_sd
+    tau_gender_rate <- tau_treatment_rate
+
+    age_baseline_sd <- baseline_sd
+    beta_age_sd <- beta_treatment_sd
+    tau_age_rate <- tau_treatment_rate
 
     sigma_intercept_rate <- 5 / outcome_scale
     sigma_slope_rate <- 5 / slope_scale
@@ -313,6 +371,17 @@ mira_prior <- function(
         call. = FALSE
       )
     }
+
+    # Backwards-compatible defaults for the newly introduced covariate priors.
+    # They remain separately represented in the prior object and Stan data, so
+    # users can override them independently when desired.
+    if (is.null(gender_baseline_sd)) gender_baseline_sd <- baseline_sd
+    if (is.null(beta_gender_sd)) beta_gender_sd <- beta_treatment_sd
+    if (is.null(tau_gender_rate)) tau_gender_rate <- tau_treatment_rate
+
+    if (is.null(age_baseline_sd)) age_baseline_sd <- baseline_sd
+    if (is.null(beta_age_sd)) beta_age_sd <- beta_treatment_sd
+    if (is.null(tau_age_rate)) tau_age_rate <- tau_treatment_rate
   }
 
   # ============================================================
@@ -344,6 +413,12 @@ mira_prior <- function(
     beta_treatment_sd = beta_treatment_sd,
     tau_treatment_rate = tau_treatment_rate,
     arm_baseline_sd_rate = arm_baseline_sd_rate,
+    gender_baseline_sd = gender_baseline_sd,
+    beta_gender_sd = beta_gender_sd,
+    tau_gender_rate = tau_gender_rate,
+    age_baseline_sd = age_baseline_sd,
+    beta_age_sd = beta_age_sd,
+    tau_age_rate = tau_age_rate,
     sigma_intercept_rate = sigma_intercept_rate,
     sigma_slope_rate = sigma_slope_rate,
     sigma_rate = sigma_rate,
@@ -382,6 +457,16 @@ mira_prior <- function(
     tau_treatment_prior_rate = as.numeric(tau_treatment_rate),
 
     arm_baseline_sd_prior_rate = as.numeric(arm_baseline_sd_rate),
+
+    # Dedicated priors for Male - Female trajectory.
+    gender_baseline_prior_sd = as.numeric(gender_baseline_sd),
+    beta_gender_prior_sd = as.numeric(beta_gender_sd),
+    tau_gender_prior_rate = as.numeric(tau_gender_rate),
+
+    # Dedicated priors for age > threshold - age <= threshold trajectory.
+    age_baseline_prior_sd = as.numeric(age_baseline_sd),
+    beta_age_prior_sd = as.numeric(beta_age_sd),
+    tau_age_prior_rate = as.numeric(tau_age_rate),
 
     sigma_intercept_prior_rate = as.numeric(sigma_intercept_rate),
     sigma_slope_prior_rate = as.numeric(sigma_slope_rate),
@@ -480,6 +565,54 @@ print.mira_prior <- function(
     sep = ""
   )
 
+  cat("Gender (Male - Female) baseline effect:\n")
+  cat(
+    "  gender_baseline_effect ~ Normal(0, ",
+    x$gender_baseline_prior_sd,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Gender time-slope difference:\n")
+  cat(
+    "  beta_gender_time ~ Normal(0, ",
+    x$beta_gender_prior_sd,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Gender trajectory RW1 scale:\n")
+  cat(
+    "  tau_gender ~ Exponential(",
+    x$tau_gender_prior_rate,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Age-threshold baseline effect (> threshold - <= threshold):\n")
+  cat(
+    "  age_baseline_effect ~ Normal(0, ",
+    x$age_baseline_prior_sd,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Age-threshold time-slope difference:\n")
+  cat(
+    "  beta_age_time ~ Normal(0, ",
+    x$beta_age_prior_sd,
+    ")\n\n",
+    sep = ""
+  )
+
+  cat("Age-threshold trajectory RW1 scale:\n")
+  cat(
+    "  tau_age ~ Exponential(",
+    x$tau_age_prior_rate,
+    ")\n\n",
+    sep = ""
+  )
+
   cat("Subject random intercept SD:\n")
   cat(
     "  sigma_intercept ~ Exponential(",
@@ -547,6 +680,12 @@ mira_validate_prior <- function(
     "beta_treatment_prior_sd",
     "tau_treatment_prior_rate",
     "arm_baseline_sd_prior_rate",
+    "gender_baseline_prior_sd",
+    "beta_gender_prior_sd",
+    "tau_gender_prior_rate",
+    "age_baseline_prior_sd",
+    "beta_age_prior_sd",
+    "tau_age_prior_rate",
     "sigma_intercept_prior_rate",
     "sigma_slope_prior_rate",
     "sigma_prior_rate",
@@ -646,6 +785,24 @@ mira_prior_stan_data <- function(
 
     arm_baseline_sd_prior_rate =
       prior$arm_baseline_sd_prior_rate,
+
+    gender_baseline_prior_sd =
+      prior$gender_baseline_prior_sd,
+
+    beta_gender_prior_sd =
+      prior$beta_gender_prior_sd,
+
+    tau_gender_prior_rate =
+      prior$tau_gender_prior_rate,
+
+    age_baseline_prior_sd =
+      prior$age_baseline_prior_sd,
+
+    beta_age_prior_sd =
+      prior$beta_age_prior_sd,
+
+    tau_age_prior_rate =
+      prior$tau_age_prior_rate,
 
     sigma_intercept_prior_rate =
       prior$sigma_intercept_prior_rate,

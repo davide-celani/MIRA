@@ -39,108 +39,6 @@ getwd()
 devtools::load_all()
 
 list_stan_models("MIRA")
-# ------------------------------------------------------------
-# 1. Impostazioni
-# ------------------------------------------------------------
-
-set.seed(123)
-
-n_patients <- 150
-
-
-# ------------------------------------------------------------
-# Parametri
-# ------------------------------------------------------------
-
-true_t0 <- 10
-true_t1 <- 11
-true_t2 <- 12
-
-true_sigma_subject <- 1
-true_sigma <- 0.5
-
-
-# ------------------------------------------------------------
-# Effetto casuale del paziente
-# ------------------------------------------------------------
-
-subject_effect <- rnorm(
-  n_patients,
-  mean = 0,
-  sd = true_sigma_subject
-)
-
-
-# ------------------------------------------------------------
-# Dataset
-# ------------------------------------------------------------
-
-data <- data.frame(
-
-  patient = seq_len(n_patients),
-
-  arm = rep(
-    c("control", "treatment"),
-    length.out = n_patients
-  ),
-
-  gender = sample(
-    c("Female", "Male"),
-    size = n_patients,
-    replace = TRUE,
-    prob = c(0.5, 0.5)
-  ),
-
-  age = round(
-    rnorm(
-      n_patients,
-      mean = 60,
-      sd = 10
-    )
-  )
-)
-
-
-# Limitiamo l'età a un range plausibile
-data$age <- pmin(
-  pmax(data$age, 30),
-  85
-)
-
-
-# ------------------------------------------------------------
-# Misure IOP
-# ------------------------------------------------------------
-
-data$IOP_t0 <- rnorm(
-  n_patients,
-  mean = true_t0 + subject_effect,
-  sd = true_sigma
-)
-
-data$IOP_t1 <- rnorm(
-  n_patients,
-  mean = true_t1 + subject_effect,
-  sd = true_sigma
-)
-
-data$IOP_t2 <- rnorm(
-  n_patients,
-  mean = true_t2 + subject_effect,
-  sd = true_sigma
-)
-
-data$IOP_t3 <- rnorm(
-  n_patients,
-  mean = true_t2 + subject_effect,
-  sd = true_sigma
-)
-
-data$IOP_t4 <- rnorm(
-  n_patients,
-  mean = true_t1 + subject_effect,
-  sd = true_sigma
-)
 
 
 res <- mira_info(
@@ -247,7 +145,7 @@ summary <- mira_summary(
   stan_data = stan_data
 )
 
-summary$population_time_means
+summary$change
 summary$change_from_baseline
 summary$gender$change
 

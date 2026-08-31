@@ -1653,7 +1653,7 @@ mira_info <- function(data,
     trajectory_summary$relative_change_percent
 
   # ----------------------------------------------------------
-  # 15. PLOTS (ggplot2 ONLY)
+  # 15. PLOTS (ggplot2 ONLY; PUBLICATION-READY)
   # ----------------------------------------------------------
 
   plots_list <- list()
@@ -1664,6 +1664,20 @@ mira_info <- function(data,
       plot_error <- "Il pacchetto 'ggplot2' non è installato."
     } else {
       ci_text <- paste0(formatC(confidence_percent, format = "fg", digits = 4), "% CI")
+
+      # Shared paper-oriented theme. Plot titles/subtitles are deliberately omitted
+      # so figures can be pasted directly into manuscripts and captioned externally.
+      paper_theme <-
+        ggplot2::theme_minimal(base_size = 11) +
+        ggplot2::theme(
+          plot.title = ggplot2::element_blank(),
+          plot.subtitle = ggplot2::element_blank(),
+          panel.grid.minor = ggplot2::element_blank(),
+          legend.position = "bottom",
+          legend.title = ggplot2::element_text(size = 10),
+          axis.title = ggplot2::element_text(size = 10),
+          axis.text = ggplot2::element_text(size = 9)
+        )
 
       # Boxplot summary uses the already validated descriptives table.
       boxplot_summary <- descriptives
@@ -1680,6 +1694,7 @@ mira_info <- function(data,
         levels = unname(time_labels[time_vars])
       )
 
+      # 1) Distribution at each timepoint with raw observations + mean CI.
       plots_list$boxplot <-
         ggplot2::ggplot(long_plot, ggplot2::aes(x = time_label, y = value)) +
         ggplot2::geom_boxplot(
@@ -1703,13 +1718,8 @@ mira_info <- function(data,
           stroke = 1.1, fill = "white", color = "#2C7BB6", na.rm = TRUE
         ) +
         ggplot2::scale_x_discrete(labels = boxplot_summary$time_label_n) +
-        ggplot2::labs(
-          x = NULL,
-          y = outcome_display,
-          title = paste("Distribution of", outcome_display, "Across Timepoints"),
-          subtitle = paste("Individual observations, IQR, mean and", ci_text)
-        ) +
-        ggplot2::theme_minimal(base_size = 12)
+        ggplot2::labs(x = NULL, y = outcome_display) +
+        paper_theme
 
       # Build patient-to-patient consecutive segments without dplyr.
       segment_list <- list()
@@ -1767,6 +1777,7 @@ mira_info <- function(data,
         "\n(N = ", trajectory_summary_plot$n, ")"
       )
 
+      # 2) Individual longitudinal trajectories + population mean and CI.
       plots_list$spaghetti <-
         ggplot2::ggplot() +
         ggplot2::geom_ribbon(
@@ -1807,15 +1818,10 @@ mira_info <- function(data,
           breaks = trajectory_summary_plot$time_index,
           labels = trajectory_summary_plot$time_label_n
         ) +
-        ggplot2::labs(
-          x = NULL,
-          y = outcome_display,
-          title = paste("Individual", outcome_display, "Longitudinal Trajectories"),
-          subtitle = paste("Subject trajectories, population mean and", ci_text)
-        ) +
-        ggplot2::theme_minimal(base_size = 12) +
-        ggplot2::theme(legend.position = "bottom")
+        ggplot2::labs(x = NULL, y = outcome_display) +
+        paper_theme
 
+      # 3) Mean outcome and CI over time.
       mean_ci_plot_data <- descriptives
       mean_ci_plot_data$label <- factor(
         mean_ci_plot_data$label,
@@ -1833,11 +1839,8 @@ mira_info <- function(data,
           ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
           width = 0.1, na.rm = TRUE
         ) +
-        ggplot2::labs(
-          x = "Time", y = paste("Mean", outcome_display),
-          title = paste("Mean", outcome_display, "and", ci_text)
-        ) +
-        ggplot2::theme_minimal()
+        ggplot2::labs(x = "Time", y = paste("Mean", outcome_display)) +
+        paper_theme
 
       trajectory_plot_data <- trajectory_summary[
         is.finite(trajectory_summary$absolute_change),
@@ -1845,6 +1848,7 @@ mira_info <- function(data,
         drop = FALSE
       ]
 
+      # 4) Baseline-to-final individual change distribution.
       plots_list$change <-
         ggplot2::ggplot(
           trajectory_plot_data,
@@ -1853,12 +1857,182 @@ mira_info <- function(data,
         ggplot2::geom_boxplot(alpha = 0.7, na.rm = TRUE) +
         ggplot2::geom_jitter(width = 0.08, alpha = 0.30, na.rm = TRUE) +
         ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
-        ggplot2::labs(
-          x = NULL,
-          y = paste("Final - Baseline", outcome_display),
-          title = paste("Individual", outcome_display, "Change")
+        ggplot2::labs(x = NULL, y = paste("Final - Baseline", outcome_display)) +
+        paper_theme
+
+      # 5) NEW: distribution of change from baseline at every follow-up.
+      baseline_change_list <- lapply(seq.int(2L, length(time_vars)), function(k) {
+        delta <- analysis_data[[time_vars[[k]]]] - analysis_data[[time_vars[[1L]]]]
+        keep <- is.finite(delta)
+        data.frame(
+          patient = analysis_data[[id]][keep],
+          time_index = k,
+          time_label = unname(time_labels[time_vars[[k]]]),
+          change_from_baseline = delta[keep],
+          stringsAsFactors = FALSE
+        )
+      })
+      baseline_change_long <- do.call(rbind, baseline_change_list)
+      baseline_change_long$time_label <- factor(
+        baseline_change_long$time_label,
+        levels = unname(time_labels[time_vars[-1L]])
+      )
+
+      plots_list$change_from_baseline <-
+        ggplot2::ggplot(
+          baseline_change_long,
+          ggplot2::aes(x = time_label, y = change_from_baseline)
         ) +
-        ggplot2::theme_minimal()
+        ggplot2::geom_boxplot(
+          width = 0.55, outlier.shape = NA, fill = "grey92", color = "grey30",
+          na.rm = TRUE
+        ) +
+        ggplot2::geom_jitter(
+          width = 0.10, alpha = 0.25, size = 1.4, color = "grey35", na.rm = TRUE
+        ) +
+        ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+        ggplot2::labs(x = "Time", y = paste("Change from baseline", outcome_display)) +
+        paper_theme
+
+      # 6) NEW: forest-style plot of mean change from baseline and CI.
+      baseline_change_ci <- change[
+        change$from == time_vars[[1L]],
+        c("to", "to_label", "n", "mean_change", "ci_lower", "ci_upper"),
+        drop = FALSE
+      ]
+
+      if (nrow(baseline_change_ci) > 0L) {
+        baseline_change_ci$to_label <- factor(
+          baseline_change_ci$to_label,
+          levels = rev(unname(time_labels[time_vars[-1L]]))
+        )
+
+        plots_list$change_ci <-
+          ggplot2::ggplot(
+            baseline_change_ci,
+            ggplot2::aes(x = to_label, y = mean_change)
+          ) +
+          ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+          ggplot2::geom_errorbar(
+            ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
+            width = 0.12, linewidth = 0.7, na.rm = TRUE
+          ) +
+          ggplot2::geom_point(size = 2.8, na.rm = TRUE) +
+          ggplot2::coord_flip() +
+          ggplot2::labs(
+            x = NULL,
+            y = paste("Mean change from baseline (", ci_text, ")", sep = "")
+          ) +
+          paper_theme
+      }
+
+      # 7) NEW: data availability / missingness by timepoint.
+      missing_plot_data <- missing_summary
+      missing_plot_data$label <- factor(
+        missing_plot_data$label,
+        levels = unname(time_labels[time_vars])
+      )
+
+      plots_list$missingness <-
+        ggplot2::ggplot(
+          missing_plot_data,
+          ggplot2::aes(x = label, y = unavailable_pct)
+        ) +
+        ggplot2::geom_col(width = 0.62, fill = "grey55") +
+        ggplot2::geom_text(
+          ggplot2::aes(label = sprintf("%.1f%%", unavailable_pct)),
+          vjust = -0.35, size = 3, na.rm = TRUE
+        ) +
+        ggplot2::scale_y_continuous(
+          limits = c(0, max(c(5, missing_plot_data$unavailable_pct * 1.15), na.rm = TRUE)),
+          expand = ggplot2::expansion(mult = c(0, 0.03))
+        ) +
+        ggplot2::labs(x = "Time", y = "Unavailable observations (%)") +
+        paper_theme
+
+      # 8) NEW: Pearson correlation heatmap across repeated timepoints.
+      if (correlations && !is.null(correlation_pearson)) {
+        cor_mat <- correlation_pearson
+        cor_idx <- expand.grid(
+          row = seq_len(nrow(cor_mat)),
+          col = seq_len(ncol(cor_mat)),
+          KEEP.OUT.ATTRS = FALSE,
+          stringsAsFactors = FALSE
+        )
+        cor_plot_data <- data.frame(
+          x = unname(time_labels[time_vars])[cor_idx$col],
+          y = unname(time_labels[time_vars])[cor_idx$row],
+          r = cor_mat[cbind(cor_idx$row, cor_idx$col)],
+          stringsAsFactors = FALSE
+        )
+        cor_plot_data$x <- factor(cor_plot_data$x, levels = unname(time_labels[time_vars]))
+        cor_plot_data$y <- factor(
+          cor_plot_data$y,
+          levels = rev(unname(time_labels[time_vars]))
+        )
+
+        plots_list$correlation_heatmap <-
+          ggplot2::ggplot(
+            cor_plot_data,
+            ggplot2::aes(x = x, y = y, fill = r)
+          ) +
+          ggplot2::geom_tile(color = "white", linewidth = 0.5) +
+          ggplot2::geom_text(
+            ggplot2::aes(label = ifelse(is.finite(r), sprintf("%.2f", r), "")),
+            size = 3
+          ) +
+          ggplot2::scale_fill_gradient2(
+            low = "#2166AC", mid = "white", high = "#B2182B",
+            midpoint = 0, limits = c(-1, 1), na.value = "grey95",
+            name = "Pearson r"
+          ) +
+          ggplot2::coord_equal() +
+          ggplot2::labs(x = NULL, y = NULL) +
+          paper_theme +
+          ggplot2::theme(panel.grid = ggplot2::element_blank())
+      }
+
+      # 9) NEW: responder/direction percentages for baseline-to-final change.
+      response_variable <- if (improvement_direction == "unknown") "direction" else "clinical_direction"
+      response_values <- trajectory_summary[[response_variable]]
+      response_values <- response_values[!is.na(response_values)]
+
+      if (length(response_values) > 0L) {
+        response_tab <- table(response_values)
+        response_plot_data <- data.frame(
+          category = names(response_tab),
+          n = as.integer(response_tab),
+          percent = as.integer(response_tab) / sum(response_tab) * 100,
+          stringsAsFactors = FALSE
+        )
+
+        preferred_order <- if (improvement_direction == "unknown") {
+          c("Increase", "Stable", "Decrease")
+        } else {
+          c("Improved", "Stable", "Worsened")
+        }
+        response_plot_data$category <- factor(
+          response_plot_data$category,
+          levels = preferred_order[preferred_order %in% response_plot_data$category]
+        )
+
+        plots_list$response <-
+          ggplot2::ggplot(
+            response_plot_data,
+            ggplot2::aes(x = category, y = percent)
+          ) +
+          ggplot2::geom_col(width = 0.62, fill = "grey55") +
+          ggplot2::geom_text(
+            ggplot2::aes(label = sprintf("%.1f%%\n(n=%d)", percent, n)),
+            vjust = -0.25, size = 3
+          ) +
+          ggplot2::scale_y_continuous(
+            limits = c(0, max(c(10, response_plot_data$percent * 1.18), na.rm = TRUE)),
+            expand = ggplot2::expansion(mult = c(0, 0.03))
+          ) +
+          ggplot2::labs(x = NULL, y = "Patients (%)") +
+          paper_theme
+      }
 
       if (arm_available && arm_tests && !is.null(arm_descriptives)) {
 
@@ -1872,6 +2046,7 @@ mira_info <- function(data,
           levels = arm_levels
         )
 
+        # 10) Mean and CI by treatment arm over time.
         plots_list$arm_mean_ci <-
           ggplot2::ggplot(
             arm_plot_data,
@@ -1893,12 +2068,10 @@ mira_info <- function(data,
           ggplot2::labs(
             x = "Time",
             y = paste("Mean", outcome_display),
-            title = paste(outcome_display, "by Treatment Arm Over Time"),
-            subtitle = paste("Mean and", ci_text),
             linetype = "Arm",
             shape = "Arm"
           ) +
-          ggplot2::theme_minimal()
+          paper_theme
 
         arm_long_plot <- long_plot[
           !is.na(long_plot$arm),
@@ -1906,6 +2079,7 @@ mira_info <- function(data,
           drop = FALSE
         ]
 
+        # 11) Distribution by arm and time.
         plots_list$arm_boxplot <-
           ggplot2::ggplot(
             arm_long_plot,
@@ -1935,11 +2109,10 @@ mira_info <- function(data,
           ggplot2::labs(
             x = "Time",
             y = outcome_display,
-            title = paste("Distribution of", outcome_display, "by Arm and Time"),
             linetype = "Arm",
             shape = "Arm"
           ) +
-          ggplot2::theme_minimal()
+          paper_theme
 
         arm_change_plot_data <- trajectory_summary[
           is.finite(trajectory_summary$absolute_change) &
@@ -1953,13 +2126,11 @@ mira_info <- function(data,
           levels = arm_levels
         )
 
+        # 12) Baseline-to-final change distribution by arm.
         plots_list$arm_change <-
           ggplot2::ggplot(
             arm_change_plot_data,
-            ggplot2::aes(
-              x = arm,
-              y = absolute_change
-            )
+            ggplot2::aes(x = arm, y = absolute_change)
           ) +
           ggplot2::geom_boxplot(outlier.shape = NA, na.rm = TRUE) +
           ggplot2::geom_jitter(
@@ -1970,10 +2141,130 @@ mira_info <- function(data,
           ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
           ggplot2::labs(
             x = "Treatment arm",
-            y = paste("Final - Baseline", outcome_display),
-            title = paste("Baseline-to-Final", outcome_display, "Change by Arm")
+            y = paste("Final - Baseline", outcome_display)
           ) +
-          ggplot2::theme_minimal()
+          paper_theme
+
+        # 13) NEW: mean change from baseline and CI over time by arm.
+        if (!is.null(arm_change_descriptives) && nrow(arm_change_descriptives) > 0L) {
+          arm_change_ci_data <- arm_change_descriptives
+          arm_change_ci_data$to_label <- factor(
+            arm_change_ci_data$to_label,
+            levels = unname(time_labels[time_vars[-1L]])
+          )
+          arm_change_ci_data$arm <- factor(
+            arm_change_ci_data$arm,
+            levels = arm_levels
+          )
+
+          plots_list$arm_change_ci <-
+            ggplot2::ggplot(
+              arm_change_ci_data,
+              ggplot2::aes(
+                x = to_label,
+                y = mean_change,
+                group = arm,
+                linetype = arm,
+                shape = arm
+              )
+            ) +
+            ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+            ggplot2::geom_line(linewidth = 0.8, na.rm = TRUE) +
+            ggplot2::geom_point(size = 2.8, na.rm = TRUE) +
+            ggplot2::geom_errorbar(
+              ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
+              width = 0.08, na.rm = TRUE
+            ) +
+            ggplot2::labs(
+              x = "Time",
+              y = paste("Mean change from baseline (", ci_text, ")", sep = ""),
+              linetype = "Arm",
+              shape = "Arm"
+            ) +
+            paper_theme
+        }
+
+        # 14) NEW: between-arm mean differences with CI at each timepoint.
+        if (!is.null(arm_time_pairwise) && nrow(arm_time_pairwise) > 0L) {
+          arm_difference_data <- arm_time_pairwise
+          arm_difference_data$comparison <- paste(
+            arm_difference_data$arm_b,
+            "-",
+            arm_difference_data$arm_a
+          )
+          arm_difference_data$time_label <- factor(
+            arm_difference_data$time_label,
+            levels = rev(unname(time_labels[time_vars]))
+          )
+
+          plots_list$arm_difference_ci <-
+            ggplot2::ggplot(
+              arm_difference_data,
+              ggplot2::aes(
+                x = time_label,
+                y = mean_difference_b_minus_a
+              )
+            ) +
+            ggplot2::geom_hline(yintercept = 0, linetype = "dashed") +
+            ggplot2::geom_errorbar(
+              ggplot2::aes(ymin = ci_lower, ymax = ci_upper),
+              width = 0.12, na.rm = TRUE
+            ) +
+            ggplot2::geom_point(size = 2.7, na.rm = TRUE) +
+            ggplot2::coord_flip() +
+            ggplot2::facet_wrap(~comparison, scales = "free_y") +
+            ggplot2::labs(
+              x = NULL,
+              y = paste("Mean difference (", ci_text, ")", sep = "")
+            ) +
+            paper_theme
+        }
+
+        # 15) NEW: unavailable observations (%) by arm and time.
+        arm_missing_plot_list <- list()
+        am_counter <- 1L
+        for (g in arm_levels) {
+          for (k in seq_along(time_vars)) {
+            v <- time_vars[[k]]
+            idx <- !is.na(analysis_data[[arm]]) & as.character(analysis_data[[arm]]) == g
+            n_group <- sum(idx)
+            unavailable_n <- sum(is.na(analysis_data[[v]][idx]))
+            arm_missing_plot_list[[am_counter]] <- data.frame(
+              arm = g,
+              time_label = unname(time_labels[v]),
+              unavailable_pct = if (n_group > 0L) unavailable_n / n_group * 100 else NA_real_,
+              stringsAsFactors = FALSE
+            )
+            am_counter <- am_counter + 1L
+          }
+        }
+        arm_missing_plot_data <- do.call(rbind, arm_missing_plot_list)
+        arm_missing_plot_data$arm <- factor(arm_missing_plot_data$arm, levels = arm_levels)
+        arm_missing_plot_data$time_label <- factor(
+          arm_missing_plot_data$time_label,
+          levels = unname(time_labels[time_vars])
+        )
+
+        plots_list$arm_missingness <-
+          ggplot2::ggplot(
+            arm_missing_plot_data,
+            ggplot2::aes(
+              x = time_label,
+              y = unavailable_pct,
+              group = arm,
+              linetype = arm,
+              shape = arm
+            )
+          ) +
+          ggplot2::geom_line(linewidth = 0.8, na.rm = TRUE) +
+          ggplot2::geom_point(size = 2.7, na.rm = TRUE) +
+          ggplot2::labs(
+            x = "Time",
+            y = "Unavailable observations (%)",
+            linetype = "Arm",
+            shape = "Arm"
+          ) +
+          paper_theme
       }
     }
   }
@@ -2865,9 +3156,17 @@ plot.mira_info <- function(
       "spaghetti",
       "mean_ci",
       "change",
+      "change_from_baseline",
+      "change_ci",
+      "missingness",
+      "correlation_heatmap",
+      "response",
       "arm_mean_ci",
       "arm_boxplot",
-      "arm_change"
+      "arm_change",
+      "arm_change_ci",
+      "arm_difference_ci",
+      "arm_missingness"
     ),
     ...
 ) {

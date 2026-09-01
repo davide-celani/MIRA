@@ -138,14 +138,15 @@ fit <- mira_fit(
   prior = prior,
   chains = 4,
   parallel_chains = 4,
-  iter_warmup = 1000,
-  iter_sampling = 1000,
+  iter_warmup = 1500,
+  iter_sampling = 2000,
   seed = 123,
-  refresh = 50,
+  refresh = 100,
   verbose = TRUE
 )
 
 fit$diagnostic_summary()
+fit$cmdstan_diagnose()
 
 
 # ============================================================

@@ -12,15 +12,35 @@
 #' @param prior A `mira_prior` object, or a named list containing the Stan
 #'   prior fields required by the current model, including dedicated priors
 #'   for gender- and age-threshold trajectories. If `NULL`, `mira_prior()`
-#'   is called with profile = "default", unless all prior fields are already
-#'   present in `stan_data`. A non-NULL `prior` takes precedence over prior
-#'   fields embedded in `stan_data`.
+#'   automatically selects the outcome and uses standard priors, unless all
+#'   prior fields are already present in `stan_data`. A non-NULL `prior` takes
+#'   precedence over prior fields embedded in `stan_data`.
 #' @param chains Number of MCMC chains.
 #' @param parallel_chains Number of parallel chains.
 #' @param iter_warmup Number of warmup iterations.
 #' @param iter_sampling Number of sampling iterations.
 #' @param seed Random seed.
 #' @param refresh Number of iterations between progress messages.
+#' @param adapt_delta Target average acceptance probability used during NUTS
+#'   adaptation. Values closer to one reduce integration error and can remove
+#'   divergent transitions, at the cost of additional computation.
+#' @param step_size Positive initial integrator step size. It is adapted during
+#'   warmup. A conservative default is used to avoid invalid first-iteration
+#'   proposals for positive scales and Cholesky factors.
+#' @param max_treedepth Maximum NUTS tree depth.
+#' @param metric Euclidean metric used by NUTS: `"diag_e"`, `"dense_e"`, or
+#'   `"unit_e"`. The default diagonal metric is appropriate for this
+#'   non-centred hierarchical model.
+#' @param rhat_threshold Upper diagnostic threshold for rank-normalized R-hat.
+#'   Values below this threshold pass the automatic fit check.
+#' @param ess_threshold Minimum acceptable bulk and tail effective sample size.
+#' @param ebfmi_threshold Lower diagnostic threshold for E-BFMI.
+#' @param treedepth_tolerance Proportion of post-warmup transitions allowed to
+#'   hit `max_treedepth` before the report raises an efficiency warning. A
+#'   positive proportion not exceeding this value is labelled `MINOR`: it does
+#'   not by itself make the posterior fit invalid.
+#' @param show_messages Logical. If `TRUE`, retain CmdStan informational
+#'   messages, including rejected warmup proposals.
 #' @param verbose Logical. If TRUE (default), print a compact MIRA fit report
 #'   automatically after successful sampling. The fitted CmdStanMCMC object is
 #'   still returned invisibly and can be assigned normally.
@@ -40,8 +60,17 @@ mira_fit <- function(
     iter_sampling = 3000,
     seed = 123,
     refresh = 100,
+    adapt_delta = 0.95,
+    step_size = 0.1,
+    max_treedepth = 12,
+    metric = c("diag_e", "dense_e", "unit_e"),
+    show_messages = TRUE,
     stan_file = NULL,
-    verbose = TRUE
+    verbose = TRUE,
+    rhat_threshold = 1.01,
+    ess_threshold = 400,
+    ebfmi_threshold = 0.30,
+    treedepth_tolerance = 0.01
 ) {
 
   # ------------------------------------------------------------
@@ -72,6 +101,7 @@ mira_fit <- function(
   positive_integer(iter_sampling, "iter_sampling")
   positive_integer(refresh, "refresh", allow_zero = TRUE)
   positive_integer(seed, "seed", allow_zero = TRUE)
+  positive_integer(max_treedepth, "max_treedepth")
 
   if (parallel_chains > chains) {
     stop("`parallel_chains` cannot be larger than `chains`.", call. = FALSE)
@@ -80,6 +110,62 @@ mira_fit <- function(
   if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
     stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
   }
+
+  if (!is.logical(show_messages) ||
+      length(show_messages) != 1L ||
+      is.na(show_messages)) {
+    stop("`show_messages` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  if (!is.numeric(adapt_delta) ||
+      length(adapt_delta) != 1L ||
+      !is.finite(adapt_delta) ||
+      adapt_delta <= 0 ||
+      adapt_delta >= 1) {
+    stop("`adapt_delta` must be one finite number strictly between 0 and 1.",
+         call. = FALSE)
+  }
+
+  if (!is.numeric(step_size) ||
+      length(step_size) != 1L ||
+      !is.finite(step_size) ||
+      step_size <= 0) {
+    stop("`step_size` must be one positive finite number.", call. = FALSE)
+  }
+
+  if (!is.numeric(rhat_threshold) ||
+      length(rhat_threshold) != 1L ||
+      !is.finite(rhat_threshold) ||
+      rhat_threshold <= 1) {
+    stop("`rhat_threshold` must be one finite number greater than 1.",
+         call. = FALSE)
+  }
+
+  if (!is.numeric(ess_threshold) ||
+      length(ess_threshold) != 1L ||
+      !is.finite(ess_threshold) ||
+      ess_threshold <= 0) {
+    stop("`ess_threshold` must be one positive finite number.", call. = FALSE)
+  }
+
+  if (!is.numeric(ebfmi_threshold) ||
+      length(ebfmi_threshold) != 1L ||
+      !is.finite(ebfmi_threshold) ||
+      ebfmi_threshold <= 0) {
+    stop("`ebfmi_threshold` must be one positive finite number.",
+         call. = FALSE)
+  }
+
+  if (!is.numeric(treedepth_tolerance) ||
+      length(treedepth_tolerance) != 1L ||
+      !is.finite(treedepth_tolerance) ||
+      treedepth_tolerance < 0 ||
+      treedepth_tolerance > 1) {
+    stop("`treedepth_tolerance` must be one finite number between 0 and 1.",
+         call. = FALSE)
+  }
+
+  metric <- match.arg(metric)
 
   model_data_names <- c(
     "N", "S", "K", "G",
@@ -297,8 +383,9 @@ mira_fit <- function(
     }
 
     prior <- mira_prior(
-      stan_data,
-      profile = "default"
+      stan_data = stan_data,
+      outcome = "auto",
+      informativeness = "standard"
     )
     stan_prior_data <- mira_prior_stan_data(prior)
     prior_source <- "automatic default"
@@ -456,7 +543,7 @@ mira_fit <- function(
   init <- function() {
     list(
       baseline_mean = baseline_init,
-      beta_time = 0,
+      beta_time = as.numeric(stan_prior_data$beta_time_prior_mean),
       z_common_step = rep(0, stan_data$K - 1),
       tau_common = rw_scale,
       beta_treatment = rep(0, stan_data$G - 1),
@@ -513,7 +600,12 @@ mira_fit <- function(
     iter_sampling = iter_sampling,
     seed = seed,
     init = init,
-    refresh = refresh
+    refresh = refresh,
+    adapt_delta = adapt_delta,
+    step_size = step_size,
+    max_treedepth = max_treedepth,
+    metric = metric,
+    show_messages = show_messages
   )
 
   sampling_elapsed_seconds <- as.numeric(
@@ -601,6 +693,15 @@ mira_fit <- function(
     iter_sampling = as.integer(iter_sampling),
     post_warmup_draws = as.integer(chains * iter_sampling),
     seed = as.integer(seed),
+    adapt_delta = as.numeric(adapt_delta),
+    initial_step_size = as.numeric(step_size),
+    max_treedepth = as.integer(max_treedepth),
+    metric = metric,
+    rhat_threshold = as.numeric(rhat_threshold),
+    ess_threshold = as.numeric(ess_threshold),
+    ebfmi_threshold = as.numeric(ebfmi_threshold),
+    treedepth_tolerance = as.numeric(treedepth_tolerance),
+    show_messages = show_messages,
     compile_elapsed_seconds = compile_elapsed_seconds,
     sampling_elapsed_seconds = sampling_elapsed_seconds
   )
@@ -691,6 +792,13 @@ print.mira_fit <- function(
   fmt_flag <- function(ok) {
     if (length(ok) == 0L || is.na(ok)) return("UNKNOWN")
     if (isTRUE(ok)) "OK" else "CHECK"
+  }
+
+  diagnostic_limit <- function(value, fallback) {
+    if (length(value) == 1L && is.numeric(value) && is.finite(value)) {
+      return(as.numeric(value))
+    }
+    fallback
   }
 
   safe_metadata <- tryCatch(x$metadata(), error = function(e) NULL)
@@ -789,6 +897,18 @@ print.mira_fit <- function(
       info$post_warmup_draws,
       info$seed
     ))
+    if (!is.null(info$adapt_delta)) {
+      cat(sprintf(
+        paste0(
+          "NUTS controls: adapt_delta=%s | initial step_size=%s | ",
+          "max_treedepth=%d | metric=%s\n"
+        ),
+        fmt_num(info$adapt_delta, 2L),
+        fmt_num(info$initial_step_size, 3L),
+        info$max_treedepth,
+        info$metric
+      ))
+    }
     cat(sprintf(
       "Compilation: %s | Sampling: %s\n",
       fmt_time(info$compile_elapsed_seconds),
@@ -876,50 +996,121 @@ print.mira_fit <- function(
       }
     }
 
+    rhat_limit <- diagnostic_limit(info$rhat_threshold, 1.01)
+    ess_limit <- diagnostic_limit(info$ess_threshold, 400)
+    ebfmi_limit <- diagnostic_limit(info$ebfmi_threshold, 0.30)
+    treedepth_limit <- diagnostic_limit(info$treedepth_tolerance, 0.01)
+
+    post_warmup_draws <- diagnostic_limit(info$post_warmup_draws, NA_real_)
+    treedepth_rate <- if (is.finite(treedepth_hits) &&
+                          is.finite(post_warmup_draws) &&
+                          post_warmup_draws > 0) {
+      treedepth_hits / post_warmup_draws
+    } else {
+      NA_real_
+    }
+
+    treedepth_status <- if (!is.finite(treedepth_hits)) {
+      "UNKNOWN"
+    } else if (treedepth_hits == 0) {
+      "OK"
+    } else if (is.finite(treedepth_rate) &&
+               treedepth_rate <= treedepth_limit) {
+      "MINOR"
+    } else {
+      "CHECK"
+    }
+
+    treedepth_text <- if (is.finite(treedepth_hits)) {
+      if (is.finite(treedepth_rate)) {
+        sprintf("%d (%.2f%%)", as.integer(treedepth_hits), 100 * treedepth_rate)
+      } else {
+        as.character(treedepth_hits)
+      }
+    } else {
+      "NA"
+    }
+
     cat(sprintf(
       "Divergences: %s [%s] | Max-treedepth hits: %s [%s]\n",
       ifelse(is.finite(divergences), as.character(divergences), "NA"),
       fmt_flag(if (is.finite(divergences)) divergences == 0 else NA),
-      ifelse(is.finite(treedepth_hits), as.character(treedepth_hits), "NA"),
-      fmt_flag(if (is.finite(treedepth_hits)) treedepth_hits == 0 else NA)
+      treedepth_text,
+      treedepth_status
     ))
 
     cat(sprintf(
       "Max R-hat: %s [%s] | Min bulk ESS: %s [%s] | Min tail ESS: %s [%s]\n",
       fmt_num(max_rhat),
-      fmt_flag(if (is.finite(max_rhat)) max_rhat < 1.01 else NA),
+      fmt_flag(if (is.finite(max_rhat)) max_rhat < rhat_limit else NA),
       fmt_num(min_ess_bulk, 0L),
-      fmt_flag(if (is.finite(min_ess_bulk)) min_ess_bulk >= 400 else NA),
+      fmt_flag(if (is.finite(min_ess_bulk)) min_ess_bulk >= ess_limit else NA),
       fmt_num(min_ess_tail, 0L),
-      fmt_flag(if (is.finite(min_ess_tail)) min_ess_tail >= 400 else NA)
+      fmt_flag(if (is.finite(min_ess_tail)) min_ess_tail >= ess_limit else NA)
     ))
 
     cat(sprintf(
       "Minimum E-BFMI: %s [%s]\n",
       fmt_num(min_ebfmi),
-      fmt_flag(if (is.finite(min_ebfmi)) min_ebfmi > 0.30 else NA)
+      fmt_flag(if (is.finite(min_ebfmi)) min_ebfmi > ebfmi_limit else NA)
     ))
 
-    checks <- c(
+    cat(sprintf(
+      paste0(
+        "Thresholds: R-hat < %.3f | ESS >= %.0f | E-BFMI > %.2f | ",
+        "minor treedepth <= %.2f%%\n"
+      ),
+      rhat_limit,
+      ess_limit,
+      ebfmi_limit,
+      100 * treedepth_limit
+    ))
+
+    critical_checks <- c(
       if (is.finite(divergences)) divergences == 0 else NA,
-      if (is.finite(treedepth_hits)) treedepth_hits == 0 else NA,
-      if (is.finite(max_rhat)) max_rhat < 1.01 else NA,
-      if (is.finite(min_ess_bulk)) min_ess_bulk >= 400 else NA,
-      if (is.finite(min_ess_tail)) min_ess_tail >= 400 else NA,
-      if (is.finite(min_ebfmi)) min_ebfmi > 0.30 else NA
+      if (is.finite(max_rhat)) max_rhat < rhat_limit else NA,
+      if (is.finite(min_ess_bulk)) min_ess_bulk >= ess_limit else NA,
+      if (is.finite(min_ess_tail)) min_ess_tail >= ess_limit else NA,
+      if (is.finite(min_ebfmi)) min_ebfmi > ebfmi_limit else NA
     )
 
-    known_checks <- checks[!is.na(checks)]
+    known_critical_checks <- critical_checks[!is.na(critical_checks)]
 
-    overall <- if (length(known_checks) == 0L) {
+    overall <- if (length(known_critical_checks) == 0L) {
       "DIAGNOSTICS UNAVAILABLE"
-    } else if (all(known_checks)) {
-      "NO OBVIOUS MCMC PROBLEMS DETECTED"
-    } else {
+    } else if (!all(known_critical_checks)) {
       "CHECK MCMC DIAGNOSTICS BEFORE INTERPRETATION"
+    } else if (identical(treedepth_status, "CHECK")) {
+      "CRITICAL DIAGNOSTICS OK; CHECK TREEDEPTH EFFICIENCY"
+    } else if (identical(treedepth_status, "MINOR")) {
+      "NO CRITICAL MCMC PROBLEMS; MINOR TREEDEPTH WARNING"
+    } else {
+      "NO OBVIOUS MCMC PROBLEMS DETECTED"
     }
 
     cat("Overall: ", overall, "\n", sep = "")
+
+    if (is.finite(divergences) && divergences > 0) {
+      cat(
+        "Action: divergences affect posterior reliability; consider a higher ",
+        "adapt_delta and inspect model geometry.\n",
+        sep = ""
+      )
+    }
+
+    if (identical(treedepth_status, "MINOR")) {
+      cat(
+        "Note: the small treedepth proportion is an efficiency warning only; ",
+        "the critical diagnostics determine interpretability.\n",
+        sep = ""
+      )
+    } else if (identical(treedepth_status, "CHECK")) {
+      cat(
+        "Action: inspect posterior geometry before only increasing ",
+        "max_treedepth; frequent hits can make sampling very slow.\n",
+        sep = ""
+      )
+    }
   }
 
   # ============================================================

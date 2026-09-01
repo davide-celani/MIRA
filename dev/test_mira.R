@@ -41,20 +41,38 @@ devtools::load_all()
 list_stan_models("MIRA")
 
 
+# Usa "BCVA" oppure "CMT"
+
+
+# Ready-to-use objects. Source this file and start from `bcva_data` or
+# `cmt_data`; `data` contains both outcomes for descriptive work.
+data <- mira_create_ophthalmology_data()
+bcva_data <- mira_select_ophthalmology_outcome(data, "BCVA")
+cmt_data <- mira_select_ophthalmology_outcome(data, "CMT")
+
+
+outcome <- "BCVA"
+
+# Seleziona automaticamente le colonne dell'outcome scelto
+analysis_data <- mira_select_ophthalmology_outcome(
+  data = data,
+  outcome = outcome
+)
+
+# Impostazioni specifiche dell'outcome
+direction <- "higher" # "higher" else "lower"
+meaningful_change <- 5 # 5 else 50
+meaningful_change_sd <- 1.5 # 1.5 else 15
+
+
 # ============================================================
-# MIRA INFO
+# EXPLORATORY ANALYSIS
 # ============================================================
 
 res <- mira_info(
-  data = data,
+  data = analysis_data,
   id = "patient",
-  time_vars = c(
-    "IOP_t0",
-    "IOP_t1",
-    "IOP_t2",
-    "IOP_t3",
-    "IOP_t4"
-  ),
+  time_vars = paste0(outcome, "_t", 0:4),
   time_labels = c(
     "Baseline",
     "Month 3",
@@ -64,7 +82,7 @@ res <- mira_info(
   ),
   arm = "arm",
   reference_arm = "control",
-  improvement_direction = "lower",
+  improvement_direction = direction,
   plots = TRUE,
   model = TRUE,
   outliers = TRUE,
@@ -76,25 +94,27 @@ res <- mira_info(
   arm_tests = TRUE
 )
 
-# Alcuni risultati esplorativi.
 res$descriptives
 res$change
 res$variability
 res$model
+res$plots
+
 
 # ============================================================
 # PREPARE DATA
 # ============================================================
 
 stan_data <- mira_prepare_data(
-  data = data,
+  data = analysis_data,
   time_value = c(0, 3, 5, 12, 15),
-  meaningful_change = 2,
-  meaningful_change_sd = 0.5,
-  direction = "lower",
+  meaningful_change = meaningful_change,
+  meaningful_change_sd = meaningful_change_sd,
+  direction = direction,
   reference_arm = "control",
   age_threshold = 60
 )
+
 
 # ============================================================
 # PRIORS
@@ -102,15 +122,16 @@ stan_data <- mira_prepare_data(
 
 prior <- mira_prior(
   stan_data = stan_data,
-  profile = "default"
+  outcome = outcome,
+  informativeness = "standard"
 )
 
 print(prior)
 
+
 # ============================================================
 # TEST FIT
 # ============================================================
-# Poche iterazioni: serve solo a verificare che il modello compili e campioni.
 
 fit <- mira_fit(
   stan_data = stan_data,
@@ -124,8 +145,8 @@ fit <- mira_fit(
   verbose = TRUE
 )
 
-# Diagnostica tecnica del test.
 fit$diagnostic_summary()
+
 
 # ============================================================
 # SUMMARY
@@ -140,7 +161,6 @@ mira_res <- mira_summary(
 mira_res$population_time_means
 mira_res$treatment_effects
 mira_res$diagnostics
-
 
 # ------------------------------------------------------------
 # 6. Verifica il fit

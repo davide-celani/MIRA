@@ -1,67 +1,269 @@
-#' Create a MIRA prior specification
+.mira_prior_fields <- c(
+  "baseline_prior_mean",
+  "baseline_prior_sd",
+  "beta_time_prior_mean",
+  "beta_time_prior_sd",
+  "tau_common_prior_rate",
+  "beta_treatment_prior_sd",
+  "tau_treatment_prior_rate",
+  "arm_baseline_sd_prior_rate",
+  "gender_baseline_prior_sd",
+  "beta_gender_prior_sd",
+  "tau_gender_prior_rate",
+  "age_baseline_prior_sd",
+  "beta_age_prior_sd",
+  "tau_age_prior_rate",
+  "sigma_intercept_prior_rate",
+  "sigma_slope_prior_rate",
+  "sigma_prior_rate",
+  "nu_prior_shape",
+  "nu_prior_rate"
+)
+
+
+.mira_prior_user_fields <- c(
+  "baseline_mean",
+  "baseline_sd",
+  "beta_time_mean",
+  "beta_time_sd",
+  "tau_common_rate",
+  "beta_treatment_sd",
+  "tau_treatment_rate",
+  "arm_baseline_sd_rate",
+  "gender_baseline_sd",
+  "beta_gender_sd",
+  "tau_gender_rate",
+  "age_baseline_sd",
+  "beta_age_sd",
+  "tau_age_rate",
+  "sigma_intercept_rate",
+  "sigma_slope_rate",
+  "sigma_rate",
+  "nu_shape",
+  "nu_rate"
+)
+
+
+.mira_prior_field_map <- stats::setNames(
+  .mira_prior_user_fields,
+  .mira_prior_fields
+)
+
+
+.mira_normalize_outcome <- function(
+    outcome,
+    allow_auto = TRUE,
+    unknown_as_generic = FALSE
+) {
+  if (length(outcome) != 1L || is.na(outcome) || !nzchar(outcome)) {
+    stop("`outcome` must be one non-empty character value.", call. = FALSE)
+  }
+
+  value <- toupper(trimws(as.character(outcome)))
+
+  if (allow_auto && value == "AUTO") return("auto")
+  if (value %in% c("BCVA", "VA", "ETDRS")) return("BCVA")
+  if (value %in% c("CMT", "CST", "CSFT")) return("CMT")
+  if (value %in% c("GENERIC", "OTHER")) return("generic")
+
+  if (unknown_as_generic) return("generic")
+
+  stop(
+    "Unsupported `outcome`: ", outcome,
+    ". Use 'auto', 'BCVA', 'CMT', or 'generic'.",
+    call. = FALSE
+  )
+}
+
+
+.mira_normalize_informativeness <- function(informativeness) {
+  if (length(informativeness) < 1L ||
+      is.na(informativeness[1L]) ||
+      !nzchar(informativeness[1L])) {
+    stop(
+      "`informativeness` must be one non-empty character value.",
+      call. = FALSE
+    )
+  }
+
+  value <- tolower(trimws(as.character(informativeness[1L])))
+
+  if (value %in% c("standard", "normal", "default")) return("standard")
+  if (value %in% c("weak", "less_informative", "less-informative")) {
+    return("weak")
+  }
+  if (value %in% c("informative", "strong")) return("informative")
+  if (value == "custom") return("custom")
+
+  stop(
+    "Unsupported `informativeness`: ", informativeness[1L],
+    ". Use 'standard', 'weak', 'informative', or 'custom'.",
+    call. = FALSE
+  )
+}
+
+
+.mira_apply_informativeness <- function(values, informativeness) {
+  if (informativeness == "standard" || informativeness == "custom") {
+    return(values)
+  }
+
+  # Weak priors have wider Normal distributions and larger expected scales.
+  # Informative priors have narrower Normal distributions and smaller scales.
+  spread_factor <- switch(
+    informativeness,
+    weak = 2.5,
+    informative = 0.5
+  )
+
+  normal_sd_fields <- c(
+    "baseline_sd",
+    "beta_time_sd",
+    "beta_treatment_sd",
+    "gender_baseline_sd",
+    "beta_gender_sd",
+    "age_baseline_sd",
+    "beta_age_sd"
+  )
+
+  exponential_rate_fields <- c(
+    "tau_common_rate",
+    "tau_treatment_rate",
+    "arm_baseline_sd_rate",
+    "tau_gender_rate",
+    "tau_age_rate",
+    "sigma_intercept_rate",
+    "sigma_slope_rate",
+    "sigma_rate"
+  )
+
+  values[normal_sd_fields] <- lapply(
+    values[normal_sd_fields],
+    function(x) x * spread_factor
+  )
+
+  # For Exponential(rate), the mean is 1 / rate. Dividing the rate therefore
+  # makes the corresponding scale prior wider.
+  values[exponential_rate_fields] <- lapply(
+    values[exponential_rate_fields],
+    function(x) x / spread_factor
+  )
+
+  if (informativeness == "weak") {
+    values$nu_shape <- 2
+    values$nu_rate <- 0.1
+  } else {
+    values$nu_shape <- 5
+    values$nu_rate <- 0.5
+  }
+
+  values
+}
+
+
+.mira_normalize_custom_prior <- function(custom_prior) {
+  if (is.null(custom_prior)) return(list())
+
+  if (!is.list(custom_prior) ||
+      is.null(names(custom_prior)) ||
+      anyNA(names(custom_prior)) ||
+      any(!nzchar(names(custom_prior))) ||
+      anyDuplicated(names(custom_prior))) {
+    stop(
+      "`custom_prior` must be a named list with unique, non-empty names.",
+      call. = FALSE
+    )
+  }
+
+  normalized_names <- names(custom_prior)
+  stan_names <- normalized_names %in% names(.mira_prior_field_map)
+  normalized_names[stan_names] <- unname(
+    .mira_prior_field_map[normalized_names[stan_names]]
+  )
+
+  unknown_names <- setdiff(normalized_names, .mira_prior_user_fields)
+  if (length(unknown_names) > 0L) {
+    stop(
+      "Unknown fields in `custom_prior`: ",
+      paste(unknown_names, collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
+
+  if (anyDuplicated(normalized_names)) {
+    stop(
+      "`custom_prior` specifies the same parameter more than once.",
+      call. = FALSE
+    )
+  }
+
+  names(custom_prior) <- normalized_names
+  custom_prior
+}
+
+
+#' Create BCVA, CMT, or custom priors for the MIRA model
 #'
-#' Creates prior specifications for the MIRA longitudinal multi-arm
-#' Student-t model with treatment-, gender-, and age-threshold-specific
-#' longitudinal effects.
+#' `outcome` and `informativeness` are independent choices. For example,
+#' BCVA can use weak, standard, informative, or custom priors, and the same is
+#' true for CMT. The returned object contains exactly the 19 prior fields used
+#' by the current Stan model, plus R-side metadata.
 #'
-#' Priors are scaled using the observed outcome SD and the total elapsed
-#' follow-up time, so the specification remains applicable with any
-#' number of measurement occasions K >= 2 and with irregular time spacing.
+#' The BCVA and CMT centres are calibrated to DRCR.net Protocol T summaries.
+#' BCVA is expressed in ETDRS letters and CMT in micrometres. The CMT profile
+#' uses central subfield thickness as a practical proxy; OCT device and
+#' segmentation conventions can require different values.
 #'
 #' @param stan_data Data prepared by [mira_prepare_data()].
-#' @param profile Character string specifying a predefined prior profile.
-#'   Available profiles are `"default"`, `"weak"`, `"regularized"`,
-#'   `"informative"`, and `"custom"`. With a predefined profile, every
-#'   non-NULL prior argument below overrides only the corresponding profile
-#'   default.
-#' @param baseline_mean Prior mean for the reference-arm baseline mean.
-#' @param baseline_sd Prior SD for the reference-arm baseline mean.
-#' @param beta_time_mean Prior mean for the reference-arm global time slope.
-#' @param beta_time_sd Prior SD for the reference-arm global time slope.
-#' @param tau_common_rate Exponential rate for continuous-time RW1
-#'   deviations of the reference trajectory.
-#' @param beta_treatment_sd Prior SD for treatment slopes relative to the
-#'   reference arm.
-#' @param tau_treatment_rate Exponential rate for treatment-specific RW1
-#'   deviations.
-#' @param arm_baseline_sd_rate Exponential rate for baseline imbalance SD
-#'   between treatment arms.
-#' @param gender_baseline_sd Prior SD for the Male - Female baseline
-#'   difference. For predefined profiles, defaults to the same scale as
-#'   `baseline_sd`; for `profile = "custom"`, NULL inherits `baseline_sd`.
-#' @param beta_gender_sd Prior SD for the Male - Female global time-slope
-#'   difference. For predefined profiles, defaults to the treatment-slope
-#'   scale; for `profile = "custom"`, NULL inherits `beta_treatment_sd`.
-#' @param tau_gender_rate Exponential rate for the gender-specific RW1 scale.
-#'   For `profile = "custom"`, NULL inherits `tau_treatment_rate`.
-#' @param age_baseline_sd Prior SD for the baseline difference between
-#'   subjects above versus at/below the age threshold. For predefined profiles,
-#'   defaults to the same scale as `baseline_sd`; for `profile = "custom"`,
-#'   NULL inherits `baseline_sd`.
-#' @param beta_age_sd Prior SD for the age-group global time-slope difference.
-#'   For predefined profiles, defaults to the treatment-slope scale; for
-#'   `profile = "custom"`, NULL inherits `beta_treatment_sd`.
-#' @param tau_age_rate Exponential rate for the age-group-specific RW1 scale.
-#'   For `profile = "custom"`, NULL inherits `tau_treatment_rate`.
-#' @param sigma_intercept_rate Exponential rate for subject random-intercept SD.
-#' @param sigma_slope_rate Exponential rate for subject random-slope SD.
-#' @param sigma_rate Exponential rate for residual Student-t scale.
-#' @param nu_shape Shape parameter for the Gamma prior on Student-t degrees
-#'   of freedom, truncated to `nu >= 2` by the Stan parameter constraint.
-#' @param nu_rate Rate parameter for the same truncated Gamma prior.
+#' @param outcome Outcome scale: `"auto"`, `"BCVA"`, `"CMT"`, or
+#'   `"generic"`. With `"auto"`, `stan_data$outcome_name` is used.
+#' @param informativeness Prior strength:
+#'   * `"weak"`: broad, less informative priors;
+#'   * `"standard"`: clinically scaled default priors (`"normal"` is an
+#'     accepted alias);
+#'   * `"informative"`: narrower priors;
+#'   * `"custom"`: standard priors with user-supplied replacements.
+#' @param time_unit Unit used by `stan_data$time_value`. Clinical slope and
+#'   continuous-time RW1 priors are defined per month and converted to this
+#'   unit.
+#' @param custom_prior Optional named list of replacements. It may use the
+#'   short argument names, such as `baseline_mean`, or the exact Stan names,
+#'   such as `baseline_prior_mean`. Unspecified fields inherit the selected
+#'   outcome's standard prior.
+#' @param profile Optional legacy profile. Supported for compatibility with
+#'   existing code: `"auto"`, `"bcva"`, `"cmt"`, `"default"`, `"weak"`,
+#'   `"regularized"`, `"informative"`, and `"custom"`.
+#' @param baseline_mean Prior mean for the reference-arm baseline.
+#' @param baseline_sd Prior SD for the reference-arm baseline.
+#' @param beta_time_mean Prior mean for the reference-arm time slope.
+#' @param beta_time_sd Prior SD for the reference-arm time slope.
+#' @param tau_common_rate Exponential rate for the common RW1 scale.
+#' @param beta_treatment_sd Prior SD for treatment slope differences.
+#' @param tau_treatment_rate Exponential rate for treatment RW1 scales.
+#' @param arm_baseline_sd_rate Exponential rate for baseline arm imbalance SD.
+#' @param gender_baseline_sd Prior SD for the gender baseline difference.
+#' @param beta_gender_sd Prior SD for the gender slope difference.
+#' @param tau_gender_rate Exponential rate for the gender RW1 scale.
+#' @param age_baseline_sd Prior SD for the age-group baseline difference.
+#' @param beta_age_sd Prior SD for the age-group slope difference.
+#' @param tau_age_rate Exponential rate for the age-group RW1 scale.
+#' @param sigma_intercept_rate Exponential rate for random-intercept SD.
+#' @param sigma_slope_rate Exponential rate for random-slope SD.
+#' @param sigma_rate Exponential rate for the residual Student-t scale.
+#' @param nu_shape Shape of the Gamma prior for Student-t degrees of freedom.
+#' @param nu_rate Rate of the Gamma prior for Student-t degrees of freedom.
 #'
 #' @return An object of class `mira_prior`.
 #'
 #' @export
 mira_prior <- function(
     stan_data,
-    profile = c(
-      "default",
-      "weak",
-      "regularized",
-      "informative",
-      "custom"
-    ),
+    outcome = c("auto", "BCVA", "CMT", "generic"),
+    informativeness = c("standard", "weak", "informative", "custom"),
+    time_unit = c("months", "years", "weeks", "days"),
+    custom_prior = NULL,
+    profile = NULL,
     baseline_mean = NULL,
     baseline_sd = NULL,
     beta_time_mean = NULL,
@@ -83,33 +285,23 @@ mira_prior <- function(
     nu_rate = NULL
 ) {
 
-  # ============================================================
-  # DATA VALIDATION
-  # ============================================================
+  outcome_was_missing <- missing(outcome)
+  informativeness_was_missing <- missing(informativeness)
 
   if (!is.list(stan_data)) {
     stop("`stan_data` must be a list.", call. = FALSE)
   }
 
-  required <- c(
-    "y",
-    "time",
-    "time_value",
-    "mean_y",
-    "sd_y"
-  )
+  required_data <- c("y", "time", "time_value", "mean_y", "sd_y")
+  missing_data <- setdiff(required_data, names(stan_data))
 
-  missing <- setdiff(required, names(stan_data))
-
-  if (length(missing) > 0) {
+  if (length(missing_data) > 0L) {
     stop(
-      "Missing data required to construct MIRA priors: ",
-      paste(missing, collapse = ", "),
+      "Missing data required to construct priors: ",
+      paste(missing_data, collapse = ", "),
       call. = FALSE
     )
   }
-
-  profile <- match.arg(profile)
 
   y <- stan_data$y
   time <- stan_data$time
@@ -117,7 +309,7 @@ mira_prior <- function(
   mean_y <- stan_data$mean_y
   sd_y <- stan_data$sd_y
 
-  if (!is.numeric(y) || length(y) < 1 || any(!is.finite(y))) {
+  if (!is.numeric(y) || length(y) < 1L || any(!is.finite(y))) {
     stop("`stan_data$y` must contain finite numeric values.", call. = FALSE)
   }
 
@@ -125,41 +317,116 @@ mira_prior <- function(
       length(time) != length(y) ||
       any(!is.finite(time)) ||
       any(time != floor(time)) ||
-      any(time < 1)) {
-    stop(
-      "`stan_data$time` must contain one positive integer time index per observation.",
-      call. = FALSE
-    )
+      any(time < 1L)) {
+    stop("`stan_data$time` must contain one positive integer per observation.",
+         call. = FALSE)
   }
 
   if (!is.numeric(time_value) ||
-      length(time_value) < 2 ||
+      length(time_value) < 2L ||
       any(!is.finite(time_value)) ||
-      anyDuplicated(time_value) ||
       is.unsorted(time_value, strictly = TRUE)) {
-    stop(
-      "`stan_data$time_value` must contain at least two finite, strictly increasing values.",
-      call. = FALSE
-    )
+    stop("`stan_data$time_value` must be finite and strictly increasing.",
+         call. = FALSE)
   }
 
   if (any(time > length(time_value))) {
-    stop(
-      "`stan_data$time` contains an index larger than `length(time_value)`.",
-      call. = FALSE
-    )
+    stop("A time index exceeds `length(stan_data$time_value)`.", call. = FALSE)
   }
 
-  if (!is.numeric(mean_y) || length(mean_y) != 1 || !is.finite(mean_y)) {
-    stop(
-      "`stan_data$mean_y` must be a single finite numeric value.",
-      call. = FALSE
-    )
+  if (length(mean_y) != 1L || !is.numeric(mean_y) || !is.finite(mean_y)) {
+    stop("`stan_data$mean_y` must be one finite numeric value.", call. = FALSE)
   }
 
-  if (!is.numeric(sd_y) || length(sd_y) != 1 || !is.finite(sd_y) || sd_y <= 0) {
+  if (length(sd_y) != 1L ||
+      !is.numeric(sd_y) ||
+      !is.finite(sd_y) ||
+      sd_y <= 0) {
+    stop("`stan_data$sd_y` must be one positive finite numeric value.",
+         call. = FALSE)
+  }
+
+  legacy_profile <- NULL
+  if (!is.null(profile)) {
+    if (length(profile) != 1L || is.na(profile) || !nzchar(profile)) {
+      stop("`profile` must be NULL or one non-empty character value.",
+           call. = FALSE)
+    }
+
+    legacy_profile <- tolower(trimws(as.character(profile)))
+    allowed_profiles <- c(
+      "auto", "bcva", "cmt", "default", "weak",
+      "regularized", "informative", "custom"
+    )
+
+    if (!legacy_profile %in% allowed_profiles) {
+      stop(
+        "Unsupported legacy `profile`: ", profile, ".",
+        call. = FALSE
+      )
+    }
+
+    if (legacy_profile %in% c("bcva", "cmt")) {
+      legacy_outcome <- toupper(legacy_profile)
+      if (!outcome_was_missing &&
+          .mira_normalize_outcome(outcome[1L]) != legacy_outcome) {
+        stop("Legacy `profile` conflicts with `outcome`.", call. = FALSE)
+      }
+      outcome <- legacy_outcome
+      if (informativeness_was_missing) informativeness <- "standard"
+    }
+
+    legacy_information <- switch(
+      legacy_profile,
+      default = "standard",
+      weak = "weak",
+      regularized = "informative",
+      informative = "informative",
+      custom = "custom",
+      NULL
+    )
+
+    if (!is.null(legacy_information)) {
+      if (!informativeness_was_missing &&
+          .mira_normalize_informativeness(informativeness) !=
+          legacy_information) {
+        stop("Legacy `profile` conflicts with `informativeness`.",
+             call. = FALSE)
+      }
+      informativeness <- legacy_information
+    }
+  }
+
+  requested_outcome <- .mira_normalize_outcome(outcome[1L])
+  informativeness <- .mira_normalize_informativeness(informativeness)
+  time_unit <- match.arg(
+    tolower(time_unit),
+    c("months", "years", "weeks", "days")
+  )
+
+  data_outcome <- if (!is.null(stan_data$outcome_name)) {
+    .mira_normalize_outcome(
+      stan_data$outcome_name,
+      allow_auto = FALSE,
+      unknown_as_generic = TRUE
+    )
+  } else {
+    "generic"
+  }
+
+  resolved_outcome <- if (requested_outcome == "auto") {
+    data_outcome
+  } else {
+    requested_outcome
+  }
+
+  if (requested_outcome != "auto" &&
+      data_outcome != "generic" &&
+      requested_outcome != data_outcome) {
     stop(
-      "`stan_data$sd_y` must be a single positive finite numeric value.",
+      "`outcome = '", requested_outcome,
+      "'` does not match `stan_data$outcome_name = '",
+      data_outcome, "'`.",
       call. = FALSE
     )
   }
@@ -167,13 +434,104 @@ mira_prior <- function(
   y <- as.numeric(y)
   time <- as.integer(time)
   time_value <- as.numeric(time_value)
-  mean_y <- as.numeric(mean_y)
-  sd_y <- as.numeric(sd_y)
+  baseline_y <- y[time == 1L]
 
-  # Preserve explicit arguments before profile defaults are constructed.
-  # They are applied below so that profile = "default" (and the other
-  # predefined profiles) can be customized without silently discarding them.
-  user_overrides <- list(
+  if (length(baseline_y) < 1L) {
+    stop("No baseline observations (`time == 1`) were found.", call. = FALSE)
+  }
+
+  baseline_center <- mean(baseline_y)
+  time_span <- max(time_value) - min(time_value)
+  outcome_scale <- max(as.numeric(sd_y), 1e-8)
+  slope_scale <- max(outcome_scale / time_span, 1e-8)
+  rw_scale <- max(outcome_scale / sqrt(time_span), 1e-8)
+
+  months_per_unit <- c(
+    months = 1,
+    years = 12,
+    weeks = 12 / 52.1775,
+    days = 12 / 365.25
+  )[[time_unit]]
+
+  slope_unit <- months_per_unit
+  rw_unit <- sqrt(months_per_unit)
+
+  if (resolved_outcome == "BCVA") {
+    values <- list(
+      baseline_mean = 65,
+      baseline_sd = 15,
+      beta_time_mean = 0.8 * slope_unit,
+      beta_time_sd = 0.6 * slope_unit,
+      tau_common_rate = 1 / (1.5 * rw_unit),
+      beta_treatment_sd = 0.5 * slope_unit,
+      tau_treatment_rate = 1 / (1.0 * rw_unit),
+      arm_baseline_sd_rate = 1 / 4,
+      gender_baseline_sd = 3,
+      beta_gender_sd = 0.25 * slope_unit,
+      tau_gender_rate = 1 / (1.0 * rw_unit),
+      age_baseline_sd = 5,
+      beta_age_sd = 0.25 * slope_unit,
+      tau_age_rate = 1 / (1.0 * rw_unit),
+      sigma_intercept_rate = 1 / 10,
+      sigma_slope_rate = 1 / (0.6 * slope_unit),
+      sigma_rate = 1 / 3,
+      nu_shape = 3,
+      nu_rate = 0.2
+    )
+  } else if (resolved_outcome == "CMT") {
+    values <- list(
+      baseline_mean = 412,
+      baseline_sd = 130,
+      beta_time_mean = -8 * slope_unit,
+      beta_time_sd = 8 * slope_unit,
+      tau_common_rate = 1 / (20 * rw_unit),
+      beta_treatment_sd = 6 * slope_unit,
+      tau_treatment_rate = 1 / (15 * rw_unit),
+      arm_baseline_sd_rate = 1 / 30,
+      gender_baseline_sd = 25,
+      beta_gender_sd = 3 * slope_unit,
+      tau_gender_rate = 1 / (15 * rw_unit),
+      age_baseline_sd = 30,
+      beta_age_sd = 3 * slope_unit,
+      tau_age_rate = 1 / (15 * rw_unit),
+      sigma_intercept_rate = 1 / 60,
+      sigma_slope_rate = 1 / (6 * slope_unit),
+      sigma_rate = 1 / 25,
+      nu_shape = 3,
+      nu_rate = 0.2
+    )
+  } else {
+    values <- list(
+      baseline_mean = baseline_center,
+      baseline_sd = 2 * outcome_scale,
+      beta_time_mean = 0,
+      beta_time_sd = 2 * slope_scale,
+      tau_common_rate = 1 / rw_scale,
+      beta_treatment_sd = 2 * slope_scale,
+      tau_treatment_rate = 1 / rw_scale,
+      arm_baseline_sd_rate = 1 / outcome_scale,
+      gender_baseline_sd = 2 * outcome_scale,
+      beta_gender_sd = 2 * slope_scale,
+      tau_gender_rate = 1 / rw_scale,
+      age_baseline_sd = 2 * outcome_scale,
+      beta_age_sd = 2 * slope_scale,
+      tau_age_rate = 1 / rw_scale,
+      sigma_intercept_rate = 1 / outcome_scale,
+      sigma_slope_rate = 1 / slope_scale,
+      sigma_rate = 1 / outcome_scale,
+      nu_shape = 3,
+      nu_rate = 0.2
+    )
+  }
+
+  values <- .mira_apply_informativeness(values, informativeness)
+
+  custom_values <- .mira_normalize_custom_prior(custom_prior)
+  for (name in names(custom_values)) {
+    values[[name]] <- custom_values[[name]]
+  }
+
+  direct_overrides <- list(
     baseline_mean = baseline_mean,
     baseline_sd = baseline_sd,
     beta_time_mean = beta_time_mean,
@@ -195,638 +553,196 @@ mira_prior <- function(
     nu_rate = nu_rate
   )
 
-  # ============================================================
-  # DATA-ADAPTIVE REFERENCE SCALES
-  # ============================================================
+  direct_names <- names(direct_overrides)[
+    !vapply(direct_overrides, is.null, logical(1))
+  ]
 
-  baseline_y <- y[time == 1]
+  for (name in direct_names) {
+    values[[name]] <- direct_overrides[[name]]
+  }
 
-  if (length(baseline_y) < 1) {
+  customized_fields <- unique(c(names(custom_values), direct_names))
+  if (informativeness == "custom" && length(customized_fields) == 0L) {
     stop(
-      "No baseline observations (`time == 1`) were found.",
+      "With `informativeness = 'custom'`, supply `custom_prior` or at least one explicit prior argument.",
       call. = FALSE
     )
   }
 
-  baseline_center <- mean(baseline_y)
-
-  time_span <- max(time_value) - min(time_value)
-
-  if (!is.finite(time_span) || time_span <= 0) {
-    stop(
-      "`time_value` must span a positive amount of time.",
-      call. = FALSE
-    )
-  }
-
-  # beta_* and subject slope have units outcome / time.
-  slope_scale <- sd_y / time_span
-
-  # tau_* multiplies sqrt(dt), therefore has units outcome / sqrt(time).
-  rw_scale <- sd_y / sqrt(time_span)
-
-  # Numerical guards only; these do not materially alter ordinary data.
-  outcome_scale <- max(sd_y, 1e-8)
-  slope_scale <- max(slope_scale, 1e-8)
-  rw_scale <- max(rw_scale, 1e-8)
-
-  # ============================================================
-  # PREDEFINED PROFILES
-  # ============================================================
-
-  if (profile == "default") {
-
-    baseline_mean <- baseline_center
-    baseline_sd <- 2 * outcome_scale
-
-    beta_time_mean <- 0
-    beta_time_sd <- 2 * slope_scale
-
-    tau_common_rate <- 1 / rw_scale
-
-    beta_treatment_sd <- 2 * slope_scale
-    tau_treatment_rate <- 1 / rw_scale
-
-    arm_baseline_sd_rate <- 1 / outcome_scale
-
-    # Covariate effects are centered at zero. Dedicated scales default to
-    # the analogous baseline/treatment scales for this profile.
-    gender_baseline_sd <- baseline_sd
-    beta_gender_sd <- beta_treatment_sd
-    tau_gender_rate <- tau_treatment_rate
-
-    age_baseline_sd <- baseline_sd
-    beta_age_sd <- beta_treatment_sd
-    tau_age_rate <- tau_treatment_rate
-
-    sigma_intercept_rate <- 1 / outcome_scale
-    sigma_slope_rate <- 1 / slope_scale
-
-    sigma_rate <- 1 / outcome_scale
-
-    nu_shape <- 2
-    nu_rate <- 0.1
-  }
-
-
-  if (profile == "weak") {
-
-    baseline_mean <- baseline_center
-    baseline_sd <- 5 * outcome_scale
-
-    beta_time_mean <- 0
-    beta_time_sd <- 5 * slope_scale
-
-    tau_common_rate <- 0.5 / rw_scale
-
-    beta_treatment_sd <- 5 * slope_scale
-    tau_treatment_rate <- 0.5 / rw_scale
-
-    arm_baseline_sd_rate <- 0.5 / outcome_scale
-
-    gender_baseline_sd <- baseline_sd
-    beta_gender_sd <- beta_treatment_sd
-    tau_gender_rate <- tau_treatment_rate
-
-    age_baseline_sd <- baseline_sd
-    beta_age_sd <- beta_treatment_sd
-    tau_age_rate <- tau_treatment_rate
-
-    sigma_intercept_rate <- 0.5 / outcome_scale
-    sigma_slope_rate <- 0.5 / slope_scale
-
-    sigma_rate <- 0.5 / outcome_scale
-
-    nu_shape <- 2
-    nu_rate <- 0.05
-  }
-
-
-  if (profile == "regularized") {
-
-    baseline_mean <- baseline_center
-    baseline_sd <- 1.5 * outcome_scale
-
-    beta_time_mean <- 0
-    beta_time_sd <- 1 * slope_scale
-
-    tau_common_rate <- 2 / rw_scale
-
-    beta_treatment_sd <- 1 * slope_scale
-    tau_treatment_rate <- 2 / rw_scale
-
-    arm_baseline_sd_rate <- 2 / outcome_scale
-
-    gender_baseline_sd <- baseline_sd
-    beta_gender_sd <- beta_treatment_sd
-    tau_gender_rate <- tau_treatment_rate
-
-    age_baseline_sd <- baseline_sd
-    beta_age_sd <- beta_treatment_sd
-    tau_age_rate <- tau_treatment_rate
-
-    sigma_intercept_rate <- 2 / outcome_scale
-    sigma_slope_rate <- 2 / slope_scale
-
-    sigma_rate <- 2 / outcome_scale
-
-    nu_shape <- 2
-    nu_rate <- 0.1
-  }
-
-
-  if (profile == "informative") {
-
-    baseline_mean <- baseline_center
-    baseline_sd <- 0.75 * outcome_scale
-
-    beta_time_mean <- 0
-    beta_time_sd <- 0.5 * slope_scale
-
-    tau_common_rate <- 5 / rw_scale
-
-    beta_treatment_sd <- 0.5 * slope_scale
-    tau_treatment_rate <- 5 / rw_scale
-
-    arm_baseline_sd_rate <- 5 / outcome_scale
-
-    gender_baseline_sd <- baseline_sd
-    beta_gender_sd <- beta_treatment_sd
-    tau_gender_rate <- tau_treatment_rate
-
-    age_baseline_sd <- baseline_sd
-    beta_age_sd <- beta_treatment_sd
-    tau_age_rate <- tau_treatment_rate
-
-    sigma_intercept_rate <- 5 / outcome_scale
-    sigma_slope_rate <- 5 / slope_scale
-
-    sigma_rate <- 5 / outcome_scale
-
-    nu_shape <- 5
-    nu_rate <- 0.5
-  }
-
-  if (profile != "custom") {
-    for (name in names(user_overrides)) {
-      if (!is.null(user_overrides[[name]])) {
-        assign(
-          name,
-          user_overrides[[name]],
-          envir = environment(),
-          inherits = FALSE
-        )
-      }
-    }
-
-    # When a dedicated covariate scale is omitted, inherit the final analogous
-    # scale, including any explicit override applied just above.
-    if (is.null(user_overrides$gender_baseline_sd)) {
-      gender_baseline_sd <- baseline_sd
-    }
-    if (is.null(user_overrides$beta_gender_sd)) {
-      beta_gender_sd <- beta_treatment_sd
-    }
-    if (is.null(user_overrides$tau_gender_rate)) {
-      tau_gender_rate <- tau_treatment_rate
-    }
-
-    if (is.null(user_overrides$age_baseline_sd)) {
-      age_baseline_sd <- baseline_sd
-    }
-    if (is.null(user_overrides$beta_age_sd)) {
-      beta_age_sd <- beta_treatment_sd
-    }
-    if (is.null(user_overrides$tau_age_rate)) {
-      tau_age_rate <- tau_treatment_rate
-    }
-  }
-
-
-  # ============================================================
-  # CUSTOM PROFILE
-  # ============================================================
-
-  if (profile == "custom") {
-
-    if (is.null(baseline_mean)) {
-      baseline_mean <- baseline_center
-    }
-
-    if (is.null(beta_time_mean)) {
-      beta_time_mean <- 0
-    }
-
-    required_custom <- c(
-      "baseline_sd",
-      "beta_time_sd",
-      "tau_common_rate",
-      "beta_treatment_sd",
-      "tau_treatment_rate",
-      "arm_baseline_sd_rate",
-      "sigma_intercept_rate",
-      "sigma_slope_rate",
-      "sigma_rate",
-      "nu_shape",
-      "nu_rate"
-    )
-
-    custom_values <- mget(
-      required_custom,
-      envir = environment(),
-      inherits = FALSE
-    )
-
-    missing_custom <- names(custom_values)[
-      vapply(custom_values, is.null, logical(1))
-    ]
-
-    if (length(missing_custom) > 0) {
-      stop(
-        "For `profile = 'custom'`, supply: ",
-        paste(missing_custom, collapse = ", "),
-        ".",
-        call. = FALSE
-      )
-    }
-
-    # Backwards-compatible defaults for the newly introduced covariate priors.
-    # They remain separately represented in the prior object and Stan data, so
-    # users can override them independently when desired.
-    if (is.null(gender_baseline_sd)) gender_baseline_sd <- baseline_sd
-    if (is.null(beta_gender_sd)) beta_gender_sd <- beta_treatment_sd
-    if (is.null(tau_gender_rate)) tau_gender_rate <- tau_treatment_rate
-
-    if (is.null(age_baseline_sd)) age_baseline_sd <- baseline_sd
-    if (is.null(beta_age_sd)) beta_age_sd <- beta_treatment_sd
-    if (is.null(tau_age_rate)) tau_age_rate <- tau_treatment_rate
-  }
-
-  # ============================================================
-  # VALIDATION
-  # ============================================================
-
-  finite_parameters <- list(
-    baseline_mean = baseline_mean,
-    beta_time_mean = beta_time_mean
-  )
-
-  for (name in names(finite_parameters)) {
-    value <- finite_parameters[[name]]
-
-    if (length(value) != 1 ||
+  finite_names <- c("baseline_mean", "beta_time_mean")
+  positive_names <- setdiff(.mira_prior_user_fields, finite_names)
+
+  for (name in finite_names) {
+    value <- values[[name]]
+    if (length(value) != 1L ||
         !is.numeric(value) ||
         !is.finite(value)) {
-      stop(
-        "`", name, "` must be a single finite numeric value.",
-        call. = FALSE
-      )
+      stop("`", name, "` must be one finite numeric value.", call. = FALSE)
     }
   }
 
-  positive_parameters <- list(
-    baseline_sd = baseline_sd,
-    beta_time_sd = beta_time_sd,
-    tau_common_rate = tau_common_rate,
-    beta_treatment_sd = beta_treatment_sd,
-    tau_treatment_rate = tau_treatment_rate,
-    arm_baseline_sd_rate = arm_baseline_sd_rate,
-    gender_baseline_sd = gender_baseline_sd,
-    beta_gender_sd = beta_gender_sd,
-    tau_gender_rate = tau_gender_rate,
-    age_baseline_sd = age_baseline_sd,
-    beta_age_sd = beta_age_sd,
-    tau_age_rate = tau_age_rate,
-    sigma_intercept_rate = sigma_intercept_rate,
-    sigma_slope_rate = sigma_slope_rate,
-    sigma_rate = sigma_rate,
-    nu_shape = nu_shape,
-    nu_rate = nu_rate
-  )
-
-  for (name in names(positive_parameters)) {
-    value <- positive_parameters[[name]]
-
-    if (length(value) != 1 ||
+  for (name in positive_names) {
+    value <- values[[name]]
+    if (length(value) != 1L ||
         !is.numeric(value) ||
         !is.finite(value) ||
         value <= 0) {
-      stop(
-        "`", name, "` must be a single positive finite numeric value.",
-        call. = FALSE
-      )
+      stop("`", name, "` must be one positive finite numeric value.",
+           call. = FALSE)
     }
   }
 
-  # ============================================================
-  # BUILD PRIOR OBJECT
-  # ============================================================
-
   prior <- list(
-    baseline_prior_mean = as.numeric(baseline_mean),
-    baseline_prior_sd = as.numeric(baseline_sd),
-
-    beta_time_prior_mean = as.numeric(beta_time_mean),
-    beta_time_prior_sd = as.numeric(beta_time_sd),
-
-    tau_common_prior_rate = as.numeric(tau_common_rate),
-
-    beta_treatment_prior_sd = as.numeric(beta_treatment_sd),
-    tau_treatment_prior_rate = as.numeric(tau_treatment_rate),
-
-    arm_baseline_sd_prior_rate = as.numeric(arm_baseline_sd_rate),
-
-    # Dedicated priors for Male - Female trajectory.
-    gender_baseline_prior_sd = as.numeric(gender_baseline_sd),
-    beta_gender_prior_sd = as.numeric(beta_gender_sd),
-    tau_gender_prior_rate = as.numeric(tau_gender_rate),
-
-    # Dedicated priors for age > threshold - age <= threshold trajectory.
-    age_baseline_prior_sd = as.numeric(age_baseline_sd),
-    beta_age_prior_sd = as.numeric(beta_age_sd),
-    tau_age_prior_rate = as.numeric(tau_age_rate),
-
-    sigma_intercept_prior_rate = as.numeric(sigma_intercept_rate),
-    sigma_slope_prior_rate = as.numeric(sigma_slope_rate),
-
-    sigma_prior_rate = as.numeric(sigma_rate),
-
-    nu_prior_shape = as.numeric(nu_shape),
-    nu_prior_rate = as.numeric(nu_rate),
-
-    profile = profile,
-
-    # R-side metadata: useful for inspection but not sent to Stan.
+    baseline_prior_mean = as.numeric(values$baseline_mean),
+    baseline_prior_sd = as.numeric(values$baseline_sd),
+    beta_time_prior_mean = as.numeric(values$beta_time_mean),
+    beta_time_prior_sd = as.numeric(values$beta_time_sd),
+    tau_common_prior_rate = as.numeric(values$tau_common_rate),
+    beta_treatment_prior_sd = as.numeric(values$beta_treatment_sd),
+    tau_treatment_prior_rate = as.numeric(values$tau_treatment_rate),
+    arm_baseline_sd_prior_rate = as.numeric(values$arm_baseline_sd_rate),
+    gender_baseline_prior_sd = as.numeric(values$gender_baseline_sd),
+    beta_gender_prior_sd = as.numeric(values$beta_gender_sd),
+    tau_gender_prior_rate = as.numeric(values$tau_gender_rate),
+    age_baseline_prior_sd = as.numeric(values$age_baseline_sd),
+    beta_age_prior_sd = as.numeric(values$beta_age_sd),
+    tau_age_prior_rate = as.numeric(values$tau_age_rate),
+    sigma_intercept_prior_rate = as.numeric(values$sigma_intercept_rate),
+    sigma_slope_prior_rate = as.numeric(values$sigma_slope_rate),
+    sigma_prior_rate = as.numeric(values$sigma_rate),
+    nu_prior_shape = as.numeric(values$nu_shape),
+    nu_prior_rate = as.numeric(values$nu_rate),
+    profile = paste(tolower(resolved_outcome), informativeness, sep = "_"),
+    outcome = resolved_outcome,
+    informativeness = informativeness,
+    time_unit = time_unit,
+    customized_fields = customized_fields,
+    legacy_profile = legacy_profile,
     reference_scales = list(
       baseline_center = baseline_center,
       outcome_scale = outcome_scale,
       slope_scale = slope_scale,
       rw_scale = rw_scale,
-      time_span = time_span
-    )
+      time_span = time_span,
+      months_per_time_unit = months_per_unit
+    ),
+    literature = if (resolved_outcome %in% c("BCVA", "CMT")) c(
+      protocol_t_one_year = "doi:10.1056/NEJMoa1414264",
+      protocol_t_two_year = "doi:10.1016/j.ophtha.2016.02.022",
+      bcva_cmt_association = "doi:10.1001/jamaophthalmol.2019.1963"
+    ) else NULL
   )
 
   class(prior) <- "mira_prior"
-
+  mira_validate_prior(prior)
   prior
 }
 
 
-#' Print a MIRA prior specification
+#' Create BCVA priors
 #'
-#' @param x A `mira_prior` object.
-#' @param ... Additional arguments.
+#' @param stan_data Data prepared from BCVA columns.
+#' @param informativeness `"standard"`, `"weak"`, `"informative"`, or
+#'   `"custom"`.
+#' @param time_unit Unit used by `stan_data$time_value`.
+#' @param ... Optional prior replacements passed to [mira_prior()].
+#'
+#' @return A `mira_prior` object.
 #'
 #' @export
-print.mira_prior <- function(
-    x,
+mira_prior_bcva <- function(
+    stan_data,
+    informativeness = "standard",
+    time_unit = "months",
     ...
 ) {
-
-  mira_validate_prior(x)
-
-  cat("\n")
-  cat("MIRA prior specification\n")
-  cat("========================\n\n")
-
-  cat("Profile: ", x$profile, "\n\n", sep = "")
-
-  cat("Reference-arm baseline:\n")
-  cat(
-    "  baseline_mean ~ Normal(",
-    x$baseline_prior_mean,
-    ", ",
-    x$baseline_prior_sd,
-    ")\n\n",
-    sep = ""
+  mira_prior(
+    stan_data = stan_data,
+    outcome = "BCVA",
+    informativeness = informativeness,
+    time_unit = time_unit,
+    ...
   )
+}
 
-  cat("Reference-arm global time trend:\n")
-  cat(
-    "  beta_time ~ Normal(",
-    x$beta_time_prior_mean,
-    ", ",
-    x$beta_time_prior_sd,
-    ")\n\n",
-    sep = ""
+
+#' Create CMT priors
+#'
+#' @param stan_data Data prepared from CMT columns.
+#' @param informativeness `"standard"`, `"weak"`, `"informative"`, or
+#'   `"custom"`.
+#' @param time_unit Unit used by `stan_data$time_value`.
+#' @param ... Optional prior replacements passed to [mira_prior()].
+#'
+#' @return A `mira_prior` object.
+#'
+#' @export
+mira_prior_cmt <- function(
+    stan_data,
+    informativeness = "standard",
+    time_unit = "months",
+    ...
+) {
+  mira_prior(
+    stan_data = stan_data,
+    outcome = "CMT",
+    informativeness = informativeness,
+    time_unit = time_unit,
+    ...
   )
-
-  cat("Reference trajectory RW1 scale:\n")
-  cat(
-    "  tau_common ~ Exponential(",
-    x$tau_common_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Treatment slope deviations:\n")
-  cat(
-    "  beta_treatment[g] ~ Normal(0, ",
-    x$beta_treatment_prior_sd,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Treatment trajectory RW1 scales:\n")
-  cat(
-    "  tau_treatment[g] ~ Exponential(",
-    x$tau_treatment_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Baseline arm imbalance SD:\n")
-  cat(
-    "  arm_baseline_sd ~ Exponential(",
-    x$arm_baseline_sd_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Gender (Male - Female) baseline effect:\n")
-  cat(
-    "  gender_baseline_effect ~ Normal(0, ",
-    x$gender_baseline_prior_sd,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Gender time-slope difference:\n")
-  cat(
-    "  beta_gender_time ~ Normal(0, ",
-    x$beta_gender_prior_sd,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Gender trajectory RW1 scale:\n")
-  cat(
-    "  tau_gender ~ Exponential(",
-    x$tau_gender_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Age-threshold baseline effect (> threshold - <= threshold):\n")
-  cat(
-    "  age_baseline_effect ~ Normal(0, ",
-    x$age_baseline_prior_sd,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Age-threshold time-slope difference:\n")
-  cat(
-    "  beta_age_time ~ Normal(0, ",
-    x$beta_age_prior_sd,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Age-threshold trajectory RW1 scale:\n")
-  cat(
-    "  tau_age ~ Exponential(",
-    x$tau_age_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Subject random intercept SD:\n")
-  cat(
-    "  sigma_intercept ~ Exponential(",
-    x$sigma_intercept_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Subject random slope SD:\n")
-  cat(
-    "  sigma_slope ~ Exponential(",
-    x$sigma_slope_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Residual Student-t scale:\n")
-  cat(
-    "  sigma ~ Exponential(",
-    x$sigma_prior_rate,
-    ")\n\n",
-    sep = ""
-  )
-
-  cat("Student-t degrees of freedom:\n")
-  cat(
-    "  nu ~ Gamma(",
-    x$nu_prior_shape,
-    ", ",
-    x$nu_prior_rate,
-    ") truncated to [2, +Inf)\n",
-    sep = ""
-  )
-
-  cat("\n")
-
-  invisible(x)
 }
 
 
 #' Validate a MIRA prior specification
 #'
-#' @param prior A `mira_prior` object or a complete named list of Stan prior
-#'   fields.
+#' @param prior A `mira_prior` object or complete named list.
 #'
-#' @return Invisibly returns TRUE.
+#' @return Invisibly returns `TRUE`.
 #'
 #' @export
-mira_validate_prior <- function(
-    prior
-) {
-
+mira_validate_prior <- function(prior) {
   if (!is.list(prior)) {
-    stop(
-      "`prior` must be a `mira_prior` object or a complete named list.",
-      call. = FALSE
-    )
+    stop("`prior` must be a list.", call. = FALSE)
   }
 
-  if (is.null(names(prior)) || anyNA(names(prior)) ||
-      any(!nzchar(names(prior)))) {
-    stop("`prior` must have non-empty names for every field.", call. = FALSE)
+  if (is.null(names(prior)) ||
+      anyNA(names(prior)) ||
+      any(!nzchar(names(prior))) ||
+      anyDuplicated(names(prior))) {
+    stop("`prior` must have unique, non-empty field names.", call. = FALSE)
   }
 
-  if (anyDuplicated(names(prior))) {
-    stop("`prior` contains duplicated field names.", call. = FALSE)
-  }
-
-  required <- c(
-    "baseline_prior_mean",
-    "baseline_prior_sd",
-    "beta_time_prior_mean",
-    "beta_time_prior_sd",
-    "tau_common_prior_rate",
-    "beta_treatment_prior_sd",
-    "tau_treatment_prior_rate",
-    "arm_baseline_sd_prior_rate",
-    "gender_baseline_prior_sd",
-    "beta_gender_prior_sd",
-    "tau_gender_prior_rate",
-    "age_baseline_prior_sd",
-    "beta_age_prior_sd",
-    "tau_age_prior_rate",
-    "sigma_intercept_prior_rate",
-    "sigma_slope_prior_rate",
-    "sigma_prior_rate",
-    "nu_prior_shape",
-    "nu_prior_rate"
-  )
-
-  missing <- setdiff(required, names(prior))
-
-  if (length(missing) > 0) {
+  missing_fields <- setdiff(.mira_prior_fields, names(prior))
+  if (length(missing_fields) > 0L) {
     stop(
       "Invalid MIRA prior. Missing fields: ",
-      paste(missing, collapse = ", "),
+      paste(missing_fields, collapse = ", "),
       call. = FALSE
     )
   }
 
-  finite_parameters <- c(
-    "baseline_prior_mean",
-    "beta_time_prior_mean"
-  )
+  finite_fields <- c("baseline_prior_mean", "beta_time_prior_mean")
+  positive_fields <- setdiff(.mira_prior_fields, finite_fields)
 
-  positive_parameters <- setdiff(
-    required,
-    finite_parameters
-  )
-
-  for (name in finite_parameters) {
+  for (name in finite_fields) {
     value <- prior[[name]]
-
-    if (length(value) != 1 ||
+    if (length(value) != 1L ||
         !is.numeric(value) ||
         !is.finite(value)) {
-      stop(
-        "Invalid MIRA prior field `",
-        name,
-        "`: expected one finite numeric value.",
-        call. = FALSE
-      )
+      stop("Invalid prior field `", name, "`: expected one finite number.",
+           call. = FALSE)
     }
   }
 
-  for (name in positive_parameters) {
+  for (name in positive_fields) {
     value <- prior[[name]]
-
-    if (length(value) != 1 ||
+    if (length(value) != 1L ||
         !is.numeric(value) ||
         !is.finite(value) ||
         value <= 0) {
       stop(
-        "Invalid MIRA prior field `",
-        name,
-        "`: expected one positive finite numeric value.",
+        "Invalid prior field `", name,
+        "`: expected one positive finite number.",
         call. = FALSE
       )
     }
@@ -838,74 +754,59 @@ mira_validate_prior <- function(
 
 #' Convert MIRA priors to Stan data
 #'
-#' @param prior A `mira_prior` object or a complete named list of Stan prior
-#'   fields.
+#' @param prior A `mira_prior` object or complete named list.
 #'
-#' @return A named list suitable for CmdStan.
+#' @return A list containing exactly the 19 prior fields declared in Stan.
 #'
 #' @export
-mira_prior_stan_data <- function(
-    prior
-) {
-
+mira_prior_stan_data <- function(prior) {
   mira_validate_prior(prior)
+  stan_prior <- lapply(.mira_prior_fields, function(name) prior[[name]])
+  names(stan_prior) <- .mira_prior_fields
+  stan_prior
+}
 
-  list(
-    baseline_prior_mean =
-      prior$baseline_prior_mean,
 
-    baseline_prior_sd =
-      prior$baseline_prior_sd,
+#' Print a MIRA prior specification
+#'
+#' @param x A `mira_prior` object.
+#' @param ... Additional arguments (unused).
+#'
+#' @export
+print.mira_prior <- function(x, ...) {
+  mira_validate_prior(x)
 
-    beta_time_prior_mean =
-      prior$beta_time_prior_mean,
-
-    beta_time_prior_sd =
-      prior$beta_time_prior_sd,
-
-    tau_common_prior_rate =
-      prior$tau_common_prior_rate,
-
-    beta_treatment_prior_sd =
-      prior$beta_treatment_prior_sd,
-
-    tau_treatment_prior_rate =
-      prior$tau_treatment_prior_rate,
-
-    arm_baseline_sd_prior_rate =
-      prior$arm_baseline_sd_prior_rate,
-
-    gender_baseline_prior_sd =
-      prior$gender_baseline_prior_sd,
-
-    beta_gender_prior_sd =
-      prior$beta_gender_prior_sd,
-
-    tau_gender_prior_rate =
-      prior$tau_gender_prior_rate,
-
-    age_baseline_prior_sd =
-      prior$age_baseline_prior_sd,
-
-    beta_age_prior_sd =
-      prior$beta_age_prior_sd,
-
-    tau_age_prior_rate =
-      prior$tau_age_prior_rate,
-
-    sigma_intercept_prior_rate =
-      prior$sigma_intercept_prior_rate,
-
-    sigma_slope_prior_rate =
-      prior$sigma_slope_prior_rate,
-
-    sigma_prior_rate =
-      prior$sigma_prior_rate,
-
-    nu_prior_shape =
-      prior$nu_prior_shape,
-
-    nu_prior_rate =
-      prior$nu_prior_rate
+  cat("\nMIRA prior specification\n")
+  cat("========================\n")
+  if (!is.null(x$outcome)) cat("Outcome: ", x$outcome, "\n", sep = "")
+  if (!is.null(x$informativeness)) {
+    cat("Informativeness: ", x$informativeness, "\n", sep = "")
+  }
+  if (!is.null(x$time_unit)) cat("Time unit: ", x$time_unit, "\n", sep = "")
+  if (!is.null(x$customized_fields) && length(x$customized_fields) > 0L) {
+    cat(
+      "Customized: ", paste(x$customized_fields, collapse = ", "), "\n",
+      sep = ""
+    )
+  }
+  cat("\n")
+  cat(
+    "Baseline ~ Normal(", x$baseline_prior_mean, ", ",
+    x$baseline_prior_sd, ")\n",
+    sep = ""
   )
+  cat(
+    "Reference slope ~ Normal(", x$beta_time_prior_mean, ", ",
+    x$beta_time_prior_sd, ")\n",
+    sep = ""
+  )
+  cat(
+    "Treatment slope SD: ", x$beta_treatment_prior_sd, "\n",
+    "Residual scale ~ Exponential(", x$sigma_prior_rate, ")\n",
+    "Student-t nu ~ Gamma(", x$nu_prior_shape, ", ",
+    x$nu_prior_rate, "), truncated at 2\n",
+    sep = ""
+  )
+
+  invisible(x)
 }

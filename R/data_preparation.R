@@ -14,8 +14,10 @@
 #'   longitudinal measurement columns named `<outcome>_t0`, ..., `<outcome>_tK`.
 #' @param time_value Numeric vector of actual measurement times corresponding
 #'   to t0, ..., tK. Values must be finite and strictly increasing.
-#' @param meaningful_change Non-negative numeric value giving the prior mean
-#'   of the minimum clinically important difference (MCID).
+#' @param meaningful_change Positive numeric value giving the prior mean of
+#'   the minimum clinically important difference (MCID). Together with
+#'   `meaningful_change_sd`, it defines a Gamma prior with exactly these
+#'   moments.
 #' @param meaningful_change_sd Positive numeric value giving the prior SD of
 #'   the uncertain MCID. This must be externally specified; the outcome data
 #'   should not be used to identify MCID uncertainty.
@@ -39,8 +41,9 @@
 #'
 #' @return A named list containing the variables required by the MIRA Stan
 #'   model plus R-side metadata (`mean_y`, `sd_y`, `arm_labels`,
-#'   `outcome_name`, `measurement_columns`, gender coding, age threshold,
-#'   and observed group counts used for interpretation of covariate effects).
+#'   `subject_labels`, `outcome_name`, `measurement_columns`, gender coding,
+#'   age threshold, and observed group counts used for interpretation of
+#'   covariate effects).
 #'
 #' @export
 mira_prepare_data <- function(
@@ -460,10 +463,10 @@ mira_prepare_data <- function(
     length(meaningful_change) != 1 ||
     !is.numeric(meaningful_change) ||
     !is.finite(meaningful_change) ||
-    meaningful_change < 0
+    meaningful_change <= 0
   ) {
     stop(
-      "`meaningful_change` must be one finite non-negative numeric value.",
+      "`meaningful_change` must be one finite positive numeric value.",
       call. = FALSE
     )
   }
@@ -518,6 +521,26 @@ mira_prepare_data <- function(
       paste0(
         "The following longitudinal measurement columns must be numeric: ",
         paste(non_numeric_outcomes, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+
+  non_finite_outcomes <- measurement_columns[
+    vapply(
+      data[measurement_columns],
+      function(x) any(!is.finite(x)),
+      logical(1)
+    )
+  ]
+
+  if (length(non_finite_outcomes) > 0) {
+    stop(
+      paste0(
+        "The following longitudinal measurement columns contain missing or ",
+        "non-finite values: ",
+        paste(non_finite_outcomes, collapse = ", "),
+        ". Missing values are not currently supported by the MIRA Stan model."
       ),
       call. = FALSE
     )
@@ -617,6 +640,7 @@ mira_prepare_data <- function(
       c(sum(age_above_threshold == 0L), sum(age_above_threshold == 1L)),
       c(paste0("<=", age_threshold), paste0(">", age_threshold))
     ),
+    subject_labels = as.character(data$patient),
     outcome_name = outcome_name,
     measurement_columns = measurement_columns
   )

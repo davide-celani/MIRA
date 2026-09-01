@@ -32,7 +32,9 @@ data {
   // ============================================================
   // CLINICAL THRESHOLDS
   // ============================================================
-  // MCID is treated as externally informed but uncertain.
+  // MCID is treated as externally informed but uncertain. The supplied
+  // mean and SD are converted to Gamma shape/rate in transformed data,
+  // so they are the actual prior mean and prior SD.
   // Its posterior equals this prior because no likelihood term
   // identifies it directly; uncertainty is propagated into all
   // responder quantities.
@@ -62,6 +64,19 @@ data {
   real<lower=0> arm_baseline_sd_prior_rate;
 
   // ============================================================
+  // PRIORS: GENDER- AND AGE-BY-TIME EFFECTS
+  // ============================================================
+  // These are separate from the population/treatment priors so that
+  // mira_prior() overrides are actually used by the Stan model.
+  real<lower=0> gender_baseline_prior_sd;
+  real<lower=0> beta_gender_prior_sd;
+  real<lower=0> tau_gender_prior_rate;
+
+  real<lower=0> age_baseline_prior_sd;
+  real<lower=0> beta_age_prior_sd;
+  real<lower=0> tau_age_prior_rate;
+
+  // ============================================================
   // PRIORS: SUBJECT RANDOM EFFECTS
   // ============================================================
   real<lower=0> sigma_intercept_prior_rate;
@@ -77,9 +92,20 @@ data {
 
 transformed data {
   vector[K - 1] dt;
+  real mcid_prior_shape;
+  real mcid_prior_rate;
 
   if (direction == 0)
     reject("direction must be +1 or -1");
+
+  if (mcid_prior_mean <= 0)
+    reject("mcid_prior_mean must be strictly positive");
+
+  if (mcid_prior_sd <= 0)
+    reject("mcid_prior_sd must be strictly positive");
+
+  mcid_prior_shape = square(mcid_prior_mean / mcid_prior_sd);
+  mcid_prior_rate = mcid_prior_mean / square(mcid_prior_sd);
 
   for (k in 2:K) {
     if (time_value[k] <= time_value[k - 1])
@@ -251,17 +277,15 @@ model {
   // ============================================================
   // PRIORS: GENDER- AND AGE-BY-TIME EFFECTS
   // ============================================================
-  // Reuse existing population/treatment prior scales to avoid
-  // requiring new prior inputs from the fitting wrapper.
-  gender_baseline_effect ~ normal(0, baseline_prior_sd);
-  beta_gender_time ~ normal(0, beta_treatment_prior_sd);
+  gender_baseline_effect ~ normal(0, gender_baseline_prior_sd);
+  beta_gender_time ~ normal(0, beta_gender_prior_sd);
   z_gender_step ~ std_normal();
-  tau_gender ~ exponential(tau_treatment_prior_rate);
+  tau_gender ~ exponential(tau_gender_prior_rate);
 
-  age_baseline_effect ~ normal(0, baseline_prior_sd);
-  beta_age_time ~ normal(0, beta_treatment_prior_sd);
+  age_baseline_effect ~ normal(0, age_baseline_prior_sd);
+  beta_age_time ~ normal(0, beta_age_prior_sd);
   z_age_step ~ std_normal();
-  tau_age ~ exponential(tau_treatment_prior_rate);
+  tau_age ~ exponential(tau_age_prior_rate);
 
   // ============================================================
   // PRIORS: SUBJECT RANDOM EFFECTS
@@ -278,7 +302,8 @@ model {
   nu ~ gamma(nu_prior_shape, nu_prior_rate);
 
   // External MCID uncertainty; outcome data do not identify MCID.
-  mcid ~ normal(mcid_prior_mean, mcid_prior_sd);
+  // This Gamma prior has exactly the supplied mean and SD.
+  mcid ~ gamma(mcid_prior_shape, mcid_prior_rate);
 
   // ============================================================
   // OBSERVATION MODEL

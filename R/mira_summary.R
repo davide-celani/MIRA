@@ -69,6 +69,11 @@ mira_summary <- function(
     stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
   }
 
+  fit_info <- attr(fit, "mira_fit_info", exact = TRUE)
+  if (!is.null(fit_info) && !is.list(fit_info)) {
+    fit_info <- NULL
+  }
+
   if (is.null(y) && !is.null(stan_data) && "y" %in% names(stan_data)) {
     y <- stan_data$y
   }
@@ -230,9 +235,20 @@ mira_summary <- function(
   population_mean_cols <- get_cols("population_mean")
   population_mean_idx <- parse_indices(population_mean_cols)
 
+  validate_dimension <- function(x, name, lower = 1L) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x) ||
+        x < lower || x > .Machine$integer.max || x != as.integer(x)) {
+      stop(
+        "`stan_data$", name, "` must be one integer >= ", lower, ".",
+        call. = FALSE
+      )
+    }
+    as.integer(x)
+  }
+
   if (!is.null(stan_data) && all(c("G", "K") %in% names(stan_data))) {
-    G <- as.integer(stan_data$G)
-    K <- as.integer(stan_data$K)
+    G <- validate_dimension(stan_data$G, "G", 2L)
+    K <- validate_dimension(stan_data$K, "K", 2L)
   } else {
     if (length(population_mean_idx) == 0) {
       stop(
@@ -249,7 +265,7 @@ mira_summary <- function(
   individual_change_idx <- parse_indices(individual_change_cols)
 
   if (!is.null(stan_data) && "S" %in% names(stan_data)) {
-    S <- as.integer(stan_data$S)
+    S <- validate_dimension(stan_data$S, "S")
   } else if (length(individual_change_idx) > 0) {
     S <- max(vapply(individual_change_idx, function(x) x[2], integer(1)))
   } else {
@@ -261,7 +277,7 @@ mira_summary <- function(
   }
 
   if (!is.null(stan_data) && "N" %in% names(stan_data)) {
-    N <- as.integer(stan_data$N)
+    N <- validate_dimension(stan_data$N, "N")
   } else {
     N <- length(get_cols("log_lik"))
     if (N < 1 && !is.null(y)) N <- length(y)
@@ -272,17 +288,29 @@ mira_summary <- function(
   # ============================================================
 
   time_value <- if (!is.null(stan_data) && "time_value" %in% names(stan_data)) {
+    if (!is.numeric(stan_data$time_value)) {
+      stop("`stan_data$time_value` must be numeric.", call. = FALSE)
+    }
     as.numeric(stan_data$time_value)
   } else {
     seq_len(K) - 1
   }
 
-  if (length(time_value) != K) {
-    stop("`time_value` must contain exactly K values.", call. = FALSE)
+  if (length(time_value) != K || any(!is.finite(time_value)) ||
+      anyDuplicated(time_value) || is.unsorted(time_value, strictly = TRUE)) {
+    stop(
+      "`time_value` must contain exactly K finite, strictly increasing values.",
+      call. = FALSE
+    )
   }
 
   direction <- if (!is.null(stan_data) && "direction" %in% names(stan_data)) {
-    as.integer(stan_data$direction)
+    direction_value <- stan_data$direction
+    if (!is.numeric(direction_value) || length(direction_value) != 1L ||
+        !is.finite(direction_value) || !direction_value %in% c(-1, 1)) {
+      stop("`stan_data$direction` must be exactly +1 or -1.", call. = FALSE)
+    }
+    as.integer(direction_value)
   } else {
     NA_integer_
   }
@@ -317,6 +345,14 @@ mira_summary <- function(
     as.integer(stan_data$age_above_threshold)
   } else {
     rep(NA_integer_, S)
+  }
+
+  subject_labels <- if (!is.null(stan_data) &&
+                        "subject_labels" %in% names(stan_data) &&
+                        length(stan_data$subject_labels) == S) {
+    as.character(stan_data$subject_labels)
+  } else {
+    as.character(seq_len(S))
   }
 
   gender_labels <- if (!is.null(stan_data) &&
@@ -361,14 +397,35 @@ mira_summary <- function(
     NA_real_
   }
 
+  prior_names <- c(
+    "baseline_prior_mean", "baseline_prior_sd",
+    "beta_time_prior_mean", "beta_time_prior_sd",
+    "tau_common_prior_rate",
+    "beta_treatment_prior_sd", "tau_treatment_prior_rate",
+    "arm_baseline_sd_prior_rate",
+    "gender_baseline_prior_sd", "beta_gender_prior_sd",
+    "tau_gender_prior_rate",
+    "age_baseline_prior_sd", "beta_age_prior_sd", "tau_age_prior_rate",
+    "sigma_intercept_prior_rate", "sigma_slope_prior_rate",
+    "sigma_prior_rate", "nu_prior_shape", "nu_prior_rate"
+  )
+
+  prior_data <- NULL
+  if (!is.null(fit_info) && is.list(fit_info$prior_data) &&
+      all(prior_names %in% names(fit_info$prior_data))) {
+    prior_data <- fit_info$prior_data[prior_names]
+  } else if (!is.null(stan_data) && all(prior_names %in% names(stan_data))) {
+    prior_data <- stan_data[prior_names]
+  }
+
   # Current model: MCID is a parameter. Fixed meaningful_change is fallback only.
   if ("mcid" %in% names(draws)) {
     mcid_draws <- as.numeric(draws$mcid)
   } else if (!is.null(meaningful_change)) {
     if (length(meaningful_change) != 1 ||
         !is.numeric(meaningful_change) ||
-        !is.finite(meaningful_change)) {
-      stop("`meaningful_change` must be one finite numeric value.", call. = FALSE)
+        !is.finite(meaningful_change) || meaningful_change < 0) {
+      stop("`meaningful_change` must be one finite non-negative numeric value.", call. = FALSE)
     }
     mcid_draws <- rep(as.numeric(meaningful_change), nrow(draws))
   } else {
@@ -1196,6 +1253,7 @@ mira_summary <- function(
 
   add_subject_metadata <- function(x) {
     if (nrow(x) > 0) {
+      x$subject_id <- subject_labels[x$subject]
       x$time_value <- time_value[x$time]
       x$arm <- subject_arm[x$subject]
       x$arm_label <- ifelse(
@@ -1239,7 +1297,7 @@ mira_summary <- function(
   if (nrow(individual_responder) > 0) {
     individual_clinical <- individual_responder[
       , c(
-        "time", "subject", "P_MCID", "time_value", "arm", "arm_label",
+        "time", "subject", "subject_id", "P_MCID", "time_value", "arm", "arm_label",
         "male", "gender_label", "age_above_threshold", "age_group_label"
       ),
       drop = FALSE
@@ -1619,6 +1677,7 @@ mira_summary <- function(
     n_subjects = S,
     n_time_points = K,
     n_arms = G,
+    subject_labels = subject_labels,
     arm_labels = arm_labels,
     reference_arm = 1L,
     reference_label = arm_labels[1],
@@ -1657,6 +1716,17 @@ mira_summary <- function(
       NA_real_
     },
     meaningful_between_arm_difference = between_arm_threshold,
+    prior_source = if (!is.null(fit_info) && !is.null(fit_info$prior_source)) {
+      fit_info$prior_source
+    } else {
+      NA_character_
+    },
+    prior_profile = if (!is.null(fit_info) && !is.null(fit_info$prior_profile)) {
+      fit_info$prior_profile
+    } else {
+      NA_character_
+    },
+    prior_data = prior_data,
     covariate_prior_structure = list(
       gender = c(
         "gender_baseline_prior_sd",

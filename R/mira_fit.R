@@ -13,7 +13,8 @@
 #'   prior fields required by the current model, including dedicated priors
 #'   for gender- and age-threshold trajectories. If `NULL`, `mira_prior()`
 #'   is called with profile = "default", unless all prior fields are already
-#'   present in `stan_data`.
+#'   present in `stan_data`. A non-NULL `prior` takes precedence over prior
+#'   fields embedded in `stan_data`.
 #' @param chains Number of MCMC chains.
 #' @param parallel_chains Number of parallel chains.
 #' @param iter_warmup Number of warmup iterations.
@@ -24,8 +25,8 @@
 #'   automatically after successful sampling. The fitted CmdStanMCMC object is
 #'   still returned invisibly and can be assigned normally.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
-#'   looks for `inst/stan/gaussian_longitudinal_gender_age.stan`, then the
-#'   legacy MIRA Stan filenames for backwards compatibility.
+#'   looks for `inst/stan/gaussian_longitudinal.stan`, then legacy MIRA Stan
+#'   filenames for backwards compatibility.
 #'
 #' @return A CmdStanMCMC object.
 #'
@@ -49,6 +50,35 @@ mira_fit <- function(
 
   if (!is.list(stan_data)) {
     stop("`stan_data` must be a list.", call. = FALSE)
+  }
+
+  positive_integer <- function(x, name, allow_zero = FALSE) {
+    lower <- if (allow_zero) 0L else 1L
+    ok <- is.numeric(x) && length(x) == 1L && is.finite(x) &&
+      x >= lower && x <= .Machine$integer.max && x == as.integer(x)
+    if (!ok) {
+      stop(
+        "`", name, "` must be one integer ",
+        if (allow_zero) ">= 0." else ">= 1.",
+        call. = FALSE
+      )
+    }
+    invisible(TRUE)
+  }
+
+  positive_integer(chains, "chains")
+  positive_integer(parallel_chains, "parallel_chains")
+  positive_integer(iter_warmup, "iter_warmup", allow_zero = TRUE)
+  positive_integer(iter_sampling, "iter_sampling")
+  positive_integer(refresh, "refresh", allow_zero = TRUE)
+  positive_integer(seed, "seed", allow_zero = TRUE)
+
+  if (parallel_chains > chains) {
+    stop("`parallel_chains` cannot be larger than `chains`.", call. = FALSE)
+  }
+
+  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
+    stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
   }
 
   model_data_names <- c(
@@ -78,7 +108,8 @@ mira_fit <- function(
 
   for (nm in scalar_integer_names) {
     x <- stan_data[[nm]]
-    if (length(x) != 1 || !is.numeric(x) || !is.finite(x) || x != as.integer(x)) {
+    if (length(x) != 1 || !is.numeric(x) || !is.finite(x) ||
+        x < 0 || x > .Machine$integer.max || x != floor(x)) {
       stop("`", nm, "` must be one finite integer.", call. = FALSE)
     }
   }
@@ -106,22 +137,25 @@ mira_fit <- function(
     stop("`length(arm)` must equal `S`.", call. = FALSE)
   }
 
-  if (any(!is.finite(stan_data$subject)) ||
-      any(stan_data$subject != as.integer(stan_data$subject)) ||
+  if (!is.numeric(stan_data$subject) ||
+      any(!is.finite(stan_data$subject)) ||
+      any(stan_data$subject != floor(stan_data$subject)) ||
       any(stan_data$subject < 1) ||
       any(stan_data$subject > stan_data$S)) {
     stop("`subject` must contain integers between 1 and S.", call. = FALSE)
   }
 
-  if (any(!is.finite(stan_data$time)) ||
-      any(stan_data$time != as.integer(stan_data$time)) ||
+  if (!is.numeric(stan_data$time) ||
+      any(!is.finite(stan_data$time)) ||
+      any(stan_data$time != floor(stan_data$time)) ||
       any(stan_data$time < 1) ||
       any(stan_data$time > stan_data$K)) {
     stop("`time` must contain integers between 1 and K.", call. = FALSE)
   }
 
-  if (any(!is.finite(stan_data$arm)) ||
-      any(stan_data$arm != as.integer(stan_data$arm)) ||
+  if (!is.numeric(stan_data$arm) ||
+      any(!is.finite(stan_data$arm)) ||
+      any(stan_data$arm != floor(stan_data$arm)) ||
       any(stan_data$arm < 1) ||
       any(stan_data$arm > stan_data$G)) {
     stop("`arm` must contain integers between 1 and G.", call. = FALSE)
@@ -140,7 +174,7 @@ mira_fit <- function(
     }
 
     if (any(!is.finite(x)) ||
-        any(x != as.integer(x)) ||
+        any(x != floor(x)) ||
         any(!x %in% c(0, 1))) {
       stop(
         "`", name, "` must contain exactly S binary integer values (0/1).",
@@ -174,6 +208,7 @@ mira_fit <- function(
   if (!is.numeric(stan_data$time_value) ||
       length(stan_data$time_value) != stan_data$K ||
       any(!is.finite(stan_data$time_value)) ||
+      anyDuplicated(stan_data$time_value) ||
       is.unsorted(stan_data$time_value, strictly = TRUE)) {
     stop(
       "`time_value` must contain exactly K finite, strictly increasing values.",
@@ -201,7 +236,7 @@ mira_fit <- function(
     }
   }
 
-  positive_scalar(stan_data$mcid_prior_mean, "mcid_prior_mean", allow_zero = TRUE)
+  positive_scalar(stan_data$mcid_prior_mean, "mcid_prior_mean")
   positive_scalar(stan_data$mcid_prior_sd, "mcid_prior_sd")
   positive_scalar(
     stan_data$meaningful_between_arm_difference,
@@ -235,27 +270,38 @@ mira_fit <- function(
     "nu_prior_rate"
   )
 
-  # Allow fully assembled Stan data as an advanced use case.
-  if (all(prior_names %in% names(stan_data))) {
+  embedded_prior_names <- intersect(prior_names, names(stan_data))
+
+  # An explicit `prior` argument takes precedence over any embedded fields.
+  if (!is.null(prior)) {
+
+    mira_validate_prior(prior)
+    stan_prior_data <- mira_prior_stan_data(prior)
+    prior_source <- "argument"
+
+  } else if (all(prior_names %in% names(stan_data))) {
 
     stan_prior_data <- stan_data[prior_names]
+    prior_source <- "embedded in stan_data"
 
   } else {
 
-    if (is.null(prior)) {
-      prior <- mira_prior(
-        stan_data,
-        profile = "default"
+    if (length(embedded_prior_names) > 0L) {
+      stop(
+        "`stan_data` contains an incomplete embedded prior specification. ",
+        "Missing fields: ",
+        paste(setdiff(prior_names, embedded_prior_names), collapse = ", "),
+        ". Supply a complete `prior` argument or remove the partial fields.",
+        call. = FALSE
       )
     }
 
-    # A direct named list is useful for development/testing of the new model.
-    if (is.list(prior) && all(prior_names %in% names(prior))) {
-      stan_prior_data <- prior[prior_names]
-    } else {
-      mira_validate_prior(prior)
-      stan_prior_data <- mira_prior_stan_data(prior)
-    }
+    prior <- mira_prior(
+      stan_data,
+      profile = "default"
+    )
+    stan_prior_data <- mira_prior_stan_data(prior)
+    prior_source <- "automatic default"
   }
 
   missing_prior <- setdiff(prior_names, names(stan_prior_data))
@@ -312,9 +358,9 @@ mira_fit <- function(
   if (is.null(stan_file)) {
 
     candidates <- c(
+      "gaussian_longitudinal.stan",
       "gaussian_longitudinal_gender_age.stan",
-      "mira_longitudinal.stan",
-      "gaussian_longitudinal.stan"
+      "mira_longitudinal.stan"
     )
 
     candidate_paths <- vapply(
@@ -335,8 +381,8 @@ mira_fit <- function(
     if (length(existing) == 0) {
       stop(
         "Could not find the MIRA Stan model in `inst/stan`. Expected ",
-        "`gaussian_longitudinal_gender_age.stan` (preferred), ",
-        "`mira_longitudinal.stan`, or `gaussian_longitudinal.stan`.",
+        "`gaussian_longitudinal.stan` (preferred), ",
+        "`gaussian_longitudinal_gender_age.stan`, or `mira_longitudinal.stan`.",
         call. = FALSE
       )
     }
@@ -356,6 +402,13 @@ mira_fit <- function(
       }
       stan_file <- packaged_file
     }
+  }
+
+  if (!requireNamespace("cmdstanr", quietly = TRUE)) {
+    stop(
+      "Package `cmdstanr` is required to compile and fit the MIRA model.",
+      call. = FALSE
+    )
   }
 
   message("Compiling MIRA Stan model: ", basename(stan_file))
@@ -507,7 +560,7 @@ mira_fit <- function(
 
   prior_profile <- if (!is.null(prior) && !is.null(prior$profile)) {
     as.character(prior$profile)[1]
-  } else if (all(prior_names %in% names(stan_data))) {
+  } else if (identical(prior_source, "embedded in stan_data")) {
     "embedded in stan_data"
   } else {
     "named/custom prior list"
@@ -540,6 +593,8 @@ mira_fit <- function(
     meaningful_between_arm_difference =
       as.numeric(stan_data$meaningful_between_arm_difference),
     prior_profile = prior_profile,
+    prior_source = prior_source,
+    prior_data = stan_prior_data,
     chains = as.integer(chains),
     parallel_chains = as.integer(parallel_chains),
     iter_warmup = as.integer(iter_warmup),
@@ -681,9 +736,13 @@ print.mira_fit <- function(
     cat("Prior profile: ", info$prior_profile, "\n", sep = "")
   }
 
+  if (!is.null(info$prior_source)) {
+    cat("Prior source: ", info$prior_source, "\n", sep = "")
+  }
+
   if (!is.null(info$mcid_prior_mean)) {
     cat(sprintf(
-      "MCID prior: mean %s | SD %s | Between-arm meaningful threshold: %s\n",
+      "MCID Gamma prior: mean %s | SD %s | Between-arm meaningful threshold: %s\n",
       fmt_num(info$mcid_prior_mean),
       fmt_num(info$mcid_prior_sd),
       fmt_num(info$meaningful_between_arm_difference)

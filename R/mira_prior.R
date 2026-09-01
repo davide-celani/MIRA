@@ -11,7 +11,9 @@
 #' @param stan_data Data prepared by [mira_prepare_data()].
 #' @param profile Character string specifying a predefined prior profile.
 #'   Available profiles are `"default"`, `"weak"`, `"regularized"`,
-#'   `"informative"`, and `"custom"`.
+#'   `"informative"`, and `"custom"`. With a predefined profile, every
+#'   non-NULL prior argument below overrides only the corresponding profile
+#'   default.
 #' @param baseline_mean Prior mean for the reference-arm baseline mean.
 #' @param baseline_sd Prior SD for the reference-arm baseline mean.
 #' @param beta_time_mean Prior mean for the reference-arm global time slope.
@@ -45,9 +47,8 @@
 #' @param sigma_slope_rate Exponential rate for subject random-slope SD.
 #' @param sigma_rate Exponential rate for residual Student-t scale.
 #' @param nu_shape Shape parameter for the Gamma prior on Student-t degrees
-#'   of freedom.
-#' @param nu_rate Rate parameter for the Gamma prior on Student-t degrees
-#'   of freedom.
+#'   of freedom, truncated to `nu >= 2` by the Stan parameter constraint.
+#' @param nu_rate Rate parameter for the same truncated Gamma prior.
 #'
 #' @return An object of class `mira_prior`.
 #'
@@ -110,27 +111,31 @@ mira_prior <- function(
 
   profile <- match.arg(profile)
 
-  y <- as.numeric(stan_data$y)
-  time <- as.integer(stan_data$time)
-  time_value <- as.numeric(stan_data$time_value)
-  mean_y <- as.numeric(stan_data$mean_y)
-  sd_y <- as.numeric(stan_data$sd_y)
+  y <- stan_data$y
+  time <- stan_data$time
+  time_value <- stan_data$time_value
+  mean_y <- stan_data$mean_y
+  sd_y <- stan_data$sd_y
 
-  if (length(y) < 1 || any(!is.finite(y))) {
+  if (!is.numeric(y) || length(y) < 1 || any(!is.finite(y))) {
     stop("`stan_data$y` must contain finite numeric values.", call. = FALSE)
   }
 
-  if (length(time) != length(y) ||
+  if (!is.numeric(time) ||
+      length(time) != length(y) ||
       any(!is.finite(time)) ||
+      any(time != floor(time)) ||
       any(time < 1)) {
     stop(
-      "`stan_data$time` must contain one valid time index per observation.",
+      "`stan_data$time` must contain one positive integer time index per observation.",
       call. = FALSE
     )
   }
 
-  if (length(time_value) < 2 ||
+  if (!is.numeric(time_value) ||
+      length(time_value) < 2 ||
       any(!is.finite(time_value)) ||
+      anyDuplicated(time_value) ||
       is.unsorted(time_value, strictly = TRUE)) {
     stop(
       "`stan_data$time_value` must contain at least two finite, strictly increasing values.",
@@ -138,19 +143,57 @@ mira_prior <- function(
     )
   }
 
-  if (length(mean_y) != 1 || !is.finite(mean_y)) {
+  if (any(time > length(time_value))) {
+    stop(
+      "`stan_data$time` contains an index larger than `length(time_value)`.",
+      call. = FALSE
+    )
+  }
+
+  if (!is.numeric(mean_y) || length(mean_y) != 1 || !is.finite(mean_y)) {
     stop(
       "`stan_data$mean_y` must be a single finite numeric value.",
       call. = FALSE
     )
   }
 
-  if (length(sd_y) != 1 || !is.finite(sd_y) || sd_y <= 0) {
+  if (!is.numeric(sd_y) || length(sd_y) != 1 || !is.finite(sd_y) || sd_y <= 0) {
     stop(
       "`stan_data$sd_y` must be a single positive finite numeric value.",
       call. = FALSE
     )
   }
+
+  y <- as.numeric(y)
+  time <- as.integer(time)
+  time_value <- as.numeric(time_value)
+  mean_y <- as.numeric(mean_y)
+  sd_y <- as.numeric(sd_y)
+
+  # Preserve explicit arguments before profile defaults are constructed.
+  # They are applied below so that profile = "default" (and the other
+  # predefined profiles) can be customized without silently discarding them.
+  user_overrides <- list(
+    baseline_mean = baseline_mean,
+    baseline_sd = baseline_sd,
+    beta_time_mean = beta_time_mean,
+    beta_time_sd = beta_time_sd,
+    tau_common_rate = tau_common_rate,
+    beta_treatment_sd = beta_treatment_sd,
+    tau_treatment_rate = tau_treatment_rate,
+    arm_baseline_sd_rate = arm_baseline_sd_rate,
+    gender_baseline_sd = gender_baseline_sd,
+    beta_gender_sd = beta_gender_sd,
+    tau_gender_rate = tau_gender_rate,
+    age_baseline_sd = age_baseline_sd,
+    beta_age_sd = beta_age_sd,
+    tau_age_rate = tau_age_rate,
+    sigma_intercept_rate = sigma_intercept_rate,
+    sigma_slope_rate = sigma_slope_rate,
+    sigma_rate = sigma_rate,
+    nu_shape = nu_shape,
+    nu_rate = nu_rate
+  )
 
   # ============================================================
   # DATA-ADAPTIVE REFERENCE SCALES
@@ -322,6 +365,41 @@ mira_prior <- function(
 
     nu_shape <- 5
     nu_rate <- 0.5
+  }
+
+  if (profile != "custom") {
+    for (name in names(user_overrides)) {
+      if (!is.null(user_overrides[[name]])) {
+        assign(
+          name,
+          user_overrides[[name]],
+          envir = environment(),
+          inherits = FALSE
+        )
+      }
+    }
+
+    # When a dedicated covariate scale is omitted, inherit the final analogous
+    # scale, including any explicit override applied just above.
+    if (is.null(user_overrides$gender_baseline_sd)) {
+      gender_baseline_sd <- baseline_sd
+    }
+    if (is.null(user_overrides$beta_gender_sd)) {
+      beta_gender_sd <- beta_treatment_sd
+    }
+    if (is.null(user_overrides$tau_gender_rate)) {
+      tau_gender_rate <- tau_treatment_rate
+    }
+
+    if (is.null(user_overrides$age_baseline_sd)) {
+      age_baseline_sd <- baseline_sd
+    }
+    if (is.null(user_overrides$beta_age_sd)) {
+      beta_age_sd <- beta_treatment_sd
+    }
+    if (is.null(user_overrides$tau_age_rate)) {
+      tau_age_rate <- tau_treatment_rate
+    }
   }
 
 
@@ -643,7 +721,7 @@ print.mira_prior <- function(
     x$nu_prior_shape,
     ", ",
     x$nu_prior_rate,
-    ")\n",
+    ") truncated to [2, +Inf)\n",
     sep = ""
   )
 
@@ -655,7 +733,8 @@ print.mira_prior <- function(
 
 #' Validate a MIRA prior specification
 #'
-#' @param prior A `mira_prior` object.
+#' @param prior A `mira_prior` object or a complete named list of Stan prior
+#'   fields.
 #'
 #' @return Invisibly returns TRUE.
 #'
@@ -664,11 +743,20 @@ mira_validate_prior <- function(
     prior
 ) {
 
-  if (!inherits(prior, "mira_prior")) {
+  if (!is.list(prior)) {
     stop(
-      "`prior` must be created with `mira_prior()`.",
+      "`prior` must be a `mira_prior` object or a complete named list.",
       call. = FALSE
     )
+  }
+
+  if (is.null(names(prior)) || anyNA(names(prior)) ||
+      any(!nzchar(names(prior)))) {
+    stop("`prior` must have non-empty names for every field.", call. = FALSE)
+  }
+
+  if (anyDuplicated(names(prior))) {
+    stop("`prior` contains duplicated field names.", call. = FALSE)
   }
 
   required <- c(
@@ -750,7 +838,8 @@ mira_validate_prior <- function(
 
 #' Convert MIRA priors to Stan data
 #'
-#' @param prior A `mira_prior` object.
+#' @param prior A `mira_prior` object or a complete named list of Stan prior
+#'   fields.
 #'
 #' @return A named list suitable for CmdStan.
 #'

@@ -41,18 +41,13 @@ devtools::load_all()
 list_stan_models("MIRA")
 
 
-res <- mira_info(
-  data = data,
-  reference_arm = "control",
-  improvement_direction = "lower"
-)
-
+# ============================================================
+# MIRA INFO
+# ============================================================
 
 res <- mira_info(
   data = data,
-
   id = "patient",
-
   time_vars = c(
     "IOP_t0",
     "IOP_t1",
@@ -60,7 +55,6 @@ res <- mira_info(
     "IOP_t3",
     "IOP_t4"
   ),
-
   time_labels = c(
     "Baseline",
     "Month 3",
@@ -68,47 +62,33 @@ res <- mira_info(
     "Month 12",
     "Month 15"
   ),
-
   arm = "arm",
   reference_arm = "control",
-
   improvement_direction = "lower",
-
   plots = TRUE,
   model = TRUE,
   outliers = TRUE,
   correlations = TRUE,
   verbose = TRUE,
-
   p_adjust_method = "holm",
   stable_threshold = 0,
   strict_id = TRUE,
   arm_tests = TRUE
 )
 
-
-
-
+# Alcuni risultati esplorativi.
 res$descriptives
 res$change
 res$variability
-res$trajectories
-res$long_data
-res$call
-res$overview
-res$missing
-res$correlations
-res$plots$boxplot
-res$plots$spaghetti
-res$outliers
 res$model
+
 # ============================================================
 # PREPARE DATA
 # ============================================================
 
 stan_data <- mira_prepare_data(
   data = data,
-  time_value = c(0, 1, 4, 11, 15),
+  time_value = c(0, 3, 5, 12, 15),
   meaningful_change = 2,
   meaningful_change_sd = 0.5,
   direction = "lower",
@@ -116,35 +96,50 @@ stan_data <- mira_prepare_data(
   age_threshold = 60
 )
 
+# ============================================================
+# PRIORS
+# ============================================================
+
 prior <- mira_prior(
-  stan_data,
+  stan_data = stan_data,
   profile = "default"
 )
 
+print(prior)
 
-
+# ============================================================
+# TEST FIT
+# ============================================================
+# Poche iterazioni: serve solo a verificare che il modello compili e campioni.
 
 fit <- mira_fit(
   stan_data = stan_data,
   prior = prior,
-  chains = 3,
-  parallel_chains = 3,
+  chains = 4,
+  parallel_chains = 4,
   iter_warmup = 1000,
   iter_sampling = 1000,
   seed = 123,
-  refresh = 100
+  refresh = 50,
+  verbose = TRUE
 )
 
+# Diagnostica tecnica del test.
+fit$diagnostic_summary()
 
+# ============================================================
+# SUMMARY
+# ============================================================
 
-summary <- mira_summary(
-  fit,
-  stan_data = stan_data
+mira_res <- mira_summary(
+  fit = fit,
+  stan_data = stan_data,
+  verbose = TRUE
 )
 
-summary$change
-summary$change_from_baseline
-summary$gender$change
+mira_res$population_time_means
+mira_res$treatment_effects
+mira_res$diagnostics
 
 
 # ------------------------------------------------------------

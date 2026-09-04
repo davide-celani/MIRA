@@ -98,6 +98,7 @@ res$descriptives
 res$change
 res$variability
 res$model
+res$plots
 res$plots$arm_boxplot
 
 

@@ -2080,6 +2080,19 @@ mira_info <- function(data,
         ]
 
         # 11) Distribution by arm and time.
+        arm_long_plot$arm <- factor(
+          arm_long_plot$arm,
+          levels = arm_levels
+        )
+
+        arm_colours <- stats::setNames(
+          grDevices::hcl.colors(
+            n = length(arm_levels),
+            palette = "Dark 3"
+          ),
+          arm_levels
+        )
+
         plots_list$arm_boxplot <-
           ggplot2::ggplot(
             arm_long_plot,
@@ -2090,29 +2103,78 @@ mira_info <- function(data,
             )
           ) +
           ggplot2::geom_boxplot(
-            ggplot2::aes(linetype = arm),
-            position = ggplot2::position_dodge(width = 0.75),
-            width = 0.62,
+            ggplot2::aes(
+              fill = arm,
+              colour = arm
+            ),
+            position = ggplot2::position_dodge(width = 0.72),
+            width = 0.58,
+            linewidth = 0.65,
+            alpha = 0.45,
             outlier.shape = NA,
             na.rm = TRUE
           ) +
-          ggplot2::geom_jitter(
-            ggplot2::aes(shape = arm),
+          ggplot2::geom_point(
+            ggplot2::aes(colour = arm),
             position = ggplot2::position_jitterdodge(
-              jitter.width = 0.10,
-              dodge.width = 0.75
+              jitter.width = 0.08,
+              jitter.height = 0,
+              dodge.width = 0.72,
+              seed = 123
             ),
-            alpha = 0.25,
-            size = 1.3,
+            shape = 16,
+            alpha = 0.42,
+            size = 1.45,
             na.rm = TRUE
+          ) +
+          ggplot2::scale_fill_manual(
+            values = arm_colours,
+            name = "Arm",
+            drop = FALSE
+          ) +
+          ggplot2::scale_colour_manual(
+            values = arm_colours,
+            name = "Arm",
+            drop = FALSE
+          ) +
+          ggplot2::scale_y_continuous(
+            expand = ggplot2::expansion(mult = c(0.04, 0.08))
           ) +
           ggplot2::labs(
             x = "Time",
-            y = outcome_display,
-            linetype = "Arm",
-            shape = "Arm"
+            y = outcome_display
           ) +
-          paper_theme
+          ggplot2::guides(
+            colour = "none",
+            fill = ggplot2::guide_legend(
+              nrow = max(
+                1L,
+                ceiling(length(arm_levels) / 5L)
+              ),
+              byrow = TRUE,
+              override.aes = list(
+                alpha = 0.75,
+                linewidth = 0.7
+              )
+            )
+          ) +
+          paper_theme +
+          ggplot2::theme(
+            panel.grid.major.x = ggplot2::element_blank(),
+            panel.grid.major.y = ggplot2::element_line(
+              colour = "grey88",
+              linewidth = 0.35
+            ),
+            axis.line = ggplot2::element_line(
+              colour = "grey25",
+              linewidth = 0.45
+            ),
+            axis.ticks = ggplot2::element_line(
+              colour = "grey25",
+              linewidth = 0.4
+            ),
+            legend.key = ggplot2::element_blank()
+          )
 
         arm_change_plot_data <- trajectory_summary[
           is.finite(trajectory_summary$absolute_change) &

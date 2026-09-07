@@ -1,9 +1,10 @@
 #' Research-oriented summary of a MIRA Bayesian fit
 #'
-#' Summarizes the current multi-arm MIRA longitudinal Student-t model.
-#' The function is dynamic in the number of treatment arms G, measurement
-#' occasions K and subjects S, and is aligned with the variables generated
-#' by the current Stan model.
+#' Summarizes the outcome-adaptive multi-arm MIRA longitudinal model. The
+#' function is dynamic in likelihood/link, treatment arms G, measurement
+#' occasions K and subjects S. Natural-scale outcomes and clinical changes are
+#' reported for every family; log-scale and ratio estimands are additionally
+#' exposed for log-normal CMT fits.
 #'
 #' @param fit A fitted CmdStanMCMC object.
 #' @param stan_data Optional data list used to fit the model. Supplying it is
@@ -112,6 +113,20 @@ mira_summary <- function(
 
   posterior_stats <- function(x) {
     x <- as.numeric(x)
+    x <- x[is.finite(x)]
+
+    if (length(x) == 0L) {
+      return(c(
+        mean = NA_real_,
+        median = NA_real_,
+        sd = NA_real_,
+        mad = NA_real_,
+        lower = NA_real_,
+        upper = NA_real_,
+        CrI_width = NA_real_
+      ))
+    }
+
     q <- stats::quantile(
       x,
       probs = c(alpha, 1 - alpha),
@@ -307,12 +322,81 @@ mira_summary <- function(
   direction <- if (!is.null(stan_data) && "direction" %in% names(stan_data)) {
     direction_value <- stan_data$direction
     if (!is.numeric(direction_value) || length(direction_value) != 1L ||
-        !is.finite(direction_value) || !direction_value %in% c(-1, 1)) {
+        !is.finite(direction_value) || !(direction_value %in% c(-1, 1))) {
       stop("`stan_data$direction` must be exactly +1 or -1.", call. = FALSE)
     }
     as.integer(direction_value)
   } else {
     NA_integer_
+  }
+
+  likelihood_id <- if (!is.null(stan_data) &&
+                       "likelihood_id" %in% names(stan_data)) {
+    as.integer(stan_data$likelihood_id)[1L]
+  } else if (!is.null(fit_info) && !is.null(fit_info$likelihood_id)) {
+    as.integer(fit_info$likelihood_id)[1L]
+  } else {
+    # Legacy fits were Student-t identity models.
+    1L
+  }
+
+  if (!(likelihood_id %in% 1:3)) {
+    stop("Could not determine a valid MIRA likelihood id.", call. = FALSE)
+  }
+
+  likelihood <- c("student_t", "gaussian", "lognormal")[[likelihood_id]]
+  modeling_scale <- if (likelihood_id == 3L) "log" else "identity"
+  outcome_name <- if (!is.null(stan_data) && !is.null(stan_data$outcome_name)) {
+    as.character(stan_data$outcome_name)[1L]
+  } else if (!is.null(fit_info) && !is.null(fit_info$outcome_name)) {
+    as.character(fit_info$outcome_name)[1L]
+  } else {
+    NA_character_
+  }
+  outcome <- if (!is.null(stan_data) && !is.null(stan_data$outcome)) {
+    as.character(stan_data$outcome)[1L]
+  } else if (!is.null(fit_info) && !is.null(fit_info$outcome)) {
+    as.character(fit_info$outcome)[1L]
+  } else {
+    outcome_name
+  }
+
+  fit_bounds <- if (!is.null(fit_info) &&
+                    !is.null(fit_info$outcome_bounds) &&
+                    length(fit_info$outcome_bounds) == 2L) {
+    as.numeric(fit_info$outcome_bounds)
+  } else {
+    c(NA_real_, NA_real_)
+  }
+  has_lower_bound <- if (!is.null(stan_data) &&
+                         !is.null(stan_data$has_lower_bound)) {
+    identical(as.integer(stan_data$has_lower_bound)[1L], 1L)
+  } else {
+    is.finite(fit_bounds[[1L]])
+  }
+  has_upper_bound <- if (!is.null(stan_data) &&
+                         !is.null(stan_data$has_upper_bound)) {
+    identical(as.integer(stan_data$has_upper_bound)[1L], 1L)
+  } else {
+    is.finite(fit_bounds[[2L]])
+  }
+  lower_bound <- if (has_lower_bound) {
+    if (!is.null(stan_data) && !is.null(stan_data$outcome_lower_bound)) {
+      as.numeric(stan_data$outcome_lower_bound)[1L]
+    } else {
+      fit_bounds[[1L]]
+    }
+  } else {
+    NA_real_
+  }
+  upper_bound <- if (has_upper_bound) {
+    if (!is.null(stan_data) && !is.null(stan_data$outcome_upper_bound)) {
+      as.numeric(stan_data$outcome_upper_bound)[1L]
+    } else {
+      fit_bounds[[2L]]
+    }
+  } else {
+    NA_real_
   }
 
   arm_labels <- if (!is.null(stan_data) &&
@@ -455,12 +539,21 @@ mira_summary <- function(
     "tau_age",
     "sigma",
     "nu",
+    "nu_value",
     "sigma_intercept",
     "sigma_slope",
     "rho_subject",
     "residual_sd",
+    "residual_cv",
     "mcid"
   )
+
+  if (likelihood_id != 1L) {
+    scalar_parameters <- setdiff(scalar_parameters, c("nu", "nu_value"))
+  }
+  if (likelihood_id != 3L) {
+    scalar_parameters <- setdiff(scalar_parameters, "residual_cv")
+  }
 
   scalar_parameters <- scalar_parameters[scalar_parameters %in% names(draws)]
 
@@ -504,6 +597,31 @@ mira_summary <- function(
       population_time_means$time
     ), ]
   }
+
+  add_population_metadata <- function(x) {
+    if (nrow(x) > 0) {
+      x$arm_label <- arm_labels[x$arm]
+      x$time_value <- time_value[x$time]
+      x <- x[order(x$arm, x$time), , drop = FALSE]
+    }
+    x
+  }
+
+  population_model_location <- add_population_metadata(
+    summarize_indexed("population_model_location", c("arm", "time"))
+  )
+  population_median <- add_population_metadata(
+    summarize_indexed("population_median", c("arm", "time"))
+  )
+  population_ratio <- add_population_metadata(
+    summarize_indexed("population_ratio_from_baseline", c("arm", "time"))
+  )
+  population_percent_change <- add_population_metadata(
+    summarize_indexed(
+      "population_percent_change_from_baseline",
+      c("arm", "time")
+    )
+  )
 
   population_change <- summarize_indexed(
     "population_change_from_baseline",
@@ -1170,14 +1288,16 @@ mira_summary <- function(
   # NEW-SUBJECT RESPONDER ESTIMANDS
   # ============================================================
 
-  latent_any_improvement <- summarize_indexed(
-    "latent_new_subject_any_improvement_prob",
-    c("arm", "time")
+  latent_any_improvement <- probability_indexed(
+    "new_subject_latent_any_improvement_draw",
+    c("arm", "time"),
+    "probability"
   )
 
-  latent_responder <- summarize_indexed(
-    "latent_new_subject_responder_prob",
-    c("arm", "time")
+  latent_responder <- probability_indexed(
+    "new_subject_latent_responder_draw",
+    c("arm", "time"),
+    "probability"
   )
 
   new_subject_latent_responder <- probability_indexed(
@@ -1418,6 +1538,21 @@ mira_summary <- function(
     c("contrast", "time")
   )
 
+  treatment_ratio_of_ratios <- summarize_indexed(
+    "treatment_ratio_of_ratios",
+    c("contrast", "time")
+  )
+
+  if (nrow(treatment_ratio_of_ratios) > 0) {
+    treatment_ratio_of_ratios$treatment_arm <-
+      treatment_ratio_of_ratios$contrast + 1L
+    treatment_ratio_of_ratios$treatment_label <-
+      arm_labels[treatment_ratio_of_ratios$treatment_arm]
+    treatment_ratio_of_ratios$reference_label <- arm_labels[1L]
+    treatment_ratio_of_ratios$time_value <-
+      time_value[treatment_ratio_of_ratios$time]
+  }
+
   if (nrow(treatment_effects) > 0) {
     treatment_effects$treatment_arm <- treatment_effects$contrast + 1L
     treatment_effects$treatment_label <- arm_labels[treatment_effects$treatment_arm]
@@ -1448,6 +1583,12 @@ mira_summary <- function(
     )
     treatment_effects <- add_from_table(
       treatment_effects, responder_uplift, "mean", "mean_responder_probability_difference"
+    )
+    treatment_effects <- add_from_table(
+      treatment_effects,
+      treatment_ratio_of_ratios,
+      "mean",
+      "mean_ratio_of_ratios"
     )
 
     treatment_effects <- treatment_effects[order(
@@ -1538,36 +1679,183 @@ mira_summary <- function(
   ppc <- NULL
 
   if (length(y_rep_cols) > 0 && !is.null(y)) {
+    y_rep_indices <- vapply(
+      parse_indices(y_rep_cols),
+      function(z) z[[1L]],
+      integer(1L)
+    )
+    y_rep_cols <- y_rep_cols[order(y_rep_indices)]
     y_rep_matrix <- as.matrix(draws[, y_rep_cols, drop = FALSE])
+
+    safe_skewness <- function(z) {
+      z <- as.numeric(z)
+      s <- stats::sd(z)
+      n <- length(z)
+      if (n < 3L || !is.finite(s) || s <= 0) return(NA_real_)
+      n / ((n - 1) * (n - 2)) * sum(((z - mean(z)) / s)^3)
+    }
 
     predictive_mean <- rowMeans(y_rep_matrix)
     predictive_sd <- apply(y_rep_matrix, 1, stats::sd)
     predictive_median <- apply(y_rep_matrix, 1, stats::median)
     predictive_q05 <- apply(y_rep_matrix, 1, stats::quantile, probs = 0.05)
     predictive_q95 <- apply(y_rep_matrix, 1, stats::quantile, probs = 0.95)
+    predictive_min <- apply(y_rep_matrix, 1, min)
+    predictive_max <- apply(y_rep_matrix, 1, max)
+    predictive_skewness <- apply(y_rep_matrix, 1, safe_skewness)
+    predictive_cv <- predictive_sd / pmax(abs(predictive_mean), 1e-12)
 
     observed <- c(
       mean = mean(y),
       sd = stats::sd(y),
       median = stats::median(y),
       q05 = as.numeric(stats::quantile(y, 0.05)),
-      q95 = as.numeric(stats::quantile(y, 0.95))
+      q95 = as.numeric(stats::quantile(y, 0.95)),
+      min = min(y),
+      max = max(y),
+      skewness = safe_skewness(y),
+      coefficient_of_variation = stats::sd(y) / max(abs(mean(y)), 1e-12)
     )
+
+    posterior_predictive <- list(
+      mean = posterior_stats(predictive_mean),
+      sd = posterior_stats(predictive_sd),
+      median = posterior_stats(predictive_median),
+      q05 = posterior_stats(predictive_q05),
+      q95 = posterior_stats(predictive_q95),
+      min = posterior_stats(predictive_min),
+      max = posterior_stats(predictive_max),
+      skewness = posterior_stats(predictive_skewness),
+      coefficient_of_variation = posterior_stats(predictive_cv)
+    )
+
+    lag1_observed <- NA_real_
+    lag1_predictive <- NULL
+    if (!is.null(stan_data) &&
+        !is.null(stan_data$subject) &&
+        !is.null(stan_data$time) &&
+        length(stan_data$subject) == length(y) &&
+        length(stan_data$time) == length(y)) {
+      order_index <- order(stan_data$subject, stan_data$time)
+      ordered_subject <- as.integer(stan_data$subject)[order_index]
+      ordered_time <- as.integer(stan_data$time)[order_index]
+      adjacent <- which(
+        ordered_subject[-length(ordered_subject)] ==
+          ordered_subject[-1L] &
+          ordered_time[-length(ordered_time)] + 1L == ordered_time[-1L]
+      )
+
+      if (length(adjacent) >= 3L) {
+        from_index <- order_index[adjacent]
+        to_index <- order_index[adjacent + 1L]
+        lag1_observed <- stats::cor(y[from_index], y[to_index])
+        lag1_predictive <- posterior_stats(apply(
+          y_rep_matrix,
+          1,
+          function(z) stats::cor(z[from_index], z[to_index])
+        ))
+      }
+    }
+
+    support_violation <- matrix(FALSE, nrow = nrow(y_rep_matrix), ncol = N)
+    if (has_lower_bound) {
+      support_violation <- support_violation | y_rep_matrix < lower_bound
+    }
+    if (has_upper_bound) {
+      support_violation <- support_violation | y_rep_matrix > upper_bound
+    }
+    if (likelihood_id == 3L) {
+      support_violation <- support_violation | y_rep_matrix <= 0
+    }
+
+    family_checks <- list(
+      likelihood = likelihood,
+      modeling_scale = modeling_scale,
+      lower_boundary = if (has_lower_bound) lower_bound else NA_real_,
+      upper_boundary = if (has_upper_bound) upper_bound else NA_real_,
+      observed_lower_boundary_fraction = if (has_lower_bound) {
+        mean(y == lower_bound)
+      } else {
+        NA_real_
+      },
+      observed_upper_boundary_fraction = if (has_upper_bound) {
+        mean(y == upper_bound)
+      } else {
+        NA_real_
+      },
+      predictive_lower_boundary_fraction = if (has_lower_bound) {
+        posterior_stats(rowMeans(y_rep_matrix == lower_bound))
+      } else {
+        NULL
+      },
+      predictive_upper_boundary_fraction = if (has_upper_bound) {
+        posterior_stats(rowMeans(y_rep_matrix == upper_bound))
+      } else {
+        NULL
+      },
+      predictive_support_violation_fraction = posterior_stats(
+        rowMeans(support_violation)
+      ),
+      observed_longitudinal_lag1_correlation = lag1_observed,
+      predictive_longitudinal_lag1_correlation = lag1_predictive
+    )
+
+    if (likelihood_id == 3L) {
+      log_y <- log(y)
+      log_y_rep <- log(y_rep_matrix)
+      family_checks$log_scale <- list(
+        observed = c(
+          mean = mean(log_y),
+          sd = stats::sd(log_y),
+          skewness = safe_skewness(log_y)
+        ),
+        posterior_predictive = list(
+          mean = posterior_stats(rowMeans(log_y_rep)),
+          sd = posterior_stats(apply(log_y_rep, 1, stats::sd)),
+          skewness = posterior_stats(apply(log_y_rep, 1, safe_skewness))
+        )
+      )
+    }
+
+    by_time <- NULL
+    if (!is.null(stan_data) &&
+        !is.null(stan_data$time) &&
+        length(stan_data$time) == length(y)) {
+      by_time <- lapply(seq_len(K), function(k) {
+        ix <- which(as.integer(stan_data$time) == k)
+        observed_k <- y[ix]
+        replicated_k <- y_rep_matrix[, ix, drop = FALSE]
+
+        list(
+          time = k,
+          time_value = time_value[k],
+          observed = c(
+            mean = mean(observed_k),
+            sd = stats::sd(observed_k),
+            skewness = safe_skewness(observed_k)
+          ),
+          posterior_predictive = list(
+            mean = posterior_stats(rowMeans(replicated_k)),
+            sd = posterior_stats(apply(replicated_k, 1, stats::sd)),
+            skewness = posterior_stats(
+              apply(replicated_k, 1, safe_skewness)
+            )
+          )
+        )
+      })
+    }
 
     ppc <- list(
       observed = observed,
-      posterior_predictive = list(
-        mean = posterior_stats(predictive_mean),
-        sd = posterior_stats(predictive_sd),
-        median = posterior_stats(predictive_median),
-        q05 = posterior_stats(predictive_q05),
-        q95 = posterior_stats(predictive_q95)
-      ),
+      posterior_predictive = posterior_predictive,
       bayesian_p_values = c(
         mean = mean(predictive_mean >= mean(y)),
         sd = mean(predictive_sd >= stats::sd(y)),
-        median = mean(predictive_median >= stats::median(y))
+        median = mean(predictive_median >= stats::median(y)),
+        skewness = mean(predictive_skewness >= safe_skewness(y), na.rm = TRUE)
       ),
+      family_checks = family_checks,
+      by_time = by_time,
       predictive_draws = y_rep_matrix
     )
   }
@@ -1673,6 +1961,47 @@ mira_summary <- function(
   }
 
   model_information <- list(
+    outcome = outcome,
+    outcome_name = outcome_name,
+    likelihood = likelihood,
+    likelihood_id = likelihood_id,
+    link = if (likelihood_id == 3L) "log" else "identity",
+    modeling_scale = modeling_scale,
+    clinical_estimand_scale = "natural outcome units",
+    population_mean_definition = if (likelihood_id == 3L) {
+      paste0(
+        "marginal uncensored natural-scale mean integrating Gaussian subject ",
+        "effects and log-normal observation variance, then mapped to any ",
+        "declared observable endpoints"
+      )
+    } else if (has_lower_bound || has_upper_bound) {
+      "bounded latent location (not the exact mean of the censored distribution)"
+    } else {
+      "natural-scale population location/mean"
+    },
+    standardized_change_definition = if (likelihood_id == 3L) {
+      "change in log location divided by residual log-SD"
+    } else {
+      "natural-scale change divided by residual SD"
+    },
+    outcome_bounds = c(lower = lower_bound, upper = upper_bound),
+    boundary_strategy = if (likelihood_id == 3L &&
+                            !has_upper_bound &&
+                            (!has_lower_bound || lower_bound <= 0)) {
+      "strictly positive log-normal support"
+    } else if (likelihood_id == 3L) {
+      "strictly positive log-normal support with endpoint censoring"
+    } else if (has_lower_bound || has_upper_bound) {
+      "endpoint censoring"
+    } else {
+      "none"
+    },
+    outcome_diagnostics = if (!is.null(stan_data) &&
+                              !is.null(stan_data$outcome_diagnostics)) {
+      stan_data$outcome_diagnostics
+    } else {
+      NULL
+    },
     n_observations = N,
     n_subjects = S,
     n_time_points = K,
@@ -1752,10 +2081,14 @@ mira_summary <- function(
 
   variable_inventory <- list(
     population = c(
+      get_cols("population_model_location"),
+      get_cols("population_median"),
       get_cols("population_mean"),
       get_cols("population_change_from_baseline"),
       get_cols("directional_population_change"),
-      get_cols("standardized_population_change")
+      get_cols("standardized_population_change"),
+      get_cols("population_ratio_from_baseline"),
+      get_cols("population_percent_change_from_baseline")
     ),
     covariates = c(
       get_cols("gender_effect"),
@@ -1768,10 +2101,10 @@ mira_summary <- function(
       get_cols("directional_older_vs_younger_change_difference")
     ),
     new_subject = c(
-      get_cols("latent_new_subject_any_improvement_prob"),
-      get_cols("latent_new_subject_responder_prob"),
+      get_cols("new_subject_latent_any_improvement_draw"),
       get_cols("new_subject_latent_change_draw"),
       get_cols("new_subject_latent_responder_draw"),
+      get_cols("new_subject_predictive_any_improvement_draw"),
       get_cols("new_subject_predictive_change_draw"),
       get_cols("new_subject_predictive_responder_draw")
     ),
@@ -1787,7 +2120,8 @@ mira_summary <- function(
       get_cols("directional_treatment_benefit"),
       get_cols("treatment_benefit_positive_draw"),
       get_cols("treatment_benefit_meaningful_draw"),
-      get_cols("latent_responder_probability_difference")
+      get_cols("latent_responder_probability_difference"),
+      get_cols("treatment_ratio_of_ratios")
     ),
     observation_level = c(
       get_cols("log_lik"),
@@ -1807,10 +2141,14 @@ mira_summary <- function(
     arm_baseline_offset = arm_baseline_offset_summary,
 
     # Population trajectories
+    population_model_location = population_model_location,
+    population_median = population_median,
     population_time_means = population_time_means,
     population_change = population_change,
     population_directional_change = directional_population_change,
     population_standardized_change = population_standardized_change,
+    population_ratio_from_baseline = population_ratio,
+    population_percent_change_from_baseline = population_percent_change,
 
     # ----------------------------------------------------------
     # Family-oriented interface
@@ -1857,7 +2195,8 @@ mira_summary <- function(
       change = treatment_pairwise_change,
       from_baseline = treatment_effects,
       consecutive = treatment_consecutive_change,
-      responder_uplift = treatment_responder_uplift
+      responder_uplift = treatment_responder_uplift,
+      ratio_of_ratios = treatment_ratio_of_ratios
     ),
 
     # Backwards-compatible names retained
@@ -1890,6 +2229,7 @@ mira_summary <- function(
     # Treatment effects vs reference arm
     treatment_effects = treatment_effects,
     treatment_responder_uplift = treatment_responder_uplift,
+    treatment_ratio_of_ratios = treatment_ratio_of_ratios,
 
     # Clinical interpretation
     clinical = clinical_summary,
@@ -2044,6 +2384,25 @@ print.mira_summary <- function(
   # ------------------------------------------------------------
   section("MODEL OVERVIEW")
 
+  if (!is.null(info$outcome) || !is.null(info$likelihood)) {
+    cat(sprintf(
+      "Outcome: %s | Likelihood: %s | Link/modeling scale: %s\n",
+      ifelse(is.null(info$outcome), "NA", as.character(info$outcome)),
+      ifelse(is.null(info$likelihood), "NA", as.character(info$likelihood)),
+      ifelse(is.null(info$modeling_scale), "NA", as.character(info$modeling_scale))
+    ))
+  }
+
+  if (!is.null(info$outcome_bounds) && any(is.finite(info$outcome_bounds))) {
+    bound_text <- paste0(
+      ifelse(is.finite(info$outcome_bounds[[1L]]), info$outcome_bounds[[1L]], "-Inf"),
+      " to ",
+      ifelse(is.finite(info$outcome_bounds[[2L]]), info$outcome_bounds[[2L]], "Inf")
+    )
+    cat("Observable support: ", bound_text,
+        " | Boundary handling: ", info$boundary_strategy, "\n", sep = "")
+  }
+
   cat(sprintf(
     "Subjects: %s | Observations: %s | Timepoints: %s | Arms: %s\n",
     ifelse(is.null(info$n_subjects), "NA", as.character(info$n_subjects)),
@@ -2152,7 +2511,7 @@ print.mira_summary <- function(
     core_names <- c(
       "baseline_mean", "beta_time", "gender_baseline_effect", "beta_gender_time",
       "age_baseline_effect", "beta_age_time", "sigma_intercept", "sigma_slope",
-      "rho_subject", "sigma", "nu", "mcid"
+      "rho_subject", "sigma", "residual_sd", "residual_cv", "nu_value", "mcid"
     )
     core <- x$population[x$population$parameter %in% core_names, , drop = FALSE]
     if (nrow(core) > 0L) {
@@ -2245,9 +2604,16 @@ print.mira_summary <- function(
         Responder_uplift = round(te$mean_responder_probability_difference, 3L),
         check.names = FALSE
       )
+      if (identical(info$likelihood, "lognormal") &&
+          "mean_ratio_of_ratios" %in% names(te)) {
+        te_print$Ratio_of_ratios <- round(te$mean_ratio_of_ratios, digits)
+      }
       print(limit_table(te_print, "treatment-effect rows"), row.names = FALSE)
       cat("Change_difference is treatment minus reference in change from baseline.\n")
       cat("Directional_benefit > 0 favors treatment according to the declared improvement direction.\n")
+      if (identical(info$likelihood, "lognormal")) {
+        cat("Ratio_of_ratios is the treatment/reference ratio of temporal ratios.\n")
+      }
     }
 
     tp <- if (!is.null(x$treatment)) x$treatment$change else NULL
@@ -2431,7 +2797,10 @@ print.mira_summary <- function(
       cat("Posterior predictive checks not available.\n")
     } else {
       stat_names <- intersect(
-        c("mean", "sd", "median", "q05", "q95"),
+        c(
+          "mean", "sd", "median", "q05", "q95", "min", "max",
+          "skewness", "coefficient_of_variation"
+        ),
         names(z$posterior_predictive)
       )
 
@@ -2464,6 +2833,53 @@ print.mira_summary <- function(
           "\n"
         )
       }
+
+      if (!is.null(z$family_checks)) {
+        fc <- z$family_checks
+        if (!is.null(fc$predictive_support_violation_fraction)) {
+          cat(
+            "Predictive support-violation fraction: ",
+            fmt_interval(
+              fc$predictive_support_violation_fraction[["mean"]],
+              fc$predictive_support_violation_fraction[["lower"]],
+              fc$predictive_support_violation_fraction[["upper"]],
+              4L
+            ),
+            "\n",
+            sep = ""
+          )
+        }
+        if (!is.null(fc$predictive_lower_boundary_fraction)) {
+          cat(
+            "Lower-bound mass (observed / predictive mean): ",
+            fmt_num(fc$observed_lower_boundary_fraction, 4L), " / ",
+            fmt_num(fc$predictive_lower_boundary_fraction[["mean"]], 4L),
+            "\n",
+            sep = ""
+          )
+        }
+        if (!is.null(fc$predictive_upper_boundary_fraction)) {
+          cat(
+            "Upper-bound mass (observed / predictive mean): ",
+            fmt_num(fc$observed_upper_boundary_fraction, 4L), " / ",
+            fmt_num(fc$predictive_upper_boundary_fraction[["mean"]], 4L),
+            "\n",
+            sep = ""
+          )
+        }
+        if (!is.null(fc$predictive_longitudinal_lag1_correlation)) {
+          cat(
+            "Longitudinal lag-1 correlation (observed / predictive mean): ",
+            fmt_num(fc$observed_longitudinal_lag1_correlation, 3L), " / ",
+            fmt_num(
+              fc$predictive_longitudinal_lag1_correlation[["mean"]],
+              3L
+            ),
+            "\n",
+            sep = ""
+          )
+        }
+      }
       cat("Values near 0.5 indicate good centering; values near 0 or 1 can indicate lack of fit.\n")
     }
   }
@@ -2492,17 +2908,22 @@ print.mira_summary <- function(
     "$treatment$change" = "ALL pairwise treatment-vs-reference differences in temporal change",
     "$treatment$from_baseline" = "Treatment-vs-reference differences in change from baseline",
     "$treatment$consecutive" = "Treatment-vs-reference differences in consecutive-visit changes",
-    "$model_information" = "Study/model setup, arms, times, direction, MCID, age threshold and group counts",
+    "$model_information" = "Outcome family/link/support plus study setup, direction, MCID and group counts",
     "$population" = "Core posterior parameters with posterior mean, SD and credible intervals",
     "$beta_treatment" = "Treatment slope parameters versus the reference arm",
     "$tau_treatment" = "Treatment-specific RW1 trajectory scales",
     "$arm_baseline_offset" = "Posterior baseline imbalance between treatment arms",
-    "$population_time_means" = "Adjusted mean trajectory for each arm and time",
-    "$population_change" = "Adjusted change from baseline for each arm and time",
+    "$population_model_location" = "Adjusted trajectory on the active identity/log modeling scale",
+    "$population_median" = "Natural-scale conditional median/location for each arm and time",
+    "$population_time_means" = "Natural-scale adjusted mean/location trajectory for each arm and time",
+    "$population_change" = "Absolute natural-scale adjusted change from baseline",
     "$population_directional_change" = "Change from baseline oriented so positive values mean clinical improvement",
-    "$population_standardized_change" = "Standardized population change from baseline",
+    "$population_standardized_change" = "Standardized change on the family-appropriate modeling scale",
+    "$population_ratio_from_baseline" = "CMT natural-scale ratio to baseline (one for identity models)",
+    "$population_percent_change_from_baseline" = "CMT percent change from baseline (zero for identity models)",
     "$treatment_effects" = "Primary treatment-versus-reference change contrasts, probabilities of benefit and responder uplift",
     "$treatment_responder_uplift" = "Difference between arms in latent responder probability",
+    "$treatment_ratio_of_ratios" = "CMT treatment/reference ratio of temporal ratios",
     "$gender_effects$level_difference" = "Male - Female adjusted outcome difference at each time",
     "$gender_effects$change_difference" = "Male - Female difference in change from baseline at each time",
     "$gender_effects$directional_change_difference" = "Gender difference in clinically oriented change, including posterior probability of better change",
@@ -2518,7 +2939,7 @@ print.mira_summary <- function(
     "$individual_clinical" = "Subject-level posterior responder probabilities and responder classifications",
     "$responders" = "Existing-subject responder overview by arm and time",
     "$heterogeneity" = "Random-intercept, random-slope, correlation and trajectory-heterogeneity summaries",
-    "$ppc" = "Posterior predictive checks and Bayesian predictive p-values",
+    "$ppc" = "Family-specific PPCs, boundary/support checks, visit checks and predictive p-values",
     "$loo" = "Pointwise log-likelihood information for model comparison / LOO workflows",
     "$diagnostics" = "MCMC diagnostic summary",
     "$diagnostics$parameters" = "R-hat, bulk ESS and tail ESS for every monitored parameter",

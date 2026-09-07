@@ -1,7 +1,10 @@
 #' Fit MIRA longitudinal treatment model
 #'
-#' Fits the MIRA longitudinal Student-t mixed-effects model with
+#' Fits the outcome-adaptive MIRA longitudinal mixed-effects model with
 #' treatment-, gender-, and age-threshold-specific trajectories using CmdStan.
+#' The likelihood and link are selected by [mira_prepare_data()]: censored
+#' Student-t/Gaussian identity models and a positive log-normal/log-link model
+#' share a coherent natural-scale clinical output interface.
 #'
 #' @param stan_data Data prepared for the MIRA Stan model. The list may
 #'   contain additional R-side metadata (for example `mean_y`, `sd_y`, or
@@ -10,7 +13,7 @@
 #'   binary indicators `male` (0 = Female reference, 1 = Male) and
 #'   `age_above_threshold` (0 = age <= threshold, 1 = age > threshold).
 #' @param prior A `mira_prior` object, or a named list containing the Stan
-#'   prior fields required by the current model, including dedicated priors
+#'   prior fields required by the selected model, including dedicated priors
 #'   for gender- and age-threshold trajectories. If `NULL`, `mira_prior()`
 #'   automatically selects the outcome and uses standard priors, unless all
 #'   prior fields are already present in `stan_data`. A non-NULL `prior` takes
@@ -56,7 +59,7 @@ mira_fit <- function(
     prior = NULL,
     chains = 4,
     parallel_chains = chains,
-    iter_warmup = 1000,
+    iter_warmup = 2000,
     iter_sampling = 3000,
     seed = 123,
     refresh = 100,
@@ -169,6 +172,9 @@ mira_fit <- function(
 
   model_data_names <- c(
     "N", "S", "K", "G",
+    "likelihood_id",
+    "has_lower_bound", "outcome_lower_bound",
+    "has_upper_bound", "outcome_upper_bound",
     "y", "subject", "time", "arm",
     "male", "age_above_threshold", "time_value",
     "direction",
@@ -205,10 +211,56 @@ mira_fit <- function(
   if (stan_data$K < 2) stop("`K` must be >= 2.", call. = FALSE)
   if (stan_data$G < 2) stop("`G` must be >= 2 for the current treatment model.", call. = FALSE)
 
+  if (!is.numeric(stan_data$likelihood_id) ||
+      length(stan_data$likelihood_id) != 1L ||
+      !is.finite(stan_data$likelihood_id) ||
+      stan_data$likelihood_id != as.integer(stan_data$likelihood_id) ||
+      !(stan_data$likelihood_id %in% 1:3)) {
+    stop(
+      "`likelihood_id` must be 1 (Student-t), 2 (Gaussian), or 3 (log-normal).",
+      call. = FALSE
+    )
+  }
+
+  for (nm in c("has_lower_bound", "has_upper_bound")) {
+    x <- stan_data[[nm]]
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x) ||
+        x != as.integer(x) || !(x %in% c(0, 1))) {
+      stop("`", nm, "` must be exactly 0 or 1.", call. = FALSE)
+    }
+  }
+
+  for (nm in c("outcome_lower_bound", "outcome_upper_bound")) {
+    x <- stan_data[[nm]]
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", nm, "` must be one finite numeric value.", call. = FALSE)
+    }
+  }
+
+  if (stan_data$has_lower_bound == 1L &&
+      stan_data$has_upper_bound == 1L &&
+      stan_data$outcome_lower_bound >= stan_data$outcome_upper_bound) {
+    stop("The lower outcome bound must be smaller than the upper bound.", call. = FALSE)
+  }
+
   if (!is.numeric(stan_data$y) ||
       length(stan_data$y) != stan_data$N ||
       any(!is.finite(stan_data$y))) {
     stop("`y` must contain exactly N finite numeric values.", call. = FALSE)
+  }
+
+  if (stan_data$has_lower_bound == 1L &&
+      any(stan_data$y < stan_data$outcome_lower_bound)) {
+    stop("Observed `y` falls below `outcome_lower_bound`.", call. = FALSE)
+  }
+
+  if (stan_data$has_upper_bound == 1L &&
+      any(stan_data$y > stan_data$outcome_upper_bound)) {
+    stop("Observed `y` exceeds `outcome_upper_bound`.", call. = FALSE)
+  }
+
+  if (stan_data$likelihood_id == 3L && any(stan_data$y <= 0)) {
+    stop("The log-normal model requires strictly positive `y`.", call. = FALSE)
   }
 
   if (length(stan_data$subject) != stan_data$N) {
@@ -261,7 +313,7 @@ mira_fit <- function(
 
     if (any(!is.finite(x)) ||
         any(x != floor(x)) ||
-        any(!x %in% c(0, 1))) {
+        any(!(x %in% c(0, 1)))) {
       stop(
         "`", name, "` must contain exactly S binary integer values (0/1).",
         call. = FALSE
@@ -362,6 +414,21 @@ mira_fit <- function(
   if (!is.null(prior)) {
 
     mira_validate_prior(prior)
+
+    if (!is.null(prior$likelihood)) {
+      expected_likelihood <- c("student_t", "gaussian", "lognormal")[[
+        as.integer(stan_data$likelihood_id)
+      ]]
+      supplied_likelihood <- tolower(as.character(prior$likelihood)[1L])
+      if (!identical(supplied_likelihood, expected_likelihood)) {
+        stop(
+          "The prior was built for `", supplied_likelihood,
+          "`, but `stan_data` requests `", expected_likelihood, "`.",
+          call. = FALSE
+        )
+      }
+    }
+
     stan_prior_data <- mira_prior_stan_data(prior)
     prior_source <- "argument"
 
@@ -429,6 +496,9 @@ mira_fit <- function(
   sampling_data$S <- as.integer(sampling_data$S)
   sampling_data$K <- as.integer(sampling_data$K)
   sampling_data$G <- as.integer(sampling_data$G)
+  sampling_data$likelihood_id <- as.integer(sampling_data$likelihood_id)
+  sampling_data$has_lower_bound <- as.integer(sampling_data$has_lower_bound)
+  sampling_data$has_upper_bound <- as.integer(sampling_data$has_upper_bound)
   sampling_data$subject <- as.integer(sampling_data$subject)
   sampling_data$time <- as.integer(sampling_data$time)
   sampling_data$arm <- as.integer(sampling_data$arm)
@@ -516,32 +586,36 @@ mira_fit <- function(
   # ------------------------------------------------------------
 
   y <- as.numeric(stan_data$y)
-  baseline_y <- y[stan_data$time == 1]
+  model_y <- if (stan_data$likelihood_id == 3L) log(y) else y
+  baseline_y <- model_y[stan_data$time == 1]
 
-  mean_y <- if (!is.null(stan_data$mean_y)) {
-    as.numeric(stan_data$mean_y)[1]
+  mean_y <- if (!is.null(stan_data$mean_model_y)) {
+    as.numeric(stan_data$mean_model_y)[1]
   } else {
-    mean(y)
+    mean(model_y)
   }
 
-  sd_y <- if (!is.null(stan_data$sd_y)) {
-    as.numeric(stan_data$sd_y)[1]
+  sd_y <- if (!is.null(stan_data$sd_model_y)) {
+    as.numeric(stan_data$sd_model_y)[1]
   } else {
-    stats::sd(y)
+    stats::sd(model_y)
   }
 
-  if (!is.finite(mean_y)) mean_y <- mean(y)
-  if (!is.finite(sd_y) || sd_y <= 0) sd_y <- max(abs(mean_y) * 0.1, 1)
+  if (!is.finite(mean_y)) mean_y <- mean(model_y)
+  if (!is.finite(sd_y) || sd_y <= 0) {
+    sd_y <- if (stan_data$likelihood_id == 3L) 0.2 else max(abs(mean_y) * 0.1, 1)
+  }
 
   baseline_init <- if (length(baseline_y) > 0) mean(baseline_y) else mean_y
   elapsed <- max(stan_data$time_value) - min(stan_data$time_value)
   elapsed_safe <- max(elapsed, 1e-6)
 
-  slope_scale <- max(sd_y / elapsed_safe, 0.01)
-  rw_scale <- max(sd_y / sqrt(elapsed_safe) / 10, 0.01)
+  scale_floor <- if (stan_data$likelihood_id == 3L) 0.001 else 0.01
+  slope_scale <- max(sd_y / elapsed_safe, scale_floor)
+  rw_scale <- max(sd_y / sqrt(elapsed_safe) / 10, scale_floor)
 
   init <- function() {
-    list(
+    initial_values <- list(
       baseline_mean = baseline_init,
       beta_time = as.numeric(stan_prior_data$beta_time_prior_mean),
       z_common_step = rep(0, stan_data$K - 1),
@@ -554,7 +628,7 @@ mira_fit <- function(
       ),
       tau_treatment = rep(rw_scale, stan_data$G - 1),
       z_arm_baseline = rep(0, stan_data$G - 1),
-      arm_baseline_sd = max(sd_y / 10, 0.01),
+      arm_baseline_sd = max(sd_y / 10, scale_floor),
 
       # Gender-by-time trajectory: Male - Female.
       gender_baseline_effect = 0,
@@ -574,14 +648,19 @@ mira_fit <- function(
         ncol = stan_data$S
       ),
       sigma_subject = c(
-        max(sd_y / 2, 0.1),
-        max(slope_scale / 2, 0.01)
+        max(sd_y / 2, scale_floor),
+        max(slope_scale / 2, scale_floor)
       ),
       L_subject = diag(2),
-      sigma = max(sd_y / 2, 0.1),
-      nu = 10,
+      sigma = max(sd_y / 2, scale_floor),
       mcid = max(stan_data$mcid_prior_mean, 1e-6)
     )
+
+    # The Stan parameter has dimension zero for non-Student-t families.
+    if (stan_data$likelihood_id == 1L) {
+      initial_values$nu <- array(10, dim = 1L)
+    }
+    initial_values
   }
 
   # ------------------------------------------------------------
@@ -664,6 +743,50 @@ mira_fit <- function(
       normalizePath(stan_file, winslash = "/", mustWork = FALSE),
       error = function(e) stan_file
     ),
+    outcome = if (!is.null(stan_data$outcome)) {
+      as.character(stan_data$outcome)[1L]
+    } else if (!is.null(stan_data$outcome_name)) {
+      as.character(stan_data$outcome_name)[1L]
+    } else {
+      "generic"
+    },
+    outcome_name = if (!is.null(stan_data$outcome_name)) {
+      as.character(stan_data$outcome_name)[1L]
+    } else {
+      NA_character_
+    },
+    likelihood = c("student_t", "gaussian", "lognormal")[[
+      as.integer(stan_data$likelihood_id)
+    ]],
+    likelihood_id = as.integer(stan_data$likelihood_id),
+    modeling_scale = if (stan_data$likelihood_id == 3L) "log" else "identity",
+    clinical_estimand_scale = "absolute natural-outcome units",
+    outcome_bounds = c(
+      lower = if (stan_data$has_lower_bound == 1L) {
+        stan_data$outcome_lower_bound
+      } else {
+        NA_real_
+      },
+      upper = if (stan_data$has_upper_bound == 1L) {
+        stan_data$outcome_upper_bound
+      } else {
+        NA_real_
+      }
+    ),
+    boundary_strategy = if (stan_data$likelihood_id == 3L &&
+                            stan_data$has_upper_bound == 0L &&
+                            (stan_data$has_lower_bound == 0L ||
+                             stan_data$outcome_lower_bound <= 0)) {
+      "strictly positive log-normal support"
+    } else if (stan_data$likelihood_id == 3L) {
+      "strictly positive log-normal support with endpoint censoring"
+    } else if (stan_data$has_lower_bound == 1L ||
+               stan_data$has_upper_bound == 1L) {
+      "endpoint censoring"
+    } else {
+      "none"
+    },
+    outcome_diagnostics = stan_data$outcome_diagnostics,
     n_observations = as.integer(stan_data$N),
     n_subjects = as.integer(stan_data$S),
     n_time_points = as.integer(stan_data$K),
@@ -820,6 +943,28 @@ print.mira_fit <- function(
 
   if (!is.null(info$model_file)) {
     cat(sprintf("Stan model: %s\n", info$model_file))
+  }
+
+  if (!is.null(info$outcome) || !is.null(info$likelihood)) {
+    cat(
+      "Outcome: ", if (!is.null(info$outcome)) info$outcome else "unknown",
+      " | Likelihood: ",
+      if (!is.null(info$likelihood)) info$likelihood else "unknown",
+      " | Modeling scale: ",
+      if (!is.null(info$modeling_scale)) info$modeling_scale else "unknown",
+      "\n",
+      sep = ""
+    )
+  }
+
+  if (!is.null(info$outcome_bounds) && any(is.finite(info$outcome_bounds))) {
+    bound_text <- paste0(
+      if (is.finite(info$outcome_bounds[[1L]])) info$outcome_bounds[[1L]] else "-Inf",
+      ", ",
+      if (is.finite(info$outcome_bounds[[2L]])) info$outcome_bounds[[2L]] else "Inf"
+    )
+    cat("Observable support: [", bound_text, "] via ",
+        info$boundary_strategy, "\n", sep = "")
   }
 
   if (!is.null(info$n_subjects)) {
@@ -1136,8 +1281,18 @@ print.mira_fit <- function(
       "sigma_subject",
       "sigma",
       "nu",
+      "nu_value",
+      "residual_sd",
+      "residual_cv",
       "mcid"
     )
+
+    if (!is.null(info$likelihood) && info$likelihood != "student_t") {
+      core_candidates <- setdiff(core_candidates, c("nu", "nu_value"))
+    }
+    if (!is.null(info$likelihood) && info$likelihood != "lognormal") {
+      core_candidates <- setdiff(core_candidates, "residual_cv")
+    }
 
     available_core <- core_candidates
 

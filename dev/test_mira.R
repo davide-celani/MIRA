@@ -121,11 +121,7 @@ stan_data <- mira_prepare_data(
 # PRIORS
 # ============================================================
 
-prior <- mira_prior(
-  stan_data = stan_data,
-  outcome = outcome,
-  informativeness = "standard"
-)
+prior <- mira_prior(stan_data, outcome = "BCVA")
 
 print(prior)
 
@@ -139,7 +135,7 @@ fit <- mira_fit(
   prior = prior,
   chains = 4,
   parallel_chains = 4,
-  iter_warmup = 1500,
+  iter_warmup = 2000,
   iter_sampling = 3000,
   seed = 123,
   refresh = 100,
@@ -161,7 +157,7 @@ mira_res <- mira_summary(
 )
 
 mira_res$population_time_means
-mira_res$treatment_effects
+mira_res$change
 mira_res$diagnostics
 
 # ------------------------------------------------------------

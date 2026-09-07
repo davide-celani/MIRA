@@ -1,6 +1,6 @@
 
 mira_create_ophthalmology_data <- function(
-    n_per_arm = 50L,
+    n_per_arm = 10L,
     seed = 2026L,
     time_months = c(0, 3, 5, 12, 15)
 ) {

@@ -76,6 +76,38 @@
 }
 
 
+.mira_normalize_likelihood_prior <- function(likelihood, outcome) {
+  if (length(likelihood) != 1L || is.na(likelihood) || !nzchar(likelihood)) {
+    stop("`likelihood` must be one non-empty character value.", call. = FALSE)
+  }
+
+  value <- tolower(trimws(as.character(likelihood)))
+  aliases <- c(
+    student_t = "student_t",
+    student = "student_t",
+    robust = "student_t",
+    gaussian = "gaussian",
+    normal = "gaussian",
+    lognormal = "lognormal",
+    log_normal = "lognormal"
+  )
+
+  if (value == "auto") {
+    return(if (identical(outcome, "CMT")) "lognormal" else "student_t")
+  }
+
+  if (!(value %in% names(aliases))) {
+    stop(
+      "Unsupported `likelihood`: ", likelihood,
+      ". Use 'auto', 'student_t', 'gaussian', or 'lognormal'.",
+      call. = FALSE
+    )
+  }
+
+  unname(aliases[[value]])
+}
+
+
 .mira_normalize_informativeness <- function(informativeness) {
   if (length(informativeness) < 1L ||
       is.na(informativeness[1L]) ||
@@ -203,12 +235,15 @@
 }
 
 
-#' Create BCVA, CMT, or custom priors for the MIRA model
+#' Create outcome- and likelihood-specific priors for the MIRA model
 #'
 #' `outcome` and `informativeness` are independent choices. For example,
 #' BCVA can use weak, standard, informative, or custom priors, and the same is
-#' true for CMT. The returned object contains exactly the 19 prior fields used
-#' by the current Stan model, plus R-side metadata.
+#' true for CMT. Prior locations and scales are expressed on the active link
+#' scale: identity for Gaussian/Student-t and log for log-normal. The returned
+#' object contains exactly the 19 prior fields used by Stan, plus R-side
+#' metadata. Student-t degrees-of-freedom priors are inactive for the other
+#' likelihoods.
 #'
 #' The BCVA and CMT centres are calibrated to DRCR.net Protocol T summaries.
 #' BCVA is expressed in ETDRS letters and CMT in micrometres. The CMT profile
@@ -218,6 +253,10 @@
 #' @param stan_data Data prepared by [mira_prepare_data()].
 #' @param outcome Outcome scale: `"auto"`, `"BCVA"`, `"CMT"`, or
 #'   `"generic"`. With `"auto"`, `stan_data$outcome_name` is used.
+#' @param likelihood Likelihood/link specification. `"auto"` uses the value
+#'   stored by [mira_prepare_data()] (or Student-t for BCVA/generic and
+#'   log-normal for CMT). Explicit values are `"student_t"`, `"gaussian"`,
+#'   and `"lognormal"`.
 #' @param informativeness Prior strength:
 #'   * `"weak"`: broad, less informative priors;
 #'   * `"standard"`: clinically scaled default priors (`"normal"` is an
@@ -250,9 +289,12 @@
 #' @param tau_age_rate Exponential rate for the age-group RW1 scale.
 #' @param sigma_intercept_rate Exponential rate for random-intercept SD.
 #' @param sigma_slope_rate Exponential rate for random-slope SD.
-#' @param sigma_rate Exponential rate for the residual Student-t scale.
-#' @param nu_shape Shape of the Gamma prior for Student-t degrees of freedom.
-#' @param nu_rate Rate of the Gamma prior for Student-t degrees of freedom.
+#' @param sigma_rate Exponential rate for the residual scale (natural-scale SD
+#'   for identity models; log-SD for the log-normal model).
+#' @param nu_shape Shape of the Gamma prior for Student-t degrees of freedom;
+#'   inactive for Gaussian and log-normal models.
+#' @param nu_rate Rate of the Gamma prior for Student-t degrees of freedom;
+#'   inactive for Gaussian and log-normal models.
 #'
 #' @return An object of class `mira_prior`.
 #'
@@ -260,6 +302,7 @@
 mira_prior <- function(
     stan_data,
     outcome = c("auto", "BCVA", "CMT", "generic"),
+    likelihood = "auto",
     informativeness = c("standard", "weak", "informative", "custom"),
     time_unit = c("months", "years", "weeks", "days"),
     custom_prior = NULL,
@@ -404,7 +447,13 @@ mira_prior <- function(
     c("months", "years", "weeks", "days")
   )
 
-  data_outcome <- if (!is.null(stan_data$outcome_name)) {
+  data_outcome <- if (!is.null(stan_data$outcome)) {
+    .mira_normalize_outcome(
+      stan_data$outcome,
+      allow_auto = FALSE,
+      unknown_as_generic = TRUE
+    )
+  } else if (!is.null(stan_data$outcome_name)) {
     .mira_normalize_outcome(
       stan_data$outcome_name,
       allow_auto = FALSE,
@@ -425,8 +474,40 @@ mira_prior <- function(
       requested_outcome != data_outcome) {
     stop(
       "`outcome = '", requested_outcome,
-      "'` does not match `stan_data$outcome_name = '",
-      data_outcome, "'`.",
+      "'` does not match the outcome class stored in `stan_data` (`",
+      data_outcome, "`).",
+      call. = FALSE
+    )
+  }
+
+  if (length(likelihood) != 1L || is.na(likelihood) || !nzchar(likelihood)) {
+    stop("`likelihood` must be one non-empty character value.", call. = FALSE)
+  }
+  likelihood_requested <- tolower(trimws(as.character(likelihood)))
+  data_likelihood <- if (!is.null(stan_data$likelihood)) {
+    .mira_normalize_likelihood_prior(stan_data$likelihood, resolved_outcome)
+  } else if (!is.null(stan_data$likelihood_id) &&
+             length(stan_data$likelihood_id) == 1L &&
+             stan_data$likelihood_id %in% 1:3) {
+    c("student_t", "gaussian", "lognormal")[[as.integer(stan_data$likelihood_id)]]
+  } else {
+    NULL
+  }
+
+  resolved_likelihood <- if (likelihood_requested == "auto" &&
+                             !is.null(data_likelihood)) {
+    data_likelihood
+  } else {
+    .mira_normalize_likelihood_prior(likelihood, resolved_outcome)
+  }
+
+  if (likelihood_requested != "auto" &&
+      !is.null(data_likelihood) &&
+      resolved_likelihood != data_likelihood) {
+    stop(
+      "`likelihood = '", resolved_likelihood,
+      "'` does not match `stan_data$likelihood = '",
+      data_likelihood, "'`.",
       call. = FALSE
     )
   }
@@ -434,7 +515,13 @@ mira_prior <- function(
   y <- as.numeric(y)
   time <- as.integer(time)
   time_value <- as.numeric(time_value)
-  baseline_y <- y[time == 1L]
+
+  if (resolved_likelihood == "lognormal" && any(y <= 0)) {
+    stop("Log-normal priors require strictly positive outcome data.", call. = FALSE)
+  }
+
+  model_y <- if (resolved_likelihood == "lognormal") log(y) else y
+  baseline_y <- model_y[time == 1L]
 
   if (length(baseline_y) < 1L) {
     stop("No baseline observations (`time == 1`) were found.", call. = FALSE)
@@ -442,7 +529,7 @@ mira_prior <- function(
 
   baseline_center <- mean(baseline_y)
   time_span <- max(time_value) - min(time_value)
-  outcome_scale <- max(as.numeric(sd_y), 1e-8)
+  outcome_scale <- max(stats::sd(model_y), 1e-8)
   slope_scale <- max(outcome_scale / time_span, 1e-8)
   rw_scale <- max(outcome_scale / sqrt(time_span), 1e-8)
 
@@ -455,6 +542,14 @@ mira_prior <- function(
 
   slope_unit <- months_per_unit
   rw_unit <- sqrt(months_per_unit)
+
+  if (resolved_outcome == "BCVA" && resolved_likelihood == "lognormal") {
+    stop(
+      "A log-normal observation model is not appropriate for bounded ETDRS ",
+      "letter scores. Use Student-t (primary) or Gaussian (sensitivity).",
+      call. = FALSE
+    )
+  }
 
   if (resolved_outcome == "BCVA") {
     values <- list(
@@ -478,7 +573,32 @@ mira_prior <- function(
       nu_shape = 3,
       nu_rate = 0.2
     )
+  } else if (resolved_outcome == "CMT" && resolved_likelihood == "lognormal") {
+    # All trajectory and random-effect priors are on log(CMT).  Clinical
+    # changes and MCID remain in micrometres in generated quantities.
+    values <- list(
+      baseline_mean = log(412),
+      baseline_sd = 0.35,
+      beta_time_mean = log(0.98) * slope_unit,
+      beta_time_sd = 0.04 * slope_unit,
+      tau_common_rate = 1 / (0.08 * rw_unit),
+      beta_treatment_sd = 0.03 * slope_unit,
+      tau_treatment_rate = 1 / (0.06 * rw_unit),
+      arm_baseline_sd_rate = 1 / 0.10,
+      gender_baseline_sd = 0.10,
+      beta_gender_sd = 0.015 * slope_unit,
+      tau_gender_rate = 1 / (0.05 * rw_unit),
+      age_baseline_sd = 0.12,
+      beta_age_sd = 0.015 * slope_unit,
+      tau_age_rate = 1 / (0.05 * rw_unit),
+      sigma_intercept_rate = 1 / 0.25,
+      sigma_slope_rate = 1 / (0.03 * slope_unit),
+      sigma_rate = 1 / 0.20,
+      nu_shape = 3,
+      nu_rate = 0.2
+    )
   } else if (resolved_outcome == "CMT") {
+    # Natural-scale Gaussian/Student-t sensitivity model.
     values <- list(
       baseline_mean = 412,
       baseline_sd = 130,
@@ -612,8 +732,13 @@ mira_prior <- function(
     sigma_prior_rate = as.numeric(values$sigma_rate),
     nu_prior_shape = as.numeric(values$nu_shape),
     nu_prior_rate = as.numeric(values$nu_rate),
-    profile = paste(tolower(resolved_outcome), informativeness, sep = "_"),
+    profile = paste(
+      tolower(resolved_outcome), resolved_likelihood, informativeness,
+      sep = "_"
+    ),
     outcome = resolved_outcome,
+    likelihood = resolved_likelihood,
+    modeling_scale = if (resolved_likelihood == "lognormal") "log" else "identity",
     informativeness = informativeness,
     time_unit = time_unit,
     customized_fields = customized_fields,
@@ -624,7 +749,8 @@ mira_prior <- function(
       slope_scale = slope_scale,
       rw_scale = rw_scale,
       time_span = time_span,
-      months_per_time_unit = months_per_unit
+      months_per_time_unit = months_per_unit,
+      modeling_scale = if (resolved_likelihood == "lognormal") "log" else "identity"
     ),
     literature = if (resolved_outcome %in% c("BCVA", "CMT")) c(
       protocol_t_one_year = "doi:10.1056/NEJMoa1414264",
@@ -779,6 +905,12 @@ print.mira_prior <- function(x, ...) {
   cat("\nMIRA prior specification\n")
   cat("========================\n")
   if (!is.null(x$outcome)) cat("Outcome: ", x$outcome, "\n", sep = "")
+  if (!is.null(x$likelihood)) {
+    cat("Likelihood: ", x$likelihood, "\n", sep = "")
+  }
+  if (!is.null(x$modeling_scale)) {
+    cat("Modeling scale: ", x$modeling_scale, "\n", sep = "")
+  }
   if (!is.null(x$informativeness)) {
     cat("Informativeness: ", x$informativeness, "\n", sep = "")
   }
@@ -803,10 +935,16 @@ print.mira_prior <- function(x, ...) {
   cat(
     "Treatment slope SD: ", x$beta_treatment_prior_sd, "\n",
     "Residual scale ~ Exponential(", x$sigma_prior_rate, ")\n",
-    "Student-t nu ~ Gamma(", x$nu_prior_shape, ", ",
-    x$nu_prior_rate, "), truncated at 2\n",
     sep = ""
   )
+
+  if (is.null(x$likelihood) || identical(x$likelihood, "student_t")) {
+    cat(
+      "Student-t nu ~ Gamma(", x$nu_prior_shape, ", ",
+      x$nu_prior_rate, "), truncated at 2\n",
+      sep = ""
+    )
+  }
 
   invisible(x)
 }

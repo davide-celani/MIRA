@@ -1,8 +1,70 @@
+# Internal helpers are deliberately kept in this file so that
+# `mira_prepare_data()` also works when the script is sourced outside an R
+# package.  The Stan model uses the numeric likelihood id, while users work
+# with readable names.
+.mira_prepare_outcome_key <- function(x) {
+  value <- toupper(trimws(as.character(x)))
+
+  if (value %in% c("BCVA", "VA", "ETDRS")) return("BCVA")
+  if (value %in% c("CMT", "CST", "CSFT")) return("CMT")
+  "generic"
+}
+
+.mira_prepare_likelihood <- function(likelihood, outcome) {
+  if (length(likelihood) != 1L || is.na(likelihood) || !nzchar(likelihood)) {
+    stop("`likelihood` must be one non-empty character value.", call. = FALSE)
+  }
+
+  value <- tolower(trimws(as.character(likelihood)))
+  aliases <- c(
+    student_t = "student_t",
+    student = "student_t",
+    robust = "student_t",
+    gaussian = "gaussian",
+    normal = "gaussian",
+    lognormal = "lognormal",
+    log_normal = "lognormal"
+  )
+
+  if (value == "auto") {
+    if (identical(outcome, "CMT")) return("lognormal")
+    if (identical(outcome, "BCVA")) return("student_t")
+
+    warning(
+      "The outcome is not a recognized BCVA/CMT variable; using the robust ",
+      "identity-scale Student-t model. Set `likelihood` explicitly after ",
+      "checking the outcome support and empirical distribution.",
+      call. = FALSE
+    )
+    return("student_t")
+  }
+
+  if (!(value %in% names(aliases))) {
+    stop(
+      "Unsupported `likelihood`: ", likelihood,
+      ". Use 'auto', 'student_t', 'gaussian', or 'lognormal'.",
+      call. = FALSE
+    )
+  }
+
+  unname(aliases[[value]])
+}
+
+.mira_sample_skewness <- function(x) {
+  x <- as.numeric(x)
+  n <- length(x)
+  s <- stats::sd(x)
+  if (n < 3L || !is.finite(s) || s <= 0) return(NA_real_)
+  n / ((n - 1) * (n - 2)) * sum(((x - mean(x)) / s)^3)
+}
+
 #' Prepare longitudinal data for the MIRA treatment model
 #'
-#' Prepares and validates longitudinal data for the MIRA Bayesian
-#' longitudinal Student-t mixed-effects model with treatment-specific
-#' trajectories.
+#' Prepares and validates longitudinal data for the outcome-adaptive MIRA
+#' Bayesian model. By default BCVA uses a censored robust Student-t model on
+#' its letter-score scale, whereas CMT uses a log-normal model with a log link.
+#' Gaussian identity and explicit family overrides are available for
+#' sensitivity analyses.
 #'
 #' Longitudinal measurement columns are detected automatically using
 #' the naming convention `<outcome>_t0`, ..., `<outcome>_tK`.
@@ -14,16 +76,29 @@
 #'   longitudinal measurement columns named `<outcome>_t0`, ..., `<outcome>_tK`.
 #' @param time_value Numeric vector of actual measurement times corresponding
 #'   to t0, ..., tK. Values must be finite and strictly increasing.
+#' @param outcome Outcome to select when the data contain one or more
+#'   longitudinal series. `"auto"` is allowed only when there is one outcome
+#'   prefix. Recognized aliases are BCVA/VA/ETDRS and CMT/CST/CSFT; any other
+#'   value is treated as an exact column prefix and as a generic outcome.
+#' @param likelihood Observation model. `"auto"` selects Student-t for BCVA,
+#'   log-normal for CMT, and a warned Student-t fallback for an unknown
+#'   continuous outcome. Explicit options are `"student_t"`, `"gaussian"`,
+#'   and `"lognormal"`.
+#' @param outcome_bounds Optional numeric vector `c(lower, upper)` defining
+#'   observable bounds. Use `NA` for an absent endpoint. BCVA defaults to
+#'   `c(0, 100)` and is modeled as a censored continuous score. CMT defaults
+#'   to the positive support of the log-normal distribution.
 #' @param meaningful_change Positive numeric value giving the prior mean of
 #'   the minimum clinically important difference (MCID). Together with
 #'   `meaningful_change_sd`, it defines a Gamma prior with exactly these
-#'   moments.
+#'   moments. When omitted, BCVA defaults to 5 ETDRS letters. CMT and generic
+#'   outcomes require an explicit value because no universal threshold exists.
 #' @param meaningful_change_sd Positive numeric value giving the prior SD of
 #'   the uncertain MCID. This must be externally specified; the outcome data
 #'   should not be used to identify MCID uncertainty.
-#' @param direction Direction of clinical improvement. Use `1` or
-#'   `"higher"` when higher outcome values are better; use `-1` or
-#'   `"lower"` when lower outcome values are better.
+#' @param direction Direction of clinical improvement. `"auto"` selects
+#'   higher-is-better for BCVA and lower-is-better for CMT. Otherwise use `1`
+#'   or `"higher"`, or `-1` or `"lower"`.
 #' @param meaningful_between_arm_difference Non-negative threshold defining
 #'   a clinically meaningful between-arm difference in change. By default it
 #'   is set equal to `meaningful_change`.
@@ -39,20 +114,22 @@
 #'   Subjects with age > `age_threshold` are coded as the older group;
 #'   subjects with age <= `age_threshold` are the reference group.
 #'
-#' @return A named list containing the variables required by the MIRA Stan
-#'   model plus R-side metadata (`mean_y`, `sd_y`, `arm_labels`,
-#'   `subject_labels`, `outcome_name`, `measurement_columns`, gender coding,
-#'   age threshold, and observed group counts used for interpretation of
-#'   covariate effects).
+#' @return A named list containing the variables required by Stan plus
+#'   outcome-family metadata and empirical diagnostics. All clinical changes
+#'   and MCID values remain on the natural outcome scale even when the latent
+#'   trajectory is modeled on the log scale.
 #'
 #' @export
 mira_prepare_data <- function(
     data,
     time_value,
-    meaningful_change = 5,
+    outcome = "auto",
+    likelihood = "auto",
+    outcome_bounds = NULL,
+    meaningful_change = NULL,
     meaningful_change_sd,
-    direction,
-    meaningful_between_arm_difference = meaningful_change,
+    direction = "auto",
+    meaningful_between_arm_difference = NULL,
     arm_column = "arm",
     reference_arm = NULL,
     gender_column = "gender",
@@ -302,17 +379,91 @@ mira_prepare_data <- function(
   # LONGITUDINAL MEASUREMENT COLUMNS
   # ============================================================
 
-  measurement_columns <- names(data)[
+  all_measurement_columns <- names(data)[
     grepl("_t[0-9]+$", names(data))
   ]
 
-  if (length(measurement_columns) < 2) {
+  if (length(all_measurement_columns) < 2) {
     stop(
       paste0(
         "At least two longitudinal measurement columns are required. ",
         "Expected columns named `<outcome>_t0`, `<outcome>_t1`, ..., ",
         "`<outcome>_tK`."
       ),
+      call. = FALSE
+    )
+  }
+
+  if (length(outcome) != 1L || is.na(outcome) || !nzchar(outcome)) {
+    stop("`outcome` must be one non-empty character value.", call. = FALSE)
+  }
+
+  all_outcome_names <- sub("_t[0-9]+$", "", all_measurement_columns)
+  available_outcomes <- unique(all_outcome_names)
+  requested_outcome <- trimws(as.character(outcome))
+
+  if (tolower(requested_outcome) == "auto") {
+    if (length(available_outcomes) != 1L) {
+      stop(
+        paste0(
+          "Multiple longitudinal outcomes were detected: ",
+          paste(available_outcomes, collapse = ", "),
+          ". Select one with `outcome`, for example `outcome = 'BCVA'` ",
+          "or `outcome = 'CMT'`."
+        ),
+        call. = FALSE
+      )
+    }
+    outcome_name <- available_outcomes[[1L]]
+  } else {
+    exact_match <- available_outcomes[
+      tolower(available_outcomes) == tolower(requested_outcome)
+    ]
+    requested_key <- .mira_prepare_outcome_key(requested_outcome)
+
+    if (length(exact_match) == 1L) {
+      outcome_name <- exact_match[[1L]]
+    } else if (requested_key %in% c("BCVA", "CMT")) {
+      alias_match <- available_outcomes[
+        vapply(
+          available_outcomes,
+          function(x) identical(.mira_prepare_outcome_key(x), requested_key),
+          logical(1L)
+        )
+      ]
+
+      if (length(alias_match) != 1L) {
+        stop(
+          "`outcome = '", requested_outcome,
+          "'` matches ", length(alias_match),
+          " available prefixes. Available outcomes: ",
+          paste(available_outcomes, collapse = ", "),
+          ". Use the exact prefix to disambiguate.",
+          call. = FALSE
+        )
+      }
+      outcome_name <- alias_match[[1L]]
+    } else if (tolower(requested_outcome) == "generic" &&
+               length(available_outcomes) == 1L) {
+      outcome_name <- available_outcomes[[1L]]
+    } else {
+      stop(
+        "Could not find longitudinal columns for `outcome = '",
+        requested_outcome, "'`. Available outcomes: ",
+        paste(available_outcomes, collapse = ", "), ".",
+        call. = FALSE
+      )
+    }
+  }
+
+  measurement_columns <- all_measurement_columns[
+    tolower(all_outcome_names) == tolower(outcome_name)
+  ]
+
+  if (length(measurement_columns) < 2L) {
+    stop(
+      "The selected outcome `", outcome_name,
+      "` must have at least two measurement occasions.",
       call. = FALSE
     )
   }
@@ -375,21 +526,24 @@ mira_prepare_data <- function(
 
   K <- length(measurement_columns)
 
-  outcome_names <- sub("_t[0-9]+$", "", measurement_columns)
+  outcome_class <- .mira_prepare_outcome_key(outcome_name)
+  if (tolower(requested_outcome) == "generic") {
+    outcome_class <- "generic"
+  } else if (tolower(requested_outcome) != "auto" &&
+             .mira_prepare_outcome_key(requested_outcome) %in% c("BCVA", "CMT")) {
+    outcome_class <- .mira_prepare_outcome_key(requested_outcome)
+  }
 
-  if (length(unique(outcome_names)) != 1) {
+  likelihood <- .mira_prepare_likelihood(likelihood, outcome_class)
+  if (outcome_class == "BCVA" && likelihood == "lognormal") {
     stop(
-      paste0(
-        "All longitudinal measurement columns must refer to the same outcome. ",
-        "Detected prefixes: ",
-        paste(unique(outcome_names), collapse = ", "),
-        "."
-      ),
+      "A log-normal model is incompatible with bounded ETDRS letter scores. ",
+      "Use `student_t` (primary) or `gaussian` (sensitivity).",
       call. = FALSE
     )
   }
-
-  outcome_name <- unique(outcome_names)
+  likelihood_id <- c(student_t = 1L, gaussian = 2L, lognormal = 3L)[[likelihood]]
+  modeling_scale <- if (likelihood == "lognormal") "log" else "identity"
 
   # ============================================================
   # TIME VALUES
@@ -431,13 +585,32 @@ mira_prepare_data <- function(
 
     direction_key <- tolower(trimws(direction))
 
-    if (direction_key %in% c("higher", "higher_better", "increase", "increasing")) {
+    if (direction_key == "auto") {
+      if (outcome_class == "BCVA") {
+        direction <- 1L
+      } else if (outcome_class == "CMT") {
+        direction <- -1L
+        warning(
+          "`direction = 'auto'` assumes that lower CMT is anatomically ",
+          "better. Verify this for the disease and time horizon (for example, ",
+          "retinal thinning/atrophy can invalidate a monotone lower-is-better ",
+          "interpretation); otherwise set `direction` explicitly.",
+          call. = FALSE
+        )
+      } else {
+        stop(
+          "`direction = 'auto'` is available only for recognized BCVA or ",
+          "CMT outcomes. Specify 'higher' or 'lower' for this outcome.",
+          call. = FALSE
+        )
+      }
+    } else if (direction_key %in% c("higher", "higher_better", "increase", "increasing")) {
       direction <- 1L
     } else if (direction_key %in% c("lower", "lower_better", "decrease", "decreasing")) {
       direction <- -1L
     } else {
       stop(
-        "Character `direction` must be `higher` or `lower` ",
+        "Character `direction` must be `auto`, `higher`, or `lower` ",
         "(or a supported synonym).",
         call. = FALSE
       )
@@ -458,6 +631,25 @@ mira_prepare_data <- function(
   # ============================================================
   # CLINICAL THRESHOLDS
   # ============================================================
+
+  if (is.null(meaningful_change)) {
+    if (outcome_class == "BCVA") {
+      meaningful_change <- 5
+      warning(
+        "`meaningful_change` was not supplied; using 5 ETDRS letters as a ",
+        "candidate responder threshold. This is not treated as a universal ",
+        "BCVA MCID: override it when the protocol defines another threshold.",
+        call. = FALSE
+      )
+    } else {
+      stop(
+        "`meaningful_change` must be supplied for ", outcome_class,
+        ". In particular, CMT has no universal MCID; provide an externally ",
+        "justified threshold in micrometres.",
+        call. = FALSE
+      )
+    }
+  }
 
   if (
     length(meaningful_change) != 1 ||
@@ -491,6 +683,10 @@ mira_prepare_data <- function(
       "`meaningful_change_sd` must be one finite positive numeric value.",
       call. = FALSE
     )
+  }
+
+  if (is.null(meaningful_between_arm_difference)) {
+    meaningful_between_arm_difference <- meaningful_change
   }
 
   if (
@@ -580,6 +776,89 @@ mira_prepare_data <- function(
     stop("Internal error: N must equal K * S.", call. = FALSE)
   }
 
+  # Observable support. Identity-scale models use censoring at supplied
+  # endpoints; the log-normal family additionally enforces strict positivity.
+  if (is.null(outcome_bounds)) {
+    outcome_bounds <- if (outcome_class == "BCVA") {
+      c(0, 100)
+    } else if (outcome_class == "CMT") {
+      c(0, NA_real_)
+    } else {
+      c(NA_real_, NA_real_)
+    }
+  }
+
+  if (is.logical(outcome_bounds) && length(outcome_bounds) == 2L &&
+      all(is.na(outcome_bounds))) {
+    outcome_bounds <- as.numeric(outcome_bounds)
+  }
+
+  if (!is.numeric(outcome_bounds) || length(outcome_bounds) != 2L) {
+    stop(
+      "`outcome_bounds` must be NULL or numeric `c(lower, upper)`; use NA ",
+      "for a missing endpoint.",
+      call. = FALSE
+    )
+  }
+
+  finite_or_missing <- is.na(outcome_bounds) | is.finite(outcome_bounds)
+  if (!all(finite_or_missing)) {
+    stop("Finite bounds or NA must be used in `outcome_bounds`.", call. = FALSE)
+  }
+
+  has_lower_bound <- as.integer(!is.na(outcome_bounds[[1L]]))
+  has_upper_bound <- as.integer(!is.na(outcome_bounds[[2L]]))
+  outcome_lower_bound <- if (has_lower_bound == 1L) {
+    as.numeric(outcome_bounds[[1L]])
+  } else {
+    0
+  }
+  outcome_upper_bound <- if (has_upper_bound == 1L) {
+    as.numeric(outcome_bounds[[2L]])
+  } else {
+    0
+  }
+
+  if (has_lower_bound == 1L && has_upper_bound == 1L &&
+      outcome_lower_bound >= outcome_upper_bound) {
+    stop("The lower outcome bound must be smaller than the upper bound.", call. = FALSE)
+  }
+
+  if (has_lower_bound == 1L && any(y < outcome_lower_bound)) {
+    stop(
+      "Observed `", outcome_name, "` values fall below the declared lower ",
+      "bound of ", outcome_lower_bound, ".",
+      call. = FALSE
+    )
+  }
+
+  if (has_upper_bound == 1L && any(y > outcome_upper_bound)) {
+    stop(
+      "Observed `", outcome_name, "` values exceed the declared upper ",
+      "bound of ", outcome_upper_bound, ".",
+      call. = FALSE
+    )
+  }
+
+  if (likelihood == "lognormal" && any(y <= 0)) {
+    stop(
+      "The log-normal model requires every observed outcome to be strictly ",
+      "positive. Zeros require a hurdle/zero-inflated model, not an automatic ",
+      "log transformation.",
+      call. = FALSE
+    )
+  }
+
+  if (outcome_class == "BCVA" && any(abs(y - round(y)) > sqrt(.Machine$double.eps))) {
+    stop(
+      "The automatic BCVA branch expects integer ETDRS letter scores. For ",
+      "logMAR or another visual-acuity scale, use `outcome = 'generic'` (or ",
+      "a non-BCVA column prefix) and explicitly set `likelihood`, `direction`, ",
+      "`outcome_bounds`, and the clinical thresholds.",
+      call. = FALSE
+    )
+  }
+
   # ============================================================
   # OUTCOME MOMENTS FOR R-SIDE PRIOR/INITIALIZATION HELPERS
   # ============================================================
@@ -587,12 +866,55 @@ mira_prepare_data <- function(
   mean_y <- mean(y)
   sd_y <- stats::sd(y)
 
+  y_model <- if (likelihood == "lognormal") log(y) else y
+  mean_model_y <- mean(y_model)
+  sd_model_y <- stats::sd(y_model)
+
   if (!is.finite(mean_y) || !is.finite(sd_y) || sd_y <= 0) {
     stop(
       "The outcome standard deviation must be positive and finite.",
       call. = FALSE
     )
   }
+
+  if (!is.finite(mean_model_y) || !is.finite(sd_model_y) || sd_model_y <= 0) {
+    stop(
+      "The outcome standard deviation on the selected modeling scale must ",
+      "be positive and finite.",
+      call. = FALSE
+    )
+  }
+
+  lower_hits <- if (has_lower_bound == 1L) {
+    sum(y == outcome_lower_bound)
+  } else {
+    0L
+  }
+  upper_hits <- if (has_upper_bound == 1L) {
+    sum(y == outcome_upper_bound)
+  } else {
+    0L
+  }
+
+  outcome_diagnostics <- list(
+    n = N,
+    min = min(y),
+    q05 = unname(stats::quantile(y, 0.05)),
+    median = stats::median(y),
+    mean = mean_y,
+    q95 = unname(stats::quantile(y, 0.95)),
+    max = max(y),
+    sd = sd_y,
+    coefficient_of_variation = if (mean_y != 0) sd_y / abs(mean_y) else NA_real_,
+    skewness = .mira_sample_skewness(y),
+    log_skewness = if (all(y > 0)) .mira_sample_skewness(log(y)) else NA_real_,
+    lower_boundary_count = as.integer(lower_hits),
+    upper_boundary_count = as.integer(upper_hits),
+    lower_boundary_fraction = lower_hits / N,
+    upper_boundary_fraction = upper_hits / N,
+    likelihood = likelihood,
+    modeling_scale = modeling_scale
+  )
 
   # ============================================================
   # RETURN
@@ -604,6 +926,11 @@ mira_prepare_data <- function(
     S = as.integer(S),
     K = as.integer(K),
     G = as.integer(G),
+    likelihood_id = as.integer(likelihood_id),
+    has_lower_bound = as.integer(has_lower_bound),
+    outcome_lower_bound = as.numeric(outcome_lower_bound),
+    has_upper_bound = as.integer(has_upper_bound),
+    outcome_upper_bound = as.numeric(outcome_upper_bound),
     y = as.numeric(y),
     subject = as.integer(subject),
     time = as.integer(time),
@@ -621,6 +948,8 @@ mira_prepare_data <- function(
     # R-side metadata; mira_fit() does not pass these to Stan
     mean_y = as.numeric(mean_y),
     sd_y = as.numeric(sd_y),
+    mean_model_y = as.numeric(mean_model_y),
+    sd_model_y = as.numeric(sd_model_y),
     meaningful_change = as.numeric(meaningful_change),
     arm_labels = arm_labels,
     reference_arm = reference_arm_chr,
@@ -642,6 +971,27 @@ mira_prepare_data <- function(
     ),
     subject_labels = as.character(data$patient),
     outcome_name = outcome_name,
+    outcome = outcome_class,
+    likelihood = likelihood,
+    modeling_scale = modeling_scale,
+    outcome_bounds = c(
+      lower = if (has_lower_bound == 1L) outcome_lower_bound else NA_real_,
+      upper = if (has_upper_bound == 1L) outcome_upper_bound else NA_real_
+    ),
+    boundary_strategy = if (likelihood == "lognormal" &&
+                            has_upper_bound == 0L &&
+                            (has_lower_bound == 0L || outcome_lower_bound <= 0)) {
+      "strictly positive log-normal support"
+    } else if (likelihood == "lognormal") {
+      "strictly positive log-normal support with endpoint censoring"
+    } else if (has_lower_bound == 1L || has_upper_bound == 1L) {
+      "endpoint censoring"
+    } else {
+      "none"
+    },
+    change_scale = "absolute natural-outcome units",
+    outcome_diagnostics = outcome_diagnostics,
+    available_outcomes = available_outcomes,
     measurement_columns = measurement_columns
   )
 }

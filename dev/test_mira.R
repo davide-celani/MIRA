@@ -140,7 +140,7 @@ fit <- mira_fit(
   chains = 4,
   parallel_chains = 4,
   iter_warmup = 1500,
-  iter_sampling = 2000,
+  iter_sampling = 3000,
   seed = 123,
   refresh = 100,
   verbose = TRUE

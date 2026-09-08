@@ -1,12 +1,22 @@
 # ============================================================
-# MIRA_INFO v3.0 COMPLETE REPORT
-# Robust longitudinal analysis for wide-format repeated measures
+# MIRA_INFO v4.0 COMPLETE REPORT
+# Data-driven, multi-outcome longitudinal analysis for wide-format data
 #
-# Expected longitudinal column names:
-#   BCVA_t0, BCVA_t1, BCVA_t2, ...
-#   CMT_t0,  CMT_t1,  CMT_t2,  ...
+# Preferred longitudinal column names are OUTCOME_t0, OUTCOME_t1, ...,
+# but automatic detection also supports numeric, baseline/month, BL/M,
+# visit, week and day suffixes. Explicit user choices always take priority.
 #
-# Main improvements vs. the original version:
+# Main improvements vs. v3.0:
+#   - automatic, inspectable detection of ID, outcomes, timepoints and arm
+#   - support for multiple outcomes and an arbitrary number of timepoints
+#   - flexible longitudinal-name parser and custom regex/function parsers
+#   - explicit outcome/time/arm/covariate overrides
+#   - conservative fallbacks for ambiguous IDs, arms and covariates
+#   - inspect-only mira_detect() workflow and result$config provenance
+#   - outcome-specific optional analyses, clinical direction and thresholds
+#   - covariate-adjusted mixed models when covariates are selected safely
+#
+# Preserved v3.0 capabilities:
 #   - consistent handling of Inf/-Inf as unavailable observations
 #   - safe ID validation for wide longitudinal data
 #   - correct reordering of manual time_labels together with time_vars
@@ -30,23 +40,548 @@
 #   - arm-specific exploratory plots
 # ============================================================
 
-mira_info <- function(data,
-                      id = "patient",
-                      time_vars = NULL,
-                      time_labels = NULL,
-                      arm = NULL,
-                      reference_arm = NULL,
-                      arm_tests = TRUE,
-                      alpha = 0.05,
-                      plots = TRUE,
-                      model = TRUE,
-                      outliers = TRUE,
-                      correlations = TRUE,
-                      verbose = TRUE,
-                      p_adjust_method = "holm",
-                      improvement_direction = c("unknown", "higher", "lower"),
-                      stable_threshold = 0,
-                      strict_id = TRUE) {
+.mira_key <- function(x) {
+  tolower(gsub("[^[:alnum:]]+", "_", trimws(as.character(x))))
+}
+
+.mira_compact_unique <- function(x) {
+  unique(x[!is.na(x) & nzchar(x)])
+}
+
+.mira_validate_name <- function(x, data, argument, allow_null = FALSE) {
+  if (allow_null && is.null(x)) return(NULL)
+  if (!is.character(x) || length(x) != 1L || is.na(x) || !nzchar(trimws(x))) {
+    stop(sprintf("%s deve essere il nome di una sola variabile.", argument), call. = FALSE)
+  }
+  if (!x %in% names(data)) {
+    stop(sprintf("La variabile '%s' indicata in %s non esiste nel dataset.", x, argument),
+         call. = FALSE)
+  }
+  x
+}
+
+.mira_column_profile <- function(data) {
+  n <- nrow(data)
+  data.frame(
+    variable = names(data),
+    class = vapply(data, function(x) paste(class(x), collapse = "/"), character(1L)),
+    numeric = vapply(data, is.numeric, logical(1L)),
+    unique_n = vapply(data, function(x) length(unique(x[!is.na(x)])), integer(1L)),
+    missing_n = vapply(data, function(x) sum(is.na(x)), integer(1L)),
+    missing_pct = vapply(data, function(x) {
+      if (n == 0L) NA_real_ else sum(is.na(x)) / n * 100
+    }, numeric(1L)),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mira_time_order <- function(token) {
+  key <- .mira_key(token)
+  if (grepl("^(baseline|base|bl)$", key)) return(0)
+  number <- regmatches(key, regexpr("[0-9]+(?:[.][0-9]+)?", key, perl = TRUE))
+  if (length(number) == 0L || !nzchar(number)) return(NA_real_)
+  suppressWarnings(as.numeric(number))
+}
+
+.mira_parse_longitudinal_name <- function(variable, variable_pattern = "auto") {
+  if (is.function(variable_pattern)) {
+    parsed <- variable_pattern(variable)
+    if (is.null(parsed) || length(parsed) == 0L) return(NULL)
+    if (is.data.frame(parsed)) parsed <- as.list(parsed[1L, , drop = FALSE])
+    if (!is.list(parsed) || is.null(parsed$outcome)) {
+      stop(
+        "La funzione variable_pattern deve restituire NULL oppure una lista con almeno 'outcome'.",
+        call. = FALSE
+      )
+    }
+    label <- if (is.null(parsed$time_label)) variable else as.character(parsed$time_label)[1L]
+    order <- if (is.null(parsed$time_order)) .mira_time_order(label) else {
+      suppressWarnings(as.numeric(parsed$time_order)[1L])
+    }
+    return(list(
+      outcome = as.character(parsed$outcome)[1L],
+      time_label = label,
+      time_order = order,
+      pattern = "custom_function"
+    ))
+  }
+
+  if (!is.character(variable_pattern) || length(variable_pattern) != 1L ||
+      is.na(variable_pattern) || !nzchar(variable_pattern)) {
+    stop("variable_pattern deve essere 'auto', una regex o una funzione.", call. = FALSE)
+  }
+
+  if (!identical(variable_pattern, "auto")) {
+    match <- regexec(variable_pattern, variable)
+    pieces <- regmatches(variable, match)[[1L]]
+    if (length(pieces) < 3L) return(NULL)
+    return(list(
+      outcome = pieces[[2L]],
+      time_label = pieces[[3L]],
+      time_order = .mira_time_order(pieces[[3L]]),
+      pattern = "custom_regex"
+    ))
+  }
+
+  patterns <- list(
+    t = "^(.+)[._-]([tT][0-9]+)$",
+    time = "^(.+)[._-]((time|visit|vis|v)[._-]?[0-9]+)$",
+    baseline = "^(.+)[._-](baseline|base|BL|bl)$",
+    month = "^(.+)[._-]((month|months|mo|m|M)[._-]?[0-9]+)$",
+    week = "^(.+)[._-]((week|weeks|wk|w|W)[._-]?[0-9]+)$",
+    day = "^(.+)[._-]((day|days|d|D)[._-]?[0-9]+)$",
+    followup = "^(.+)[._-]((follow[_-]?up|followup|fu|FU)[._-]?[0-9]+)$",
+    numeric = "^(.+)[._-]([0-9]+)$"
+  )
+
+  for (pattern_name in names(patterns)) {
+    match <- regexec(patterns[[pattern_name]], variable, ignore.case = TRUE)
+    pieces <- regmatches(variable, match)[[1L]]
+    if (length(pieces) >= 3L && nzchar(pieces[[2L]])) {
+      return(list(
+        outcome = pieces[[2L]],
+        time_label = pieces[[3L]],
+        time_order = .mira_time_order(pieces[[3L]]),
+        pattern = pattern_name
+      ))
+    }
+  }
+  NULL
+}
+
+.mira_make_longitudinal_group <- function(data,
+                                          variables,
+                                          outcome = NULL,
+                                          variable_pattern = "auto",
+                                          automatic = FALSE) {
+  variables <- as.character(variables)
+  if (length(variables) < 2L || anyNA(variables) || any(!nzchar(variables))) {
+    stop("Ogni gruppo time_vars deve contenere almeno due nomi non vuoti.", call. = FALSE)
+  }
+  if (anyDuplicated(variables)) {
+    stop("time_vars contiene nomi duplicati.", call. = FALSE)
+  }
+  missing <- setdiff(variables, names(data))
+  if (length(missing) > 0L) {
+    stop(sprintf("Variabili longitudinali non trovate: %s.", paste(missing, collapse = ", ")),
+         call. = FALSE)
+  }
+  non_numeric <- variables[!vapply(data[variables], is.numeric, logical(1L))]
+  if (length(non_numeric) > 0L) {
+    stop(sprintf("Le variabili longitudinali devono essere numeriche: %s.",
+                 paste(non_numeric, collapse = ", ")), call. = FALSE)
+  }
+
+  parsed <- lapply(variables, .mira_parse_longitudinal_name,
+                   variable_pattern = variable_pattern)
+  parsed_outcomes <- vapply(parsed, function(x) {
+    if (is.null(x)) NA_character_ else x$outcome
+  }, character(1L))
+  parsed_labels <- vapply(seq_along(parsed), function(i) {
+    if (is.null(parsed[[i]])) variables[[i]] else parsed[[i]]$time_label
+  }, character(1L))
+  parsed_order <- vapply(parsed, function(x) {
+    if (is.null(x)) NA_real_ else x$time_order
+  }, numeric(1L))
+
+  if (is.null(outcome) || !nzchar(outcome)) {
+    candidates <- .mira_compact_unique(parsed_outcomes)
+    if (length(candidates) == 1L) {
+      outcome <- candidates[[1L]]
+    } else {
+      common <- variables[[1L]]
+      if (length(variables) > 1L) {
+        chars <- strsplit(variables, "", fixed = TRUE)
+        min_len <- min(lengths(chars))
+        common_len <- 0L
+        if (min_len > 0L) {
+          for (k in seq_len(min_len)) {
+            if (length(unique(vapply(chars, `[[`, character(1L), k))) == 1L) {
+              common_len <- k
+            } else break
+          }
+        }
+        common <- if (common_len > 0L) substr(common, 1L, common_len) else ""
+      }
+      common <- sub("[._-]+$", "", common)
+      outcome <- if (nzchar(common)) common else "outcome"
+    }
+  }
+
+  # Explicit variables remain authoritative. When every suffix has a clear,
+  # unique order, reproduce v3's chronological sorting; otherwise preserve the
+  # user's order and expose the ambiguity in diagnostics.
+  clear_order <- all(is.finite(parsed_order)) && !anyDuplicated(parsed_order)
+  ord <- if (clear_order) order(parsed_order, variables) else seq_along(variables)
+
+  list(
+    outcome = as.character(outcome)[1L],
+    variables = variables[ord],
+    input_variables = variables,
+    sort_index = ord,
+    time_labels = parsed_labels[ord],
+    time_order = parsed_order[ord],
+    automatic = automatic,
+    ambiguous_order = !clear_order,
+    patterns = vapply(parsed[ord], function(x) {
+      if (is.null(x)) NA_character_ else x$pattern
+    }, character(1L))
+  )
+}
+
+.mira_detect_longitudinal_variables <- function(data, variable_pattern = "auto") {
+  parsed_rows <- list()
+  counter <- 1L
+
+  for (position in seq_along(data)) {
+    parsed <- .mira_parse_longitudinal_name(names(data)[[position]], variable_pattern)
+    if (is.null(parsed)) next
+    parsed_rows[[counter]] <- data.frame(
+      outcome = parsed$outcome,
+      outcome_key = .mira_key(parsed$outcome),
+      variable = names(data)[[position]],
+      time_label = parsed$time_label,
+      time_order = parsed$time_order,
+      position = position,
+      pattern = parsed$pattern,
+      numeric = is.numeric(data[[position]]),
+      stringsAsFactors = FALSE
+    )
+    counter <- counter + 1L
+  }
+
+  empty_table <- data.frame(
+    outcome = character(0), outcome_key = character(0), variable = character(0),
+    time_label = character(0), time_order = numeric(0), position = integer(0),
+    pattern = character(0), numeric = logical(0), stringsAsFactors = FALSE
+  )
+  parsed_table <- if (length(parsed_rows) == 0L) empty_table else do.call(rbind, parsed_rows)
+  numeric_table <- parsed_table[parsed_table$numeric, , drop = FALSE]
+  non_numeric <- parsed_table$variable[!parsed_table$numeric]
+
+  groups <- list()
+  ambiguous_groups <- list()
+  if (nrow(numeric_table) > 0L) {
+    for (key in unique(numeric_table$outcome_key)) {
+      rows <- numeric_table[numeric_table$outcome_key == key, , drop = FALSE]
+      if (nrow(rows) < 2L) next
+      duplicate_label <- anyDuplicated(tolower(rows$time_label)) > 0L
+      finite_order <- is.finite(rows$time_order)
+      duplicate_order <- anyDuplicated(rows$time_order[finite_order]) > 0L
+      ambiguous <- duplicate_label || duplicate_order
+      fallback_order <- rows$time_order
+      if (any(!is.finite(fallback_order))) {
+        max_known <- if (any(is.finite(fallback_order))) max(fallback_order[is.finite(fallback_order)]) else 0
+        fallback_order[!is.finite(fallback_order)] <-
+          max_known + seq_len(sum(!is.finite(fallback_order)))
+      }
+      ord <- order(fallback_order, rows$position)
+      group <- list(
+        outcome = rows$outcome[[1L]],
+        variables = rows$variable[ord],
+        input_variables = rows$variable,
+        sort_index = ord,
+        time_labels = rows$time_label[ord],
+        time_order = rows$time_order[ord],
+        automatic = TRUE,
+        ambiguous_order = ambiguous,
+        patterns = rows$pattern[ord]
+      )
+      if (ambiguous) {
+        ambiguous_groups[[group$outcome]] <- group
+      } else {
+        groups[[group$outcome]] <- group
+      }
+    }
+  }
+
+  list(
+    groups = groups,
+    ambiguous_groups = ambiguous_groups,
+    parsed = parsed_table,
+    non_numeric_matches = non_numeric
+  )
+}
+
+.mira_detect_id <- function(data, id = NULL, exclude = character(0)) {
+  if (!is.null(id)) {
+    selected <- .mira_validate_name(id, data, "id")
+    return(list(
+      selected = selected, automatic = FALSE, source = "manual",
+      candidates = data.frame(), alternatives = character(0), warnings = character(0)
+    ))
+  }
+
+  keys <- .mira_key(names(data))
+  priority <- c(
+    patient_id = 120, subject_id = 120, participant_id = 120,
+    usubjid = 120, subjid = 115, patid = 115, record_id = 110,
+    study_id = 105, patient = 100, subject = 100, participant = 100,
+    id = 95
+  )
+  semantic <- unname(priority[keys])
+  semantic[is.na(semantic) & grepl("_id$", keys)] <- 70
+  semantic[is.na(semantic)] <- 0
+
+  observed_n <- vapply(data, function(x) sum(!is.na(x)), integer(1L))
+  unique_n <- vapply(data, function(x) length(unique(x[!is.na(x)])), integer(1L))
+  missing_n <- vapply(data, function(x) sum(is.na(x)), integer(1L))
+  duplicated_n <- observed_n - unique_n
+  structural <- observed_n > 0L & duplicated_n == 0L & missing_n == 0L
+  score <- semantic + ifelse(structural, 20, 0)
+  keep <- names(data) %in% setdiff(names(data), exclude) & (semantic > 0 | structural)
+
+  candidates <- data.frame(
+    variable = names(data)[keep],
+    semantic_score = semantic[keep],
+    score = score[keep],
+    observed_n = observed_n[keep],
+    unique_n = unique_n[keep],
+    missing_n = missing_n[keep],
+    duplicated_n = duplicated_n[keep],
+    structurally_valid = structural[keep],
+    stringsAsFactors = FALSE
+  )
+  if (nrow(candidates) > 0L) {
+    candidates <- candidates[order(-candidates$score, candidates$variable), , drop = FALSE]
+    rownames(candidates) <- NULL
+  }
+
+  eligible <- candidates[candidates$structurally_valid, , drop = FALSE]
+  warnings <- character(0)
+  selected <- NULL
+  source <- "generated"
+  alternatives <- character(0)
+  if (nrow(eligible) > 0L) {
+    best_score <- max(eligible$score)
+    best <- eligible$variable[eligible$score == best_score]
+    # Structural uniqueness is useful evidence but, without a semantic ID name,
+    # it is not sufficient to promote an arbitrary measurement to subject ID.
+    if (length(best) == 1L && best_score >= 90) {
+      selected <- best[[1L]]
+      source <- "auto"
+      alternatives <- setdiff(eligible$variable, selected)
+      if (length(alternatives) > 0L) {
+        warnings <- c(warnings, sprintf(
+          "ID rilevato come '%s'; alternative plausibili: %s. Specificare id= per sovrascrivere.",
+          selected, paste(alternatives, collapse = ", ")
+        ))
+      }
+    } else {
+      alternatives <- eligible$variable
+      warnings <- c(warnings, sprintf(
+        "ID ambiguo (%s): verrà usato un identificatore di riga interno. Specificare id= per scegliere.",
+        paste(best, collapse = ", ")
+      ))
+    }
+  } else {
+    warnings <- c(warnings,
+                  "Nessun ID univoco rilevato: verrà usato un identificatore di riga interno.")
+  }
+
+  list(
+    selected = selected,
+    automatic = TRUE,
+    source = source,
+    candidates = candidates,
+    alternatives = alternatives,
+    warnings = warnings
+  )
+}
+
+.mira_detect_arm <- function(data, arm = NULL, exclude = character(0)) {
+  if (!is.null(arm)) {
+    selected <- .mira_validate_name(arm, data, "arm")
+    return(list(
+      selected = selected, automatic = FALSE, source = "manual",
+      candidates = data.frame(), alternatives = character(0), warnings = character(0)
+    ))
+  }
+
+  keys <- .mira_key(names(data))
+  priority <- c(
+    arm = 120, treatment_arm = 115, treatment_group = 110,
+    randomized_group = 108, randomised_group = 108, treatment = 100,
+    intervention = 95, group = 85, cohort = 75
+  )
+  semantic <- unname(priority[keys])
+  semantic[is.na(semantic)] <- 0
+  unique_n <- vapply(data, function(x) length(unique(x[!is.na(x)])), integer(1L))
+  categorical <- vapply(data, function(x) is.factor(x) || is.character(x) || is.logical(x),
+                        logical(1L))
+  plausible_structure <- unique_n >= 2L & unique_n <= max(10L, floor(nrow(data) / 4L)) &
+    (categorical | unique_n <= 10L)
+  keep <- !names(data) %in% exclude & semantic > 0 & plausible_structure
+  rejected <- names(data)[!names(data) %in% exclude & semantic > 0 & !plausible_structure]
+  candidates <- data.frame(
+    variable = names(data)[keep], semantic_score = semantic[keep],
+    levels_n = unique_n[keep], stringsAsFactors = FALSE
+  )
+  if (nrow(candidates) > 0L) {
+    candidates <- candidates[order(-candidates$semantic_score, candidates$variable), , drop = FALSE]
+    rownames(candidates) <- NULL
+  }
+
+  warnings <- character(0)
+  selected <- NULL
+  alternatives <- character(0)
+  if (nrow(candidates) > 0L) {
+    best_score <- max(candidates$semantic_score)
+    best <- candidates$variable[candidates$semantic_score == best_score]
+    if (length(best) == 1L) {
+      selected <- best[[1L]]
+      alternatives <- setdiff(candidates$variable, selected)
+      if (length(alternatives) > 0L) {
+        warnings <- c(warnings, sprintf(
+          "Variabile arm rilevata come '%s'; alternative: %s. Specificare arm= per sovrascrivere.",
+          selected, paste(alternatives, collapse = ", ")
+        ))
+      }
+    } else {
+      alternatives <- candidates$variable
+      warnings <- c(warnings, sprintf(
+        "Variabile arm ambigua (%s): le analisi tra gruppi restano disabilitate finché arm= non è specificato.",
+        paste(best, collapse = ", ")
+      ))
+    }
+  }
+  if (length(rejected) > 0L) {
+    warnings <- c(warnings, sprintf(
+      paste0("Candidate arm escluse perché senza almeno due gruppi utilizzabili ",
+             "o con cardinalità non plausibile: %s."),
+      paste(rejected, collapse = ", ")
+    ))
+  }
+
+  list(
+    selected = selected, automatic = TRUE,
+    source = if (is.null(selected)) "none" else "auto",
+    candidates = candidates, alternatives = alternatives, warnings = warnings
+  )
+}
+
+.mira_classify_covariates <- function(data, variables) {
+  numeric <- character(0)
+  categorical <- character(0)
+  for (variable in variables) {
+    x <- data[[variable]]
+    unique_n <- length(unique(x[!is.na(x)]))
+    if (unique_n < 2L) next
+    if (is.factor(x) || is.character(x) || is.logical(x) ||
+        (is.numeric(x) && unique_n <= 5L)) {
+      categorical <- c(categorical, variable)
+    } else if (is.numeric(x)) {
+      numeric <- c(numeric, variable)
+    }
+  }
+  list(numeric = numeric, categorical = categorical)
+}
+
+.mira_detect_covariates <- function(data, covariates = NULL, exclude = character(0)) {
+  reserved <- c(
+    "patient", "outcome", "time", "time_index", "time_label", "arm", "value",
+    "patient_factor", "time_factor", "arm_factor"
+  )
+  reserved_present <- intersect(names(data), reserved)
+  if (!is.null(covariates) && !(length(covariates) == 1L && identical(covariates, "auto"))) {
+    if (!is.character(covariates) || anyNA(covariates) || any(!nzchar(covariates))) {
+      stop("covariates deve essere NULL, 'auto' o un vettore di nomi.", call. = FALSE)
+    }
+    if (anyDuplicated(covariates)) stop("covariates contiene duplicati.", call. = FALSE)
+    missing <- setdiff(covariates, names(data))
+    if (length(missing) > 0L) {
+      stop(sprintf("Covariate non trovate: %s.", paste(missing, collapse = ", ")),
+           call. = FALSE)
+    }
+    overlap <- intersect(covariates, exclude)
+    if (length(overlap) > 0L) {
+      stop(sprintf("Queste covariate sono già usate come ID, arm o outcome: %s.",
+                   paste(overlap, collapse = ", ")), call. = FALSE)
+    }
+    reserved_overlap <- intersect(covariates, reserved_present)
+    if (length(reserved_overlap) > 0L) {
+      stop(sprintf(
+        "Nomi di covariata riservati dalla rappresentazione long/model: %s.",
+        paste(reserved_overlap, collapse = ", ")
+      ), call. = FALSE)
+    }
+    classes <- .mira_classify_covariates(data, covariates)
+    return(list(
+      selected = covariates, numeric = classes$numeric,
+      categorical = classes$categorical, detected = covariates,
+      detected_numeric = classes$numeric,
+      detected_categorical = classes$categorical,
+      automatic = FALSE, warnings = character(0)
+    ))
+  }
+
+  available <- setdiff(names(data), unique(c(exclude, reserved_present)))
+  # Character columns with many distinct values are more likely identifiers or
+  # free text than adjustment variables and are therefore not auto-selected.
+  candidate <- available[vapply(data[available], function(x) {
+    unique_n <- length(unique(x[!is.na(x)]))
+    if (unique_n < 2L) return(FALSE)
+    if (is.numeric(x)) return(TRUE)
+    (is.factor(x) || is.character(x) || is.logical(x)) &&
+      unique_n <= max(10L, floor(nrow(data) / 4L))
+  }, logical(1L))]
+  candidate <- candidate[!grepl("(^id$|_id$|^id_)", .mira_key(candidate))]
+  classes <- .mira_classify_covariates(data, candidate)
+
+  df_cost <- vapply(candidate, function(variable) {
+    x <- data[[variable]]
+    if (variable %in% classes$categorical) {
+      max(1L, length(unique(x[!is.na(x)])) - 1L)
+    } else 1L
+  }, integer(1L))
+  max_auto_df <- floor(nrow(data) / 10L)
+  warnings <- character(0)
+  selected <- candidate
+  if (sum(df_cost) > max_auto_df) {
+    selected <- character(0)
+    if (length(candidate) > 0L) {
+      warnings <- sprintf(
+        paste0("Rilevate %d covariate candidate (%s), ma la loro complessità supera ",
+               "il limite conservativo data-driven (%d df): non saranno incluse automaticamente ",
+               "nel modello. Specificare covariates= per scegliere."),
+        length(candidate), paste(candidate, collapse = ", "), max_auto_df
+      )
+    }
+  }
+
+  selected_classes <- .mira_classify_covariates(data, selected)
+  list(
+    selected = selected,
+    numeric = selected_classes$numeric,
+    categorical = selected_classes$categorical,
+    detected = candidate,
+    detected_numeric = classes$numeric,
+    detected_categorical = classes$categorical,
+    automatic = TRUE,
+    warnings = warnings
+  )
+}
+
+.mira_analyse_single_outcome <- function(data,
+                                         id = "patient",
+                                         time_vars = NULL,
+                                         time_labels = NULL,
+                                         arm = NULL,
+                                         reference_arm = NULL,
+                                         arm_tests = TRUE,
+                                         alpha = 0.05,
+                                         plots = TRUE,
+                                         model = TRUE,
+                                         outliers = TRUE,
+                                         correlations = TRUE,
+                                         verbose = TRUE,
+                                         p_adjust_method = "holm",
+                                         improvement_direction = c("unknown", "higher", "lower"),
+                                         stable_threshold = 0,
+                                         strict_id = TRUE,
+                                         .outcome_name = NULL,
+                                         .covariates = character(0),
+                                         .categorical_covariates = character(0)) {
 
   # ----------------------------------------------------------
   # 0. INPUT VALIDATION
@@ -150,12 +685,8 @@ mira_info <- function(data,
   # 0B. TREATMENT ARM DETECTION / VALIDATION
   # ----------------------------------------------------------
 
-  # Backward compatible behaviour:
-  # - if arm is NULL and a column named "arm" exists, use it automatically;
-  # - if no arm column is available, all original single-cohort analyses remain available.
-  if (is.null(arm) && "arm" %in% names(data)) {
-    arm <- "arm"
-  }
+  # Detection is performed by the public configuration layer. A NULL value here
+  # is therefore authoritative and keeps between-group analyses disabled.
 
   arm_available <- !is.null(arm)
   arm_levels <- character(0)
@@ -244,37 +775,20 @@ mira_info <- function(data,
   supplied_time_vars <- !is.null(time_vars)
 
   if (is.null(time_vars)) {
-    matched <- grep("^(.+)_t([0-9]+)$", names(data), value = TRUE)
-
-    if (length(matched) < 2L) {
+    detected <- .mira_detect_longitudinal_variables(data, "auto")$groups
+    if (length(detected) != 1L) {
       stop(
         paste0(
-          "Non sono state trovate almeno due variabili longitudinali nel formato ",
-          "OUTCOME_tTIME (es. BCVA_t0, BCVA_t1)."
+          "L'analizzatore interno richiede un solo outcome. Usare mira_info() ",
+          "per la configurazione automatica multi-outcome."
         ),
         call. = FALSE
       )
     }
-
-    outcome_names <- sub("_t[0-9]+$", "", matched)
-    unique_outcomes <- unique(outcome_names)
-
-    if (length(unique_outcomes) != 1L) {
-      stop(
-        paste0(
-          "Sono stati rilevati più outcome: ",
-          paste(unique_outcomes, collapse = ", "),
-          ". Specifica time_vars per analizzarne uno alla volta."
-        ),
-        call. = FALSE
-      )
-    }
-
-    time_numbers <- as.numeric(sub("^.+_t([0-9]+)$", "\\1", matched))
-    ord <- order(time_numbers, matched)
-    time_vars <- matched[ord]
-    outcome_name <- unique_outcomes[[1L]]
-
+    detected_group <- detected[[1L]]
+    time_vars <- detected_group$variables
+    outcome_name <- detected_group$outcome
+    detected_time_labels <- detected_group$time_labels
   } else {
     if (!is.character(time_vars) || length(time_vars) < 2L || anyNA(time_vars)) {
       stop("time_vars deve contenere almeno due nomi di variabili.", call. = FALSE)
@@ -295,51 +809,56 @@ mira_info <- function(data,
       )
     }
 
-    invalid <- time_vars[!grepl("^(.+)_t([0-9]+)$", time_vars)]
-    if (length(invalid) > 0L) {
-      stop(
-        sprintf(
-          "Le seguenti variabili non rispettano OUTCOME_tTIME: %s",
-          paste(invalid, collapse = ", ")
-        ),
-        call. = FALSE
-      )
+    parsed <- lapply(time_vars, .mira_parse_longitudinal_name, variable_pattern = "auto")
+    parsed_names <- vapply(parsed, function(x) {
+      if (is.null(x)) NA_character_ else x$outcome
+    }, character(1L))
+    parsed_labels <- vapply(seq_along(parsed), function(i) {
+      if (is.null(parsed[[i]])) time_vars[[i]] else parsed[[i]]$time_label
+    }, character(1L))
+    parsed_order <- vapply(parsed, function(x) {
+      if (is.null(x)) NA_real_ else x$time_order
+    }, numeric(1L))
+
+    if (!is.null(.outcome_name)) {
+      if (!is.character(.outcome_name) || length(.outcome_name) != 1L ||
+          is.na(.outcome_name) || !nzchar(.outcome_name)) {
+        stop(".outcome_name deve essere una singola etichetta non vuota.", call. = FALSE)
+      }
+      outcome_name <- .outcome_name
+    } else {
+      inferred <- .mira_compact_unique(parsed_names)
+      outcome_name <- if (length(inferred) == 1L) inferred[[1L]] else "outcome"
     }
 
-    outcome_names <- sub("_t[0-9]+$", "", time_vars)
-    unique_outcomes <- unique(outcome_names)
-
-    if (length(unique_outcomes) != 1L) {
-      stop(
-        sprintf(
-          "time_vars contiene più outcome: %s",
-          paste(unique_outcomes, collapse = ", ")
-        ),
-        call. = FALSE
-      )
-    }
-
-    outcome_name <- unique_outcomes[[1L]]
-    time_numbers <- as.numeric(sub("^.+_t([0-9]+)$", "\\1", time_vars))
-    ord <- order(time_numbers, time_vars)
-
-    # IMPORTANT: reorder labels together with manually supplied variables.
+    clear_order <- all(is.finite(parsed_order)) && !anyDuplicated(parsed_order)
+    ord <- if (clear_order) order(parsed_order, time_vars) else seq_along(time_vars)
     if (!is.null(time_labels)) {
       if (length(time_labels) != length(time_vars)) {
         stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
       }
       time_labels <- time_labels[ord]
     }
-
     time_vars <- time_vars[ord]
-  }
-
-  if (anyDuplicated(as.numeric(sub("^.+_t([0-9]+)$", "\\1", time_vars)))) {
-    stop("Sono presenti timepoint numerici duplicati.", call. = FALSE)
+    detected_time_labels <- parsed_labels[ord]
   }
 
   outcome_display <- toupper(outcome_name)
-  detected_time_labels <- sub("^.+_(t[0-9]+)$", "\\1", time_vars)
+
+  if (!is.character(.covariates) || anyNA(.covariates) || any(!nzchar(.covariates))) {
+    stop(".covariates deve essere un vettore di nomi valido.", call. = FALSE)
+  }
+  missing_covariates <- setdiff(.covariates, names(data))
+  if (length(missing_covariates) > 0L) {
+    stop(sprintf("Covariate non trovate: %s.", paste(missing_covariates, collapse = ", ")),
+         call. = FALSE)
+  }
+  if (!is.character(.categorical_covariates) || anyNA(.categorical_covariates) ||
+      any(!nzchar(.categorical_covariates)) ||
+      length(setdiff(.categorical_covariates, .covariates)) > 0L) {
+    stop(".categorical_covariates deve essere un sottoinsieme di .covariates.",
+         call. = FALSE)
+  }
 
   # ----------------------------------------------------------
   # 2. TIME VARIABLE VALIDATION
@@ -863,7 +1382,7 @@ mira_info <- function(data,
 
   long_list <- lapply(seq_along(time_vars), function(k) {
     v <- time_vars[[k]]
-    data.frame(
+    row_block <- data.frame(
       patient = analysis_data[[id]],
       outcome = outcome_name,
       time = v,
@@ -873,6 +1392,10 @@ mira_info <- function(data,
       value = analysis_data[[v]],
       stringsAsFactors = FALSE
     )
+    if (length(.covariates) > 0L) {
+      row_block <- cbind(row_block, analysis_data[.covariates])
+    }
+    row_block
   })
 
   long_data <- do.call(rbind, long_list)
@@ -1295,6 +1818,10 @@ mira_info <- function(data,
   model_singular <- NA
   model_converged <- NA
   icc_model <- NA_real_
+  model_covariates_requested <- .covariates
+  model_covariates_used <- character(0)
+  model_covariates_skipped <- character(0)
+  model_fixed_parameters <- NA_integer_
 
   if (model) {
     if (!requireNamespace("lme4", quietly = TRUE)) {
@@ -1312,18 +1839,76 @@ mira_info <- function(data,
         levels = unname(time_labels[time_vars])
       )
 
-      if (arm_available) {
+      model_uses_arm <- arm_available && arm_tests && length(arm_levels) >= 2L
+      if (model_uses_arm) {
         model_data$arm_factor <- factor(
           as.character(model_data$arm),
           levels = arm_levels
         )
-        model_data <- model_data[!is.na(model_data$arm_factor), , drop = FALSE]
-        model_data$arm_factor <- droplevels(model_data$arm_factor)
       }
 
+      for (variable in .covariates) {
+        x <- model_data[[variable]]
+        if (is.numeric(x)) x[!is.finite(x)] <- NA_real_
+        if (variable %in% .categorical_covariates && !is.factor(x)) x <- factor(x)
+        if (is.character(x)) {
+          x[!is.na(x) & !nzchar(trimws(x))] <- NA_character_
+          x <- factor(x)
+        }
+        if (is.factor(x)) x <- droplevels(x)
+        model_data[[variable]] <- x
+        observed <- x[!is.na(x)]
+        if (length(unique(observed)) >= 2L) {
+          model_covariates_used <- c(model_covariates_used, variable)
+        } else {
+          model_covariates_skipped <- c(model_covariates_skipped, variable)
+        }
+      }
+
+      required_model_columns <- c(
+        "patient_factor", "time_factor", "value",
+        if (model_uses_arm) "arm_factor" else character(0),
+        model_covariates_used
+      )
+      model_data <- model_data[
+        stats::complete.cases(model_data[required_model_columns]),
+        ,
+        drop = FALSE
+      ]
+      model_data$patient_factor <- droplevels(model_data$patient_factor)
+      model_data$time_factor <- droplevels(model_data$time_factor)
+      if (model_uses_arm) model_data$arm_factor <- droplevels(model_data$arm_factor)
+      post_filter_skipped <- model_covariates_used[vapply(
+        model_covariates_used,
+        function(variable) length(unique(model_data[[variable]][
+          !is.na(model_data[[variable]])
+        ])) < 2L,
+        logical(1L)
+      )]
+      if (length(post_filter_skipped) > 0L) {
+        model_covariates_used <- setdiff(model_covariates_used, post_filter_skipped)
+        model_covariates_skipped <- unique(c(model_covariates_skipped, post_filter_skipped))
+      }
+      covariate_df <- sum(vapply(model_covariates_used, function(variable) {
+        x <- model_data[[variable]]
+        if (is.factor(x) || is.character(x) || is.logical(x)) {
+          max(1L, length(unique(x[!is.na(x)])) - 1L)
+        } else 1L
+      }, integer(1L)))
+      core_df <- if (model_uses_arm) {
+        nlevels(model_data$time_factor) * nlevels(model_data$arm_factor)
+      } else {
+        nlevels(model_data$time_factor)
+      }
+      model_fixed_parameters <- as.integer(core_df + covariate_df)
+
       if (nrow(model_data) < 3L || nlevels(model_data$patient_factor) < 2L ||
-          nlevels(model_data$time_factor) < 2L) {
-        model_error <- "Dati insufficienti per stimare un mixed-effects model."
+          nlevels(model_data$time_factor) < 2L ||
+          nrow(model_data) <= model_fixed_parameters + 1L) {
+        model_error <- paste0(
+          "Dati insufficienti per stimare un mixed-effects model dopo aver applicato ",
+          "i requisiti di completezza di outcome, arm e covariate."
+        )
       } else {
         fit_with_warnings <- function(expr) {
           withCallingHandlers(
@@ -1335,12 +1920,25 @@ mira_info <- function(data,
           )
         }
 
-        model_formula <- if (arm_available && arm_tests &&
-                             "arm_factor" %in% names(model_data) &&
-                             nlevels(model_data$arm_factor) >= 2L) {
-          value ~ time_factor * arm_factor + (1 | patient_factor)
+        quote_formula_name <- function(x) {
+          paste0("`", gsub("`", "", x, fixed = TRUE), "`")
+        }
+        covariate_terms <- vapply(
+          model_covariates_used,
+          quote_formula_name,
+          character(1L)
+        )
+        make_model_formula <- function(core) {
+          stats::as.formula(paste(
+            "value ~",
+            paste(c(core, covariate_terms, "(1 | patient_factor)"), collapse = " + ")
+          ))
+        }
+
+        model_formula <- if (model_uses_arm && nlevels(model_data$arm_factor) >= 2L) {
+          make_model_formula("time_factor * arm_factor")
         } else {
-          value ~ time_factor + (1 | patient_factor)
+          make_model_formula("time_factor")
         }
 
         mixed_model <- tryCatch(
@@ -1397,14 +1995,14 @@ mira_info <- function(data,
           }
 
           # Robust ML likelihood-ratio tests.
-          if (arm_available && arm_tests &&
+          if (model_uses_arm &&
               "arm_factor" %in% names(model_data) &&
               nlevels(model_data$arm_factor) >= 2L) {
 
             full_ml <- tryCatch(
               fit_with_warnings(
                 lme4::lmer(
-                  value ~ time_factor * arm_factor + (1 | patient_factor),
+                  make_model_formula("time_factor * arm_factor"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -1416,7 +2014,7 @@ mira_info <- function(data,
             additive_ml <- tryCatch(
               fit_with_warnings(
                 lme4::lmer(
-                  value ~ time_factor + arm_factor + (1 | patient_factor),
+                  make_model_formula("time_factor + arm_factor"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -1428,7 +2026,7 @@ mira_info <- function(data,
             no_time_ml <- tryCatch(
               fit_with_warnings(
                 lme4::lmer(
-                  value ~ arm_factor + (1 | patient_factor),
+                  make_model_formula("arm_factor"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -1440,7 +2038,7 @@ mira_info <- function(data,
             no_arm_ml <- tryCatch(
               fit_with_warnings(
                 lme4::lmer(
-                  value ~ time_factor + (1 | patient_factor),
+                  make_model_formula("time_factor"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -1475,7 +2073,7 @@ mira_info <- function(data,
             global_time_test <- tryCatch({
               full_ml <- fit_with_warnings(
                 lme4::lmer(
-                  value ~ time_factor + (1 | patient_factor),
+                  make_model_formula("time_factor"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -1484,7 +2082,7 @@ mira_info <- function(data,
 
               null_ml <- fit_with_warnings(
                 lme4::lmer(
-                  value ~ 1 + (1 | patient_factor),
+                  make_model_formula("1"),
                   data = model_data,
                   REML = FALSE,
                   na.action = stats::na.omit
@@ -2350,6 +2948,7 @@ mira_info <- function(data,
     complete_profiles = complete_profiles,
     complete_profiles_pct = complete_profiles / n_rows * 100,
     non_finite_values = total_non_finite,
+    covariates = .covariates,
     arm_variable = if (arm_available) arm else NULL,
     reference_arm = if (arm_available) reference_arm else NULL,
     arm_levels = arm_levels,
@@ -2360,7 +2959,7 @@ mira_info <- function(data,
 
   result <- list(
     call = match.call(),
-    version = "3.0.0",
+    version = "4.0.0",
     settings = list(
       alpha = alpha,
       confidence_level = confidence_level,
@@ -2368,6 +2967,7 @@ mira_info <- function(data,
       p_adjust_method = p_adjust_method,
       improvement_direction = improvement_direction,
       stable_threshold = stable_threshold,
+      covariates = .covariates,
       arm_variable = if (arm_available) arm else NULL,
       reference_arm = if (arm_available) reference_arm else NULL,
       arm_tests = arm_tests,
@@ -2414,7 +3014,11 @@ mira_info <- function(data,
       singular = model_singular,
       converged = model_converged,
       warnings = model_warnings,
-      error = model_error
+      error = model_error,
+      covariates_requested = model_covariates_requested,
+      covariates_used = model_covariates_used,
+      covariates_skipped = model_covariates_skipped,
+      fixed_parameters = model_fixed_parameters
     ),
     outliers = list(
       note = "IQR flags are diagnostic flags and are not automatically excluded from analyses.",
@@ -2430,6 +3034,918 @@ mira_info <- function(data,
 
   if (verbose) print(result)
   invisible(result)
+}
+
+
+# ============================================================
+# DATA-DRIVEN CONFIGURATION LAYER
+# ============================================================
+
+.mira_name_groups <- function(groups) {
+  if (length(groups) == 0L) return(groups)
+  labels <- vapply(groups, function(x) x$outcome, character(1L))
+  labels <- make.unique(labels, sep = "_")
+  for (i in seq_along(groups)) groups[[i]]$outcome <- labels[[i]]
+  names(groups) <- labels
+  groups
+}
+
+.mira_match_group <- function(request, groups) {
+  if (length(groups) == 0L) return(NA_integer_)
+  hit <- which(.mira_key(names(groups)) == .mira_key(request))
+  if (length(hit) == 1L) hit else NA_integer_
+}
+
+.mira_groups_from_time_vars <- function(data,
+                                        time_vars,
+                                        outcomes = NULL,
+                                        variable_pattern = "auto") {
+  groups <- list()
+
+  if (is.list(time_vars) && !is.data.frame(time_vars)) {
+    if (length(time_vars) == 0L) stop("time_vars non può essere una lista vuota.", call. = FALSE)
+    supplied_names <- names(time_vars)
+    has_names <- !is.null(supplied_names) && all(nzchar(supplied_names))
+    outcome_hints <- outcomes
+    if (!is.null(outcome_hints) && length(outcome_hints) == 1L &&
+        identical(outcome_hints, "auto")) outcome_hints <- NULL
+
+    if (!has_names && !is.null(outcome_hints) && length(outcome_hints) != length(time_vars)) {
+      stop(
+        "Una lista time_vars senza nomi richiede un outcome per ogni elemento oppure nomi espliciti.",
+        call. = FALSE
+      )
+    }
+
+    for (i in seq_along(time_vars)) {
+      hint <- if (has_names) supplied_names[[i]] else {
+        if (!is.null(outcome_hints)) outcome_hints[[i]] else NULL
+      }
+      groups[[i]] <- .mira_make_longitudinal_group(
+        data = data,
+        variables = time_vars[[i]],
+        outcome = hint,
+        variable_pattern = variable_pattern,
+        automatic = FALSE
+      )
+    }
+    return(.mira_name_groups(groups))
+  }
+
+  if (!is.character(time_vars) || length(time_vars) < 2L || anyNA(time_vars)) {
+    stop("time_vars deve essere un vettore di almeno due nomi o una lista per outcome.",
+         call. = FALSE)
+  }
+  missing <- setdiff(time_vars, names(data))
+  if (length(missing) > 0L) {
+    stop(sprintf("Variabili longitudinali non trovate: %s.", paste(missing, collapse = ", ")),
+         call. = FALSE)
+  }
+
+  parsed <- lapply(time_vars, .mira_parse_longitudinal_name,
+                   variable_pattern = variable_pattern)
+  parsed_outcomes <- vapply(parsed, function(x) {
+    if (is.null(x)) NA_character_ else x$outcome
+  }, character(1L))
+  parsed_keys <- .mira_compact_unique(.mira_key(parsed_outcomes))
+
+  if (all(!is.na(parsed_outcomes)) && length(parsed_keys) > 1L) {
+    for (key in parsed_keys) {
+      idx <- which(.mira_key(parsed_outcomes) == key)
+      groups[[length(groups) + 1L]] <- .mira_make_longitudinal_group(
+        data = data,
+        variables = time_vars[idx],
+        outcome = parsed_outcomes[idx][[1L]],
+        variable_pattern = variable_pattern,
+        automatic = FALSE
+      )
+    }
+  } else {
+    hint <- NULL
+    if (!is.null(outcomes) && length(outcomes) == 1L && !identical(outcomes, "auto") &&
+        !outcomes %in% names(data)) hint <- outcomes
+    groups[[1L]] <- .mira_make_longitudinal_group(
+      data = data,
+      variables = time_vars,
+      outcome = hint,
+      variable_pattern = variable_pattern,
+      automatic = FALSE
+    )
+  }
+  .mira_name_groups(groups)
+}
+
+.mira_apply_time_labels <- function(groups, time_labels) {
+  if (is.null(time_labels)) return(groups)
+
+  if (is.list(time_labels) && !is.data.frame(time_labels)) {
+    label_names <- names(time_labels)
+    if (length(groups) > 1L && (is.null(label_names) || any(!nzchar(label_names)))) {
+      stop("Per più outcome, time_labels deve essere una lista nominata.", call. = FALSE)
+    }
+    for (i in seq_along(groups)) {
+      labels <- if (length(groups) == 1L && (is.null(label_names) || !nzchar(label_names[[1L]]))) {
+        time_labels[[1L]]
+      } else {
+        idx <- which(.mira_key(label_names) == .mira_key(names(groups)[[i]]))
+        if (length(idx) != 1L) {
+          stop(sprintf("time_labels non contiene un elemento univoco per '%s'.",
+                       names(groups)[[i]]), call. = FALSE)
+        }
+        time_labels[[idx]]
+      }
+      if (length(labels) != length(groups[[i]]$variables)) {
+        stop(sprintf("time_labels per '%s' deve avere %d elementi.",
+                     names(groups)[[i]], length(groups[[i]]$variables)), call. = FALSE)
+      }
+      if (!is.null(names(labels)) && all(groups[[i]]$variables %in% names(labels))) {
+        labels <- labels[groups[[i]]$variables]
+      } else if (!isTRUE(groups[[i]]$automatic) && !is.null(groups[[i]]$sort_index)) {
+        labels <- labels[groups[[i]]$sort_index]
+      }
+      groups[[i]]$time_labels <- as.character(labels)
+    }
+  } else {
+    if (!is.atomic(time_labels)) stop("time_labels deve essere un vettore o una lista.", call. = FALSE)
+    labels <- as.character(time_labels)
+    names(labels) <- names(time_labels)
+    if (!is.null(names(time_labels)) &&
+        all(unique(unlist(lapply(groups, `[[`, "variables"))) %in% names(time_labels))) {
+      for (i in seq_along(groups)) {
+        groups[[i]]$time_labels <- labels[groups[[i]]$variables]
+      }
+    } else {
+      if (length(groups) != 1L) {
+        stop(
+          "Con più outcome, fornire time_labels come lista nominata o vettore nominato per colonna.",
+          call. = FALSE
+        )
+      }
+      if (length(labels) != length(groups[[1L]]$variables)) {
+        stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
+      }
+      if (!isTRUE(groups[[1L]]$automatic) && !is.null(groups[[1L]]$sort_index)) {
+        labels <- labels[groups[[1L]]$sort_index]
+      }
+      groups[[1L]]$time_labels <- labels
+    }
+  }
+
+  for (i in seq_along(groups)) {
+    labels <- groups[[i]]$time_labels
+    if (anyNA(labels) || any(!nzchar(trimws(labels))) || anyDuplicated(labels)) {
+      stop(sprintf("Le time_labels per '%s' devono essere non vuote e univoche.",
+                   names(groups)[[i]]), call. = FALSE)
+    }
+  }
+  groups
+}
+
+.mira_resolve_outcome_groups <- function(data,
+                                         detected,
+                                         outcomes = NULL,
+                                         time_vars = NULL,
+                                         time_labels = NULL,
+                                         variable_pattern = "auto") {
+  warnings <- character(0)
+  outcomes_auto <- is.null(outcomes) ||
+    (length(outcomes) == 1L && is.character(outcomes) && identical(outcomes, "auto"))
+  outcomes_input_auto <- outcomes_auto
+
+  if (!outcomes_auto && (!is.character(outcomes) || anyNA(outcomes) ||
+                         any(!nzchar(outcomes)) || anyDuplicated(.mira_key(outcomes)))) {
+    stop("outcomes deve essere NULL, 'auto' o un vettore di nomi univoci.", call. = FALSE)
+  }
+
+  # Direct column specification is accepted through outcomes for convenience.
+  outcomes_are_columns <- !outcomes_auto && length(outcomes) >= 2L &&
+    all(outcomes %in% names(data))
+  if (is.null(time_vars) && outcomes_are_columns) {
+    time_vars <- outcomes
+    outcomes <- NULL
+    outcomes_auto <- TRUE
+  }
+
+  if (!is.null(time_vars)) {
+    groups <- .mira_groups_from_time_vars(
+      data, time_vars, outcomes = outcomes, variable_pattern = variable_pattern
+    )
+  } else {
+    groups <- .mira_name_groups(detected$groups)
+    if (length(detected$ambiguous_groups) > 0L) {
+      warnings <- c(warnings, sprintf(
+        paste0("Gruppi longitudinali con timepoint ambigui esclusi dall'auto-detection: %s. ",
+               "Specificare time_vars e, se necessario, time_labels."),
+        paste(names(detected$ambiguous_groups), collapse = ", ")
+      ))
+    }
+  }
+
+  if (length(groups) == 0L) {
+    stop(
+      paste0(
+        "Non è stato rilevato alcun outcome con almeno due colonne numeriche longitudinali. ",
+        "Specificare time_vars oppure variable_pattern."
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!outcomes_auto) {
+    # A single explicitly supplied manual group can be relabelled by outcomes.
+    if (!is.null(time_vars) && length(groups) == 1L && length(outcomes) == 1L) {
+      groups[[1L]]$outcome <- outcomes[[1L]]
+      names(groups) <- outcomes[[1L]]
+    } else {
+      selected <- list()
+      unavailable <- character(0)
+      for (requested in outcomes) {
+        idx <- .mira_match_group(requested, groups)
+        if (is.na(idx)) {
+          ambiguous_idx <- .mira_match_group(requested, detected$ambiguous_groups)
+          if (!is.na(ambiguous_idx)) {
+            stop(sprintf(
+              "L'outcome '%s' ha timepoint ambigui: specificare time_vars/time_labels manualmente.",
+              requested
+            ), call. = FALSE)
+          }
+          unavailable <- c(unavailable, requested)
+        } else {
+          selected[[requested]] <- groups[[idx]]
+          selected[[requested]]$outcome <- requested
+        }
+      }
+      if (length(unavailable) > 0L) {
+        stop(sprintf(
+          "Outcome non rilevati: %s. Outcome disponibili: %s.",
+          paste(unavailable, collapse = ", "), paste(names(groups), collapse = ", ")
+        ), call. = FALSE)
+      }
+      groups <- selected
+    }
+  }
+
+  groups <- .mira_apply_time_labels(groups, time_labels)
+  ambiguous_manual <- names(groups)[vapply(groups, function(x) isTRUE(x$ambiguous_order), logical(1L))]
+  if (!is.null(time_vars) && is.null(time_labels) && length(ambiguous_manual) > 0L) {
+    warnings <- c(warnings, sprintf(
+      paste0("Ordine dei timepoint non deducibile per %s: è stato mantenuto l'ordine di time_vars. ",
+             "Specificare time_labels per rendere la mappa esplicita."),
+      paste(ambiguous_manual, collapse = ", ")
+    ))
+  }
+
+  list(
+    groups = groups,
+    warnings = warnings,
+    outcomes_auto = outcomes_input_auto,
+    time_vars_manual = !is.null(time_vars)
+  )
+}
+
+.mira_resolve_direction <- function(value, outcome) {
+  if (is.null(value)) value <- "auto"
+  if (!is.character(value) || anyNA(value)) {
+    stop("improvement_direction deve essere 'auto', 'higher', 'lower', 'unknown' o un vettore nominato.",
+         call. = FALSE)
+  }
+  selected <- value
+  if (!is.null(names(value)) && any(nzchar(names(value)))) {
+    if (any(!nzchar(names(value)))) {
+      stop("Con più valori, improvement_direction deve essere nominato per outcome.", call. = FALSE)
+    }
+    idx <- which(.mira_key(names(value)) == .mira_key(outcome))
+    if (length(idx) != 1L) {
+      stop(sprintf("improvement_direction non contiene un valore univoco per '%s'.", outcome),
+           call. = FALSE)
+    }
+    selected <- value[[idx]]
+  } else if (length(value) > 1L) {
+    stop("Con più valori, improvement_direction deve essere nominato per outcome.", call. = FALSE)
+  } else {
+    selected <- value[[1L]]
+  }
+  if (!selected %in% c("auto", "higher", "lower", "unknown")) {
+    stop("Valori ammessi per improvement_direction: auto, higher, lower, unknown.",
+         call. = FALSE)
+  }
+  if (selected != "auto") {
+    return(list(value = selected, automatic = FALSE, reason = "user"))
+  }
+
+  key <- .mira_key(outcome)
+  higher <- c("bcva", "visual_acuity", "va")
+  lower <- c("cmt", "crt", "iop")
+  if (key %in% higher) {
+    list(value = "higher", automatic = TRUE, reason = "internal_outcome_map")
+  } else if (key %in% lower) {
+    list(value = "lower", automatic = TRUE, reason = "internal_outcome_map")
+  } else {
+    list(value = "unknown", automatic = TRUE, reason = "no_reliable_mapping")
+  }
+}
+
+.mira_resolve_threshold <- function(value, outcome) {
+  if (is.null(value) || (is.character(value) && length(value) == 1L &&
+                         identical(value, "auto"))) {
+    return(list(value = 0, automatic = TRUE, reason = "safe_zero_fallback"))
+  }
+  if (!is.numeric(value) || anyNA(value) || any(!is.finite(value))) {
+    stop("stable_threshold deve essere NULL, 'auto' o un valore numerico >= 0.", call. = FALSE)
+  }
+  selected <- value
+  if (!is.null(names(value)) && any(nzchar(names(value)))) {
+    if (any(!nzchar(names(value)))) {
+      stop("Con più valori, stable_threshold deve essere nominato per outcome.", call. = FALSE)
+    }
+    idx <- which(.mira_key(names(value)) == .mira_key(outcome))
+    if (length(idx) != 1L) {
+      stop(sprintf("stable_threshold non contiene un valore univoco per '%s'.", outcome),
+           call. = FALSE)
+    }
+    selected <- value[[idx]]
+  } else if (length(value) > 1L) {
+    stop("Con più valori, stable_threshold deve essere nominato per outcome.", call. = FALSE)
+  } else selected <- value[[1L]]
+  if (selected < 0) stop("stable_threshold deve essere >= 0.", call. = FALSE)
+  list(value = unname(selected), automatic = FALSE, reason = "user")
+}
+
+.mira_choose_reference_arm <- function(data, arm, reference_arm = NULL) {
+  if (is.null(arm)) {
+    if (!is.null(reference_arm)) {
+      stop("reference_arm richiede una variabile arm.", call. = FALSE)
+    }
+    return(list(value = NULL, automatic = is.null(reference_arm), warnings = character(0)))
+  }
+
+  raw <- as.character(data[[arm]])
+  raw[is.na(raw) | !nzchar(trimws(raw))] <- NA_character_
+  observed <- unique(raw[!is.na(raw)])
+  if (length(observed) == 0L) {
+    return(list(value = NULL, automatic = is.null(reference_arm),
+                warnings = sprintf("La variabile arm '%s' non contiene gruppi osservati.", arm)))
+  }
+
+  if (!is.null(reference_arm)) {
+    if (!is.character(reference_arm) || length(reference_arm) != 1L ||
+        is.na(reference_arm) || !nzchar(reference_arm)) {
+      stop("reference_arm deve identificare un singolo gruppo non vuoto.", call. = FALSE)
+    }
+    if (!reference_arm %in% observed) {
+      stop(sprintf("reference_arm='%s' non è presente in '%s'. Gruppi: %s.",
+                   reference_arm, arm, paste(observed, collapse = ", ")), call. = FALSE)
+    }
+    return(list(value = reference_arm, automatic = FALSE, warnings = character(0)))
+  }
+
+  control_pattern <- "^(control|ctrl|placebo|standard|usual[ _-]?care|comparator|sham|untreated)$"
+  control_like <- observed[grepl(control_pattern, observed, ignore.case = TRUE, perl = TRUE)]
+  warnings <- character(0)
+  if (length(control_like) == 1L) {
+    chosen <- control_like[[1L]]
+  } else if (length(control_like) > 1L) {
+    control_counts <- table(factor(raw, levels = control_like), useNA = "no")
+    chosen <- control_like[which.max(as.numeric(control_counts))]
+    warnings <- sprintf(
+      "Più reference arm plausibili (%s): scelto il più numeroso '%s'.",
+      paste(control_like, collapse = ", "), chosen
+    )
+  } else {
+    counts <- table(factor(raw, levels = observed), useNA = "no")
+    chosen <- observed[which.max(as.numeric(counts))]
+  }
+  list(value = chosen, automatic = TRUE, warnings = warnings)
+}
+
+.mira_build_analysis_config <- function(data,
+                                        id = NULL,
+                                        outcomes = NULL,
+                                        time_vars = NULL,
+                                        time_labels = NULL,
+                                        arm = NULL,
+                                        reference_arm = NULL,
+                                        covariates = NULL,
+                                        variable_pattern = "auto",
+                                        improvement_direction = "auto",
+                                        stable_threshold = "auto",
+                                        strict_id = TRUE) {
+  if (!is.data.frame(data)) stop("data deve essere un data.frame.", call. = FALSE)
+  if (nrow(data) == 0L) stop("Il dataset non contiene osservazioni.", call. = FALSE)
+  if (anyDuplicated(names(data))) {
+    stop("Il dataset contiene nomi di colonna duplicati; rinominarli prima dell'analisi.",
+         call. = FALSE)
+  }
+  if (!is.logical(strict_id) || length(strict_id) != 1L || is.na(strict_id)) {
+    stop("strict_id deve essere TRUE o FALSE.", call. = FALSE)
+  }
+
+  detected_longitudinal <- .mira_detect_longitudinal_variables(data, variable_pattern)
+  resolved <- .mira_resolve_outcome_groups(
+    data = data,
+    detected = detected_longitudinal,
+    outcomes = outcomes,
+    time_vars = time_vars,
+    time_labels = time_labels,
+    variable_pattern = variable_pattern
+  )
+  groups <- resolved$groups
+
+  parsed_long_vars <- unique(detected_longitudinal$parsed$variable[
+    detected_longitudinal$parsed$numeric
+  ])
+  selected_long_vars <- unique(unlist(lapply(groups, `[[`, "variables"), use.names = FALSE))
+  all_long_vars <- unique(c(parsed_long_vars, selected_long_vars))
+
+  id_detection <- .mira_detect_id(data, id = id, exclude = all_long_vars)
+  analysis_data <- data
+  id_generated <- FALSE
+  selected_id <- id_detection$selected
+  if (is.null(selected_id)) {
+    selected_id <- ".mira_subject_id"
+    while (selected_id %in% names(analysis_data)) selected_id <- paste0(selected_id, "_")
+    analysis_data[[selected_id]] <- seq_len(nrow(analysis_data))
+    id_generated <- TRUE
+  }
+  id_validation_warnings <- character(0)
+  if (!id_generated) {
+    id_values <- analysis_data[[selected_id]]
+    missing_id_n <- sum(is.na(id_values))
+    duplicated_id_n <- sum(duplicated(id_values[!is.na(id_values)]))
+    if (strict_id && missing_id_n > 0L) {
+      stop(sprintf("La variabile ID '%s' contiene %d valori mancanti.",
+                   selected_id, missing_id_n), call. = FALSE)
+    }
+    if (strict_id && duplicated_id_n > 0L) {
+      stop(sprintf(
+        paste0("La variabile ID '%s' contiene %d duplicati; il formato wide richiede ",
+               "una riga per soggetto. Usare strict_id=FALSE solo consapevolmente."),
+        selected_id, duplicated_id_n
+      ), call. = FALSE)
+    }
+    if (!strict_id && missing_id_n > 0L) {
+      id_validation_warnings <- c(id_validation_warnings, sprintf(
+        "La variabile ID '%s' contiene %d valori mancanti.", selected_id, missing_id_n
+      ))
+    }
+    if (!strict_id && duplicated_id_n > 0L) {
+      id_validation_warnings <- c(id_validation_warnings, sprintf(
+        "La variabile ID '%s' contiene %d duplicati.", selected_id, duplicated_id_n
+      ))
+    }
+  }
+
+  arm_detection <- .mira_detect_arm(
+    data,
+    arm = arm,
+    exclude = unique(c(all_long_vars, selected_id))
+  )
+  selected_arm <- arm_detection$selected
+  reference <- .mira_choose_reference_arm(data, selected_arm, reference_arm)
+
+  covariate_detection <- .mira_detect_covariates(
+    data,
+    covariates = covariates,
+    exclude = unique(c(
+      all_long_vars, selected_id, selected_arm,
+      id_detection$candidates$variable,
+      arm_detection$candidates$variable
+    ))
+  )
+
+  directions <- lapply(names(groups), function(outcome) {
+    .mira_resolve_direction(improvement_direction, outcome)
+  })
+  names(directions) <- names(groups)
+  thresholds <- lapply(names(groups), function(outcome) {
+    .mira_resolve_threshold(stable_threshold, outcome)
+  })
+  names(thresholds) <- names(groups)
+
+  warnings <- c(
+    resolved$warnings,
+    id_detection$warnings,
+    id_validation_warnings,
+    arm_detection$warnings,
+    reference$warnings,
+    covariate_detection$warnings
+  )
+  if (length(detected_longitudinal$non_numeric_matches) > 0L) {
+    warnings <- c(warnings, sprintf(
+      "Colonne con nome longitudinale ma tipo non numerico escluse: %s.",
+      paste(detected_longitudinal$non_numeric_matches, collapse = ", ")
+    ))
+  }
+  warnings <- unique(warnings[!is.na(warnings) & nzchar(warnings)])
+
+  time_vars_config <- lapply(groups, `[[`, "variables")
+  time_labels_config <- lapply(groups, function(group) {
+    stats::setNames(as.character(group$time_labels), group$variables)
+  })
+
+  config <- list(
+    id = selected_id,
+    id_generated = id_generated,
+    outcomes = names(groups),
+    time_vars = time_vars_config,
+    time_labels = time_labels_config,
+    arm = selected_arm,
+    reference_arm = reference$value,
+    covariates = covariate_detection$selected,
+    covariates_detected = covariate_detection$detected,
+    covariates_numeric = covariate_detection$numeric,
+    covariates_categorical = covariate_detection$categorical,
+    improvement_direction = vapply(directions, `[[`, character(1L), "value"),
+    stable_threshold = vapply(thresholds, `[[`, numeric(1L), "value"),
+    variable_pattern = if (is.function(variable_pattern)) "<custom function>" else variable_pattern,
+    auto_detected = list(
+      id = is.null(id),
+      outcomes = resolved$outcomes_auto,
+      time_vars = !resolved$time_vars_manual,
+      time_labels = is.null(time_labels),
+      arm = is.null(arm),
+      reference_arm = is.null(reference_arm),
+      covariates = is.null(covariates) || identical(covariates, "auto"),
+      improvement_direction = vapply(directions, `[[`, logical(1L), "automatic"),
+      stable_threshold = vapply(thresholds, `[[`, logical(1L), "automatic")
+    ),
+    specified_manually = list(
+      id = !is.null(id), outcomes = !resolved$outcomes_auto,
+      time_vars = resolved$time_vars_manual, time_labels = !is.null(time_labels),
+      arm = !is.null(arm), reference_arm = !is.null(reference_arm),
+      covariates = !is.null(covariates) && !identical(covariates, "auto")
+    ),
+    sources = list(
+      id = if (id_generated) "generated_row_id" else id_detection$source,
+      arm = arm_detection$source,
+      improvement_direction = vapply(directions, `[[`, character(1L), "reason"),
+      stable_threshold = vapply(thresholds, `[[`, character(1L), "reason")
+    ),
+    alternatives = list(
+      id = id_detection$alternatives,
+      arm = arm_detection$alternatives,
+      ambiguous_longitudinal = names(detected_longitudinal$ambiguous_groups)
+    )
+  )
+
+  detected_variables <- list(
+    id_candidates = id_detection$candidates,
+    longitudinal = lapply(detected_longitudinal$groups, `[[`, "variables"),
+    longitudinal_map = detected_longitudinal$parsed,
+    ambiguous_longitudinal = lapply(detected_longitudinal$ambiguous_groups, `[[`, "variables"),
+    outcomes = names(detected_longitudinal$groups),
+    arm_candidates = arm_detection$candidates,
+    covariates_numeric = covariate_detection$detected_numeric,
+    covariates_categorical = covariate_detection$detected_categorical
+  )
+
+  data_overview <- list(
+    n_rows = nrow(data),
+    n_columns = ncol(data),
+    column_profile = .mira_column_profile(data)
+  )
+
+  list(
+    data = analysis_data,
+    groups = groups,
+    config = config,
+    data_overview = data_overview,
+    detected_variables = detected_variables,
+    warnings = warnings
+  )
+}
+
+mira_detect <- function(data,
+                        id = NULL,
+                        outcomes = NULL,
+                        time_vars = NULL,
+                        time_labels = NULL,
+                        arm = NULL,
+                        reference_arm = NULL,
+                        covariates = NULL,
+                        variable_pattern = "auto",
+                        improvement_direction = "auto",
+                        stable_threshold = "auto",
+                        strict_id = TRUE,
+                        verbose = TRUE) {
+  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
+    stop("verbose deve essere TRUE o FALSE.", call. = FALSE)
+  }
+  built <- .mira_build_analysis_config(
+    data = data, id = id, outcomes = outcomes, time_vars = time_vars,
+    time_labels = time_labels, arm = arm, reference_arm = reference_arm,
+    covariates = covariates, variable_pattern = variable_pattern,
+    improvement_direction = improvement_direction,
+    stable_threshold = stable_threshold, strict_id = strict_id
+  )
+  for (message in built$warnings) warning(message, call. = FALSE)
+  result <- list(
+    call = match.call(),
+    version = "4.0.0",
+    config = built$config,
+    data_overview = built$data_overview,
+    detected_variables = built$detected_variables,
+    diagnostics = list(warnings = built$warnings)
+  )
+  class(result) <- c("mira_detect", "list")
+  if (verbose) print(result)
+  invisible(result)
+}
+
+# Public signature preserves the positional order of v3.0. New arguments are
+# appended, so existing named and positional calls continue to target the same
+# legacy parameters. id now defaults to NULL to enable safe auto-detection.
+mira_info <- function(data,
+                      id = NULL,
+                      time_vars = NULL,
+                      time_labels = NULL,
+                      arm = NULL,
+                      reference_arm = NULL,
+                      arm_tests = TRUE,
+                      alpha = 0.05,
+                      plots = TRUE,
+                      model = TRUE,
+                      outliers = TRUE,
+                      correlations = TRUE,
+                      verbose = TRUE,
+                      p_adjust_method = "holm",
+                      improvement_direction = "auto",
+                      stable_threshold = "auto",
+                      strict_id = TRUE,
+                      outcomes = NULL,
+                      covariates = NULL,
+                      analyses = NULL,
+                      variable_pattern = "auto",
+                      inspect_only = FALSE) {
+  scalar_flag <- function(x, name) {
+    if (!is.logical(x) || length(x) != 1L || is.na(x)) {
+      stop(sprintf("%s deve essere TRUE o FALSE.", name), call. = FALSE)
+    }
+  }
+  flags <- list(
+    arm_tests = arm_tests, plots = plots, model = model, outliers = outliers,
+    correlations = correlations, verbose = verbose, strict_id = strict_id,
+    inspect_only = inspect_only
+  )
+  for (flag_name in names(flags)) {
+    scalar_flag(flags[[flag_name]], flag_name)
+  }
+  if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
+      alpha <= 0 || alpha >= 1) {
+    stop("alpha deve essere un numero compreso tra 0 e 1.", call. = FALSE)
+  }
+  if (!is.character(p_adjust_method) || length(p_adjust_method) != 1L ||
+      is.na(p_adjust_method) || !p_adjust_method %in% p.adjust.methods) {
+    stop(sprintf("p_adjust_method deve essere uno tra: %s.",
+                 paste(p.adjust.methods, collapse = ", ")), call. = FALSE)
+  }
+
+  optional_analyses <- c("plots", "model", "outliers", "correlations", "arm_tests")
+  if (!is.null(analyses)) {
+    if (!is.character(analyses) || anyNA(analyses)) {
+      stop("analyses deve essere NULL o un vettore di nomi.", call. = FALSE)
+    }
+    analyses <- unique(tolower(analyses))
+    if ("all" %in% analyses) analyses <- optional_analyses
+    if ("none" %in% analyses) analyses <- character(0)
+    invalid <- setdiff(analyses, optional_analyses)
+    if (length(invalid) > 0L) {
+      stop(sprintf("Analisi opzionali non riconosciute: %s. Valori ammessi: %s.",
+                   paste(invalid, collapse = ", "),
+                   paste(optional_analyses, collapse = ", ")), call. = FALSE)
+    }
+    plots <- "plots" %in% analyses
+    model <- "model" %in% analyses
+    outliers <- "outliers" %in% analyses
+    correlations <- "correlations" %in% analyses
+    arm_tests <- "arm_tests" %in% analyses
+  }
+
+  built <- .mira_build_analysis_config(
+    data = data, id = id, outcomes = outcomes, time_vars = time_vars,
+    time_labels = time_labels, arm = arm, reference_arm = reference_arm,
+    covariates = covariates, variable_pattern = variable_pattern,
+    improvement_direction = improvement_direction,
+    stable_threshold = stable_threshold, strict_id = strict_id
+  )
+  built$config$analyses <- list(
+    core = c("descriptives", "missingness", "change", "variability", "trajectories"),
+    plots = plots, model = model, outliers = outliers,
+    correlations = correlations, arm_tests = arm_tests
+  )
+  for (message in built$warnings) warning(message, call. = FALSE)
+
+  if (inspect_only) {
+    result <- list(
+      call = match.call(), version = "4.0.0", config = built$config,
+      data_overview = built$data_overview,
+      detected_variables = built$detected_variables,
+      diagnostics = list(warnings = built$warnings)
+    )
+    class(result) <- c("mira_detect", "list")
+    if (verbose) print(result)
+    return(invisible(result))
+  }
+
+  outcome_results <- list()
+  adaptations <- list()
+  multiple <- length(built$groups) > 1L
+
+  for (outcome_name in names(built$groups)) {
+    group <- built$groups[[outcome_name]]
+    availability <- vapply(group$variables, function(variable) {
+      x <- built$data[[variable]]
+      sum(!is.na(x) & is.finite(x))
+    }, integer(1L))
+    all_values <- unlist(lapply(group$variables, function(variable) {
+      x <- built$data[[variable]]
+      x[!is.na(x) & is.finite(x)]
+    }), use.names = FALSE)
+    variable_timepoints <- sum(vapply(group$variables, function(variable) {
+      x <- built$data[[variable]]
+      x <- x[!is.na(x) & is.finite(x)]
+      length(unique(x)) >= 2L
+    }, logical(1L)))
+
+    outcome_model <- model && length(all_values) >= 3L && variable_timepoints >= 1L
+    outcome_correlations <- correlations && sum(availability >= 2L) >= 2L &&
+      variable_timepoints >= 2L
+    outcome_plots <- plots && length(all_values) > 0L
+    outcome_arm_tests <- arm_tests && length(all_values) > 0L &&
+      !is.null(built$config$arm) &&
+      length(unique(built$data[[built$config$arm]][
+        !is.na(built$data[[built$config$arm]])
+      ])) >= 2L
+
+    disabled <- character(0)
+    if (model && !outcome_model) disabled <- c(disabled, "model: insufficient data/variability")
+    if (correlations && !outcome_correlations) {
+      disabled <- c(disabled, "correlations: fewer than two estimable timepoints")
+    }
+    if (plots && !outcome_plots) disabled <- c(disabled, "plots: no finite outcome values")
+    if (arm_tests && !outcome_arm_tests) disabled <- c(disabled, "arm_tests: no usable arm")
+    adaptations[[outcome_name]] <- list(
+      available_by_time = stats::setNames(availability, group$variables),
+      variable_timepoints = variable_timepoints,
+      disabled = disabled
+    )
+
+    analyse <- function() {
+      .mira_analyse_single_outcome(
+        data = built$data,
+        id = built$config$id,
+        time_vars = group$variables,
+        time_labels = group$time_labels,
+        arm = built$config$arm,
+        reference_arm = built$config$reference_arm,
+        arm_tests = outcome_arm_tests,
+        alpha = alpha,
+        plots = outcome_plots,
+        model = outcome_model,
+        outliers = outliers,
+        correlations = outcome_correlations,
+        verbose = FALSE,
+        p_adjust_method = p_adjust_method,
+        improvement_direction = built$config$improvement_direction[[outcome_name]],
+        stable_threshold = built$config$stable_threshold[[outcome_name]],
+        strict_id = strict_id,
+        .outcome_name = outcome_name,
+        .covariates = built$config$covariates,
+        .categorical_covariates = built$config$covariates_categorical
+      )
+    }
+
+    outcome_result <- if (multiple) {
+      tryCatch(
+        analyse(),
+        error = function(e) structure(
+          list(outcome = outcome_name, error = conditionMessage(e)),
+          class = c("mira_info_error", "list")
+        )
+      )
+    } else analyse()
+
+    if (!inherits(outcome_result, "mira_info_error")) {
+      outcome_config <- built$config
+      outcome_config$outcomes <- outcome_name
+      outcome_config$time_vars <- group$variables
+      outcome_config$time_labels <- stats::setNames(group$time_labels, group$variables)
+      outcome_config$improvement_direction <-
+        built$config$improvement_direction[[outcome_name]]
+      outcome_config$stable_threshold <- built$config$stable_threshold[[outcome_name]]
+      outcome_result$config <- outcome_config
+      outcome_result$data_overview <- built$data_overview
+      outcome_result$detected_variables <- built$detected_variables
+      outcome_result$diagnostics <- list(
+        warnings = built$warnings,
+        adaptation = adaptations[[outcome_name]]
+      )
+      outcome_result$call <- match.call()
+      outcome_result$version <- "4.0.0"
+    }
+    outcome_results[[outcome_name]] <- outcome_result
+  }
+
+  failed <- names(outcome_results)[vapply(outcome_results, inherits, logical(1L),
+                                          what = "mira_info_error")]
+  if (length(failed) > 0L) {
+    warning(sprintf("Analisi non completate per: %s. Consultare result$outcomes.",
+                    paste(failed, collapse = ", ")), call. = FALSE)
+  }
+
+  if (length(outcome_results) == 1L && length(failed) == 0L) {
+    result <- outcome_results[[1L]]
+    result$config <- built$config
+    result$data_overview <- built$data_overview
+    result$detected_variables <- built$detected_variables
+    result$diagnostics <- list(warnings = built$warnings, adaptation = adaptations)
+    result$outcomes <- outcome_results
+    result$call <- match.call()
+    class(result) <- c("mira_info", "list")
+  } else {
+    result <- list(
+      call = match.call(),
+      version = "4.0.0",
+      config = built$config,
+      data_overview = built$data_overview,
+      detected_variables = built$detected_variables,
+      outcomes = outcome_results,
+      diagnostics = list(warnings = built$warnings, adaptation = adaptations,
+                         failed_outcomes = failed)
+    )
+    class(result) <- c("mira_info_multi", "mira_info", "list")
+  }
+
+  if (verbose) print(result)
+  invisible(result)
+}
+
+print.mira_detect <- function(x, ...) {
+  cat(sprintf("MIRA detection v%s\n", x$version))
+  cat(sprintf("Rows: %d | Columns: %d\n",
+              x$data_overview$n_rows, x$data_overview$n_columns))
+  cat(sprintf("ID: %s%s\n", x$config$id,
+              if (isTRUE(x$config$id_generated)) " (generated safely)" else ""))
+  cat(sprintf("Outcomes: %s\n", paste(x$config$outcomes, collapse = ", ")))
+  for (outcome in x$config$outcomes) {
+    variables <- x$config$time_vars[[outcome]]
+    labels <- unname(x$config$time_labels[[outcome]])
+    cat(sprintf("  %s: %s\n", outcome,
+                paste(sprintf("%s [%s]", variables, labels), collapse = ", ")))
+  }
+  cat(sprintf("Arm: %s\n", if (is.null(x$config$arm)) "none" else x$config$arm))
+  if (!is.null(x$config$arm)) {
+    cat(sprintf("Reference arm: %s\n",
+                if (is.null(x$config$reference_arm)) "none" else x$config$reference_arm))
+  }
+  cat(sprintf("Covariates used: %s\n",
+              if (length(x$config$covariates) == 0L) "none" else
+                paste(x$config$covariates, collapse = ", ")))
+  cat(sprintf("Detected numeric covariates: %s\n",
+              if (length(x$detected_variables$covariates_numeric) == 0L) "none" else
+                paste(x$detected_variables$covariates_numeric, collapse = ", ")))
+  cat(sprintf("Detected categorical covariates: %s\n",
+              if (length(x$detected_variables$covariates_categorical) == 0L) "none" else
+                paste(x$detected_variables$covariates_categorical, collapse = ", ")))
+  if (length(x$diagnostics$warnings) > 0L) {
+    cat("Diagnostics:\n")
+    cat(paste0("  - ", x$diagnostics$warnings, collapse = "\n"), "\n")
+  }
+  invisible(x)
+}
+
+print.mira_info_multi <- function(x, ...) {
+  cat(sprintf("MIRA INFO v%s — MULTI-OUTCOME REPORT\n", x$version))
+  cat(sprintf("Rows: %d | ID: %s | Outcomes: %d\n",
+              x$data_overview$n_rows, x$config$id, length(x$outcomes)))
+  cat(sprintf("Arm: %s | Covariates: %s\n",
+              if (is.null(x$config$arm)) "none" else x$config$arm,
+              if (length(x$config$covariates) == 0L) "none" else
+                paste(x$config$covariates, collapse = ", ")))
+  rows <- lapply(names(x$outcomes), function(outcome) {
+    result <- x$outcomes[[outcome]]
+    if (inherits(result, "mira_info_error")) {
+      return(data.frame(outcome = outcome, timepoints = NA_integer_, subjects = NA_integer_,
+                        complete_profiles = NA_integer_, status = result$error,
+                        stringsAsFactors = FALSE))
+    }
+    data.frame(
+      outcome = outcome,
+      timepoints = result$overview$n_timepoints,
+      subjects = result$overview$n_patients,
+      complete_profiles = result$overview$complete_profiles,
+      status = "ok",
+      stringsAsFactors = FALSE
+    )
+  })
+  print(do.call(rbind, rows), row.names = FALSE)
+  cat("Accesso ai risultati: result$outcomes$NOME_OUTCOME\n")
+  invisible(x)
+}
+
+print.mira_info_error <- function(x, ...) {
+  cat(sprintf("Outcome %s: analisi non completata — %s\n", x$outcome, x$error))
+  invisible(x)
 }
 
 
@@ -2517,6 +4033,11 @@ print.mira_info <- function(x,
               x$settings$improvement_direction, fmt_num(x$settings$stable_threshold)))
   cat(sprintf("Strict ID checks: %s | Non-finite handling: %s\n",
               as.character(x$settings$strict_id), x$settings$non_finite_handling))
+  if (!is.null(x$config)) {
+    cat(sprintf("Covariates used: %s\n",
+                if (length(x$config$covariates) == 0L) "none" else
+                  paste(x$config$covariates, collapse = ", ")))
+  }
 
   if (isTRUE(ov$arm_analysis)) {
     cat(sprintf(
@@ -2920,6 +4441,13 @@ print.mira_info <- function(x,
       cat("Mixed model not available.\n")
     } else {
       fit <- x$model$fitted_model
+      cat(sprintf("Covariates used: %s\n",
+                  if (length(x$model$covariates_used) == 0L) "none" else
+                    paste(x$model$covariates_used, collapse = ", ")))
+      if (length(x$model$covariates_skipped) > 0L) {
+        cat(sprintf("Covariates skipped (insufficient variation): %s\n",
+                    paste(x$model$covariates_skipped, collapse = ", ")))
+      }
       cat(sprintf("Converged: %s | Singular: %s\n",
                   as.character(x$model$converged), as.character(x$model$singular)))
 
@@ -3114,6 +4642,14 @@ print.mira_info <- function(x,
   # COMPLETE OUTPUT GUIDE
   # ------------------------------------------------------------------
   section("COMPLETE OUTPUT GUIDE")
+  if (!is.null(x$config)) {
+    cat("  $config         Final choices and automatic/manual provenance\n")
+    cat("  $data_overview Dataset-wide column classes, cardinality and missingness\n")
+    cat("  $detected_variables  Detection candidates and longitudinal map\n")
+    if (!is.null(x$outcomes)) {
+      cat("  $outcomes       Outcome-indexed results (also present for one outcome)\n")
+    }
+  }
   cat(sprintf("  $outcome        Detected outcome (%s)\n", ov$outcome_display))
   cat("  $overview       Dataset structure, IDs, completeness and timepoints\n")
   cat("  $settings       Confidence level, p-adjustment and clinical direction settings\n")
@@ -3246,4 +4782,59 @@ plot.mira_info <- function(
 
   print(x$plots[[which]])
   invisible(x$plots[[which]])
+}
+
+
+# ============================================================
+# MULTI-OUTCOME SUMMARY AND PLOT METHODS
+# ============================================================
+
+summary.mira_info_multi <- function(object, ...) {
+  summaries <- lapply(object$outcomes, function(result) {
+    if (inherits(result, "mira_info_error")) return(result)
+    summary.mira_info(result, ...)
+  })
+  out <- list(
+    version = object$version,
+    config = object$config,
+    outcomes = summaries,
+    failed_outcomes = object$diagnostics$failed_outcomes
+  )
+  class(out) <- c("summary.mira_info_multi", "list")
+  out
+}
+
+print.summary.mira_info_multi <- function(x, digits = 3, ...) {
+  cat(sprintf("mira_info multi-outcome summary — %d outcomes\n", length(x$outcomes)))
+  for (outcome in names(x$outcomes)) {
+    cat("\n")
+    value <- x$outcomes[[outcome]]
+    if (inherits(value, "mira_info_error")) {
+      print(value)
+    } else {
+      print.summary.mira_info(value, digits = digits, ...)
+    }
+  }
+  invisible(x)
+}
+
+plot.mira_info_multi <- function(x, outcome = NULL, which = "boxplot", ...) {
+  available <- names(x$outcomes)[!vapply(x$outcomes, inherits, logical(1L),
+                                         what = "mira_info_error")]
+  if (length(available) == 0L) {
+    stop("Nessun outcome dispone di grafici.", call. = FALSE)
+  }
+  if (is.null(outcome)) {
+    if (length(available) > 1L) {
+      stop(sprintf("Specificare outcome=. Valori disponibili: %s.",
+                   paste(available, collapse = ", ")), call. = FALSE)
+    }
+    outcome <- available[[1L]]
+  }
+  idx <- which(.mira_key(available) == .mira_key(outcome))
+  if (length(idx) != 1L) {
+    stop(sprintf("Outcome '%s' non disponibile. Valori: %s.",
+                 outcome, paste(available, collapse = ", ")), call. = FALSE)
+  }
+  plot.mira_info(x$outcomes[[available[[idx]]]], which = which, ...)
 }

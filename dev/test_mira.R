@@ -69,30 +69,145 @@ meaningful_change_sd <- 1.5 # 1.5 else 15
 # EXPLORATORY ANALYSIS
 # ============================================================
 
-res <- mira_info(
-  data = analysis_data,
-  id = "patient",
-  time_vars = paste0(outcome, "_t", 0:4),
-  time_labels = c(
-    "Baseline",
-    "Month 3",
-    "Month 5",
-    "Month 12",
-    "Month 15"
-  ),
-  arm = "arm",
-  reference_arm = "control",
-  improvement_direction = direction,
-  plots = TRUE,
-  model = TRUE,
-  outliers = TRUE,
-  correlations = TRUE,
-  verbose = TRUE,
-  p_adjust_method = "holm",
-  stable_threshold = 0,
-  strict_id = TRUE,
-  arm_tests = TRUE
+# Solo timepoint
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
 )
+
+# Timepoint + age
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  covariates = "age"
+)
+
+# Timepoint + gender
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  covariates = "gender"
+)
+
+# Timepoint + age + gender
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  covariates = c("age", "gender")
+)
+
+# ID + timepoint
+result <- mira_info(
+  data,
+  id = "patient",
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
+)
+
+# ID + timepoint + age + gender
+result <- mira_info(
+  data,
+  id = "patient",
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  covariates = c("age", "gender")
+)
+
+# Timepoint + trattamento
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  arm = "treatment"
+)
+
+# ID + timepoint + trattamento + covariate
+result <- mira_info(
+  data,
+  id = "patient",
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2", "BCVA_t3","BCVA_t4"),
+  arm = "treatment",
+  reference_arm = "Aflibercept",
+  covariates = c("age", "gender","study_eye")
+)
+
+# Un solo outcome selezionato, con rilevamento automatico dei timepoint
+result <- mira_info(
+  data,
+  outcomes = "BCVA"
+)
+
+# Più outcome rilevati automaticamente
+result <- mira_info(
+  data,
+  outcomes = c("BCVA", "CMT", "IOP")
+)
+
+# Più outcome con colonne specificate manualmente
+result <- mira_info(
+  data,
+  time_vars = list(
+    BCVA = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+    CMT  = c("CMT_t0", "CMT_t1", "CMT_t2")
+  )
+)
+
+# Timepoint con etichette personalizzate
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  time_labels = c("Baseline", "Month 1", "Month 3")
+)
+
+# Nomi longitudinali non standard
+result <- mira_info(
+  data,
+  outcomes = "BCVA",
+  time_vars = c("BCVA_baseline", "BCVA_month1", "BCVA_month3"),
+  time_labels = c("Baseline", "Month 1", "Month 3")
+)
+
+# Direzione del miglioramento e soglia di stabilità
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  improvement_direction = "higher",
+  stable_threshold = 5
+)
+
+# Più outcome con direzioni diverse
+result <- mira_info(
+  data,
+  outcomes = c("BCVA", "CMT"),
+  improvement_direction = c(
+    BCVA = "higher",
+    CMT = "lower"
+  ),
+  stable_threshold = c(
+    BCVA = 5,
+    CMT = 20
+  )
+)
+
+# Solo analisi selezionate
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  analyses = c("model", "correlations", "outliers")
+)
+
+# Tutte le analisi opzionali disabilitate
+result <- mira_info(
+  data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  analyses = "none"
+)
+
+# Solo ispezione della configurazione
+config <- mira_info(
+  data,
+  inspect_only = TRUE
+)
+
+# Chiamata completamente automatica
+result <- mira_info(data)
 
 res$descriptives
 res$change

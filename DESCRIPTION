@@ -31,9 +31,11 @@ Imports:
     emmeans,
     geepack,
     ggplot2,
+    knitr,
     lme4,
     lmerTest,
     nlme,
     performance,
+    quarto,
     tibble
 Config/roxygen2/version: 8.1.0

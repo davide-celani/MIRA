@@ -12,6 +12,21 @@
 
 
 
+result <- mira_info(
+  data = data,
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
+)
+
+report <- mira_report_freq(
+  result,
+  author = "Davide Celani",
+  output_dir = "report_mira",
+  output_file = "analisi_longitudinale",
+  format = "pdf",
+  quiet = FALSE,
+  overwrite = TRUE
+)
+
 
 
 

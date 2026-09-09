@@ -15,6 +15,11 @@
 #   - inspect-only mira_detect() workflow and result$config provenance
 #   - outcome-specific optional analyses, clinical direction and thresholds
 #   - covariate-adjusted mixed models when covariates are selected safely
+#   - estimated marginal means, planned contrasts and ordered polynomial trends
+#   - RM-ANOVA, Friedman/Kendall W and paired rank-based post-hoc inference
+#   - GEE, random-slope mixed models and nlme CS/AR(1) correlation models
+#   - CR2 cluster-robust inference, method-specific effect sizes and multiplicity
+#   - model-comparison and effect-aligned sensitivity summaries
 #
 # Preserved v3.0 capabilities:
 #   - consistent handling of Inf/-Inf as unavailable observations
@@ -363,20 +368,20 @@
       alternatives <- setdiff(eligible$variable, selected)
       if (length(alternatives) > 0L) {
         warnings <- c(warnings, sprintf(
-          "ID rilevato come '%s'; alternative plausibili: %s. Specificare id= per sovrascrivere.",
+          "ID detected as '%s'; plausible alternatives: %s. Specify id= to override.",
           selected, paste(alternatives, collapse = ", ")
         ))
       }
     } else {
       alternatives <- eligible$variable
       warnings <- c(warnings, sprintf(
-        "ID ambiguo (%s): verrà usato un identificatore di riga interno. Specificare id= per scegliere.",
+        "Ambiguous ID (%s): an internal row identifier will be used. Specify id= to choose.",
         paste(best, collapse = ", ")
       ))
     }
   } else {
     warnings <- c(warnings,
-                  "Nessun ID univoco rilevato: verrà usato un identificatore di riga interno.")
+                  "No unique ID was detected: an internal row identifier will be used.")
   }
 
   list(
@@ -433,22 +438,22 @@
       alternatives <- setdiff(candidates$variable, selected)
       if (length(alternatives) > 0L) {
         warnings <- c(warnings, sprintf(
-          "Variabile arm rilevata come '%s'; alternative: %s. Specificare arm= per sovrascrivere.",
+          "Treatment-arm variable detected as '%s'; alternatives: %s. Specify arm= to override.",
           selected, paste(alternatives, collapse = ", ")
         ))
       }
     } else {
       alternatives <- candidates$variable
       warnings <- c(warnings, sprintf(
-        "Variabile arm ambigua (%s): le analisi tra gruppi restano disabilitate finché arm= non è specificato.",
+        "Ambiguous treatment-arm variable (%s): between-group analyses remain disabled until arm= is specified.",
         paste(best, collapse = ", ")
       ))
     }
   }
   if (length(rejected) > 0L) {
     warnings <- c(warnings, sprintf(
-      paste0("Candidate arm escluse perché senza almeno due gruppi utilizzabili ",
-             "o con cardinalità non plausibile: %s."),
+      paste0("Treatment-arm candidates were excluded because they lacked at least two usable groups ",
+             "or had implausible cardinality: %s."),
       paste(rejected, collapse = ", ")
     ))
   }
@@ -541,9 +546,9 @@
     selected <- character(0)
     if (length(candidate) > 0L) {
       warnings <- sprintf(
-        paste0("Rilevate %d covariate candidate (%s), ma la loro complessità supera ",
-               "il limite conservativo data-driven (%d df): non saranno incluse automaticamente ",
-               "nel modello. Specificare covariates= per scegliere."),
+        paste0("Detected %d candidate covariates (%s), but their complexity exceeds ",
+               "the conservative data-driven limit (%d df): they will not be included automatically ",
+               "in the model. Specify covariates= to choose."),
         length(candidate), paste(candidate, collapse = ", "), max_auto_df
       )
     }
@@ -558,6 +563,1876 @@
     detected_numeric = classes$numeric,
     detected_categorical = classes$categorical,
     automatic = TRUE,
+    warnings = warnings
+  )
+}
+
+# ============================================================
+# ADVANCED LONGITUDINAL INFERENCE HELPERS
+# ============================================================
+
+.mira_skipped_module <- function(package = NA_character_, reason) {
+  list(
+    performed = FALSE,
+    package = package,
+    object = NULL,
+    summary = NULL,
+    tidy = NULL,
+    warnings = character(0),
+    error = NULL,
+    reason_skipped = reason
+  )
+}
+
+.mira_eval <- function(expr) {
+  captured_warnings <- character(0)
+  captured_error <- NULL
+  value <- tryCatch(
+    withCallingHandlers(
+      force(expr),
+      warning = function(w) {
+        captured_warnings <<- unique(c(captured_warnings, conditionMessage(w)))
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e) {
+      captured_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  list(value = value, warnings = captured_warnings, error = captured_error)
+}
+
+.mira_quote_formula_name <- function(x) {
+  paste0("`", gsub("`", "", x, fixed = TRUE), "`")
+}
+
+.mira_formula_text <- function(x) {
+  if (is.null(x)) return(NA_character_)
+  paste(deparse(x, width.cutoff = 500L), collapse = " ")
+}
+
+.mira_make_fixed_formula <- function(arm_enabled, covariates = character(0)) {
+  core <- if (isTRUE(arm_enabled)) "time_factor * arm_factor" else "time_factor"
+  covariate_terms <- if (length(covariates) > 0L) {
+    vapply(covariates, .mira_quote_formula_name, character(1L))
+  } else character(0)
+  stats::as.formula(paste(
+    "value ~",
+    paste(c(core, covariate_terms), collapse = " + ")
+  ))
+}
+
+.mira_make_lmer_formula <- function(core, covariates, random_term) {
+  covariate_terms <- if (length(covariates) > 0L) {
+    vapply(covariates, .mira_quote_formula_name, character(1L))
+  } else character(0)
+  fixed_terms <- c(core, covariate_terms)
+  fixed_terms <- fixed_terms[nzchar(fixed_terms)]
+  if (length(fixed_terms) == 0L) fixed_terms <- "1"
+  stats::as.formula(paste(
+    "value ~",
+    paste(c(fixed_terms, random_term), collapse = " + ")
+  ))
+}
+
+.mira_as_numeric <- function(x) {
+  if (is.null(x)) return(numeric(0))
+  if (is.numeric(x)) return(as.numeric(x))
+  x <- trimws(as.character(x))
+  x <- sub("^[<=>]+", "", x)
+  x <- gsub("[^0-9eE+.-]", "", x)
+  suppressWarnings(as.numeric(x))
+}
+
+.mira_column_name <- function(x, candidates = character(0), contains = character(0)) {
+  if (is.null(x) || length(names(x)) == 0L) return(NA_character_)
+  clean <- tolower(gsub("[^[:alnum:]]+", "", names(x)))
+  candidate_clean <- tolower(gsub("[^[:alnum:]]+", "", candidates))
+  exact <- match(candidate_clean, clean, nomatch = 0L)
+  exact <- exact[exact > 0L]
+  if (length(exact) > 0L) return(names(x)[exact[[1L]]])
+  for (pattern in contains) {
+    idx <- grep(pattern, clean, perl = TRUE)
+    if (length(idx) > 0L) return(names(x)[idx[[1L]]])
+  }
+  NA_character_
+}
+
+.mira_adjust_family <- function(table, p_col = "p_raw", primary = "holm") {
+  if (is.null(table)) return(NULL)
+  table <- as.data.frame(table, stringsAsFactors = FALSE)
+  if (!p_col %in% names(table)) {
+    detected <- .mira_column_name(
+      table,
+      candidates = c("p.value", "p_value", "p", "Pr(>|t|)", "Pr(>|z|)",
+                     "Pr(>|W|)", "Pr(>F)")
+    )
+    if (!is.na(detected)) {
+      table$p_raw <- .mira_as_numeric(table[[detected]])
+      p_col <- "p_raw"
+    } else {
+      table$p_raw <- rep(NA_real_, nrow(table))
+      p_col <- "p_raw"
+    }
+  }
+  p <- .mira_as_numeric(table[[p_col]])
+  adjust <- function(method) {
+    out <- rep(NA_real_, length(p))
+    ok <- is.finite(p)
+    if (any(ok)) out[ok] <- stats::p.adjust(p[ok], method = method)
+    out
+  }
+  table$p_raw <- p
+  table$p_primary <- adjust(primary)
+  table$primary_method <- rep(primary, nrow(table))
+  table$p_bonferroni <- adjust("bonferroni")
+  table$p_holm <- adjust("holm")
+  table$p_bh <- adjust("BH")
+  table$p_by <- adjust("BY")
+  table
+}
+
+.mira_emm_summary <- function(object, primary, adjust = "none", confidence_level = 0.95) {
+  if (is.null(object)) return(NULL)
+  tab <- as.data.frame(
+    summary(object, infer = c(TRUE, TRUE), adjust = adjust, level = confidence_level),
+    stringsAsFactors = FALSE
+  )
+  if (identical(adjust, "none")) .mira_adjust_family(tab, primary = primary) else tab
+}
+
+.mira_prepare_advanced_data <- function(long_data,
+                                        time_levels,
+                                        arm_enabled,
+                                        arm_levels,
+                                        covariates,
+                                        categorical_covariates) {
+  out <- long_data[
+    !is.na(long_data$patient) & is.finite(long_data$value),
+    ,
+    drop = FALSE
+  ]
+  out$patient_factor <- factor(out$patient)
+  out$time_factor <- factor(as.character(out$time_label), levels = time_levels)
+  out$time_ordinal <- as.numeric(out$time_index) - 1
+  if (isTRUE(arm_enabled)) {
+    out$arm_factor <- factor(as.character(out$arm), levels = arm_levels)
+  }
+  for (variable in covariates) {
+    value <- out[[variable]]
+    if (is.numeric(value)) value[!is.finite(value)] <- NA_real_
+    if (variable %in% categorical_covariates && !is.factor(value)) value <- factor(value)
+    if (is.character(value)) {
+      value[!is.na(value) & !nzchar(trimws(value))] <- NA_character_
+      value <- factor(value)
+    }
+    if (is.logical(value)) value <- factor(value)
+    if (is.factor(value)) value <- droplevels(value)
+    out[[variable]] <- value
+  }
+  required <- c(
+    "patient_factor", "time_factor", "time_ordinal", "value",
+    if (isTRUE(arm_enabled)) "arm_factor" else character(0),
+    covariates
+  )
+  out <- out[stats::complete.cases(out[required]), , drop = FALSE]
+  out$patient_factor <- droplevels(out$patient_factor)
+  out$time_factor <- droplevels(out$time_factor)
+  if (isTRUE(arm_enabled)) out$arm_factor <- droplevels(out$arm_factor)
+  out <- out[order(out$patient_factor, out$time_index), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+.mira_run_emmeans <- function(model, arm_enabled, primary_method, confidence_level) {
+  if (is.null(model)) {
+    return(.mira_skipped_module(
+      "emmeans",
+      "The compatible mixed model was not available."
+    ))
+  }
+  if (!requireNamespace("emmeans", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "emmeans",
+      "Optional package 'emmeans' is not installed."
+    ))
+  }
+
+  warnings <- character(0)
+  errors <- list()
+  safe <- function(name, expr) {
+    evaluated <- .mira_eval(expr)
+    warnings <<- unique(c(warnings, evaluated$warnings))
+    if (!is.null(evaluated$error)) errors[[name]] <<- evaluated$error
+    evaluated$value
+  }
+
+  time_emm <- safe("time", emmeans::emmeans(model, ~ time_factor))
+  if (is.null(time_emm)) {
+    return(list(
+      performed = FALSE, package = "emmeans", object = NULL, summary = NULL,
+      tidy = NULL, warnings = warnings,
+      error = if (length(errors) > 0L) unname(errors[[1L]]) else "Unknown emmeans error.",
+      reason_skipped = "Time marginal means could not be estimated.", errors = errors
+    ))
+  }
+
+  time_tidy <- safe(
+    "time_summary",
+    as.data.frame(
+      summary(time_emm, infer = c(TRUE, FALSE), level = confidence_level),
+      stringsAsFactors = FALSE
+    )
+  )
+  time_pairwise <- safe(
+    "time_pairwise",
+    emmeans::contrast(time_emm, method = "pairwise", adjust = "none")
+  )
+  time_pairwise_tidy <- safe(
+    "time_pairwise_summary",
+    .mira_emm_summary(time_pairwise, primary_method, confidence_level = confidence_level)
+  )
+  time_pairwise_tukey <- safe(
+    "time_pairwise_tukey",
+    .mira_emm_summary(
+      time_pairwise, primary_method, adjust = "tukey",
+      confidence_level = confidence_level
+    )
+  )
+
+  time_grid <- safe(
+    "time_grid",
+    as.data.frame(time_emm, stringsAsFactors = FALSE)
+  )
+  observed_time_levels <- if (!is.null(time_grid) && "time_factor" %in% names(time_grid)) {
+    unique(as.character(time_grid$time_factor))
+  } else character(0)
+  n_time <- length(observed_time_levels)
+
+  baseline_methods <- if (n_time >= 2L) {
+    lapply(seq.int(2L, n_time), function(k) {
+      coefficient <- numeric(n_time)
+      coefficient[[1L]] <- -1
+      coefficient[[k]] <- 1
+      coefficient
+    })
+  } else list()
+  if (length(baseline_methods) > 0L) {
+    names(baseline_methods) <- paste0(
+      observed_time_levels[-1L], " - ", observed_time_levels[[1L]]
+    )
+  }
+  baseline_followup <- safe(
+    "baseline_followup",
+    if (length(baseline_methods) > 0L) {
+      emmeans::contrast(time_emm, method = baseline_methods, adjust = "none")
+    } else NULL
+  )
+  baseline_followup_tidy <- safe(
+    "baseline_followup_summary",
+    .mira_emm_summary(
+      baseline_followup, primary_method, confidence_level = confidence_level
+    )
+  )
+  baseline_followup_dunnett <- safe(
+    "baseline_followup_dunnett",
+    .mira_emm_summary(
+      baseline_followup, primary_method, adjust = "dunnettx",
+      confidence_level = confidence_level
+    )
+  )
+
+  baseline_final_method <- NULL
+  if (n_time >= 2L) {
+    coefficient <- numeric(n_time)
+    coefficient[[1L]] <- -1
+    coefficient[[n_time]] <- 1
+    baseline_final_method <- list("final - baseline" = coefficient)
+  }
+  baseline_final <- safe(
+    "baseline_final",
+    if (!is.null(baseline_final_method)) {
+      emmeans::contrast(time_emm, method = baseline_final_method, adjust = "none")
+    } else NULL
+  )
+  baseline_final_tidy <- safe(
+    "baseline_final_summary",
+    .mira_emm_summary(
+      baseline_final, primary_method, confidence_level = confidence_level
+    )
+  )
+
+  consecutive_methods <- if (n_time >= 2L) {
+    lapply(seq.int(2L, n_time), function(k) {
+      coefficient <- numeric(n_time)
+      coefficient[[k - 1L]] <- -1
+      coefficient[[k]] <- 1
+      coefficient
+    })
+  } else list()
+  if (length(consecutive_methods) > 0L) {
+    names(consecutive_methods) <- paste0(
+      observed_time_levels[-1L], " - ", observed_time_levels[-n_time]
+    )
+  }
+  consecutive <- safe(
+    "consecutive",
+    if (length(consecutive_methods) > 0L) {
+      emmeans::contrast(time_emm, method = consecutive_methods, adjust = "none")
+    } else NULL
+  )
+  consecutive_tidy <- safe(
+    "consecutive_summary",
+    .mira_emm_summary(
+      consecutive, primary_method, confidence_level = confidence_level
+    )
+  )
+
+  trends <- safe(
+    "ordinal_polynomial_trends",
+    if (n_time >= 3L) {
+      emmeans::contrast(time_emm, method = "poly", adjust = "none")
+    } else NULL
+  )
+  if (!is.null(trends)) {
+    trend_grid <- safe(
+      "ordinal_polynomial_trend_grid",
+      as.data.frame(trends, stringsAsFactors = FALSE)
+    )
+    if (!is.null(trend_grid) && "contrast" %in% names(trend_grid)) {
+      allowed <- c("linear", "quadratic", if (n_time >= 4L) "cubic")
+      keep <- tolower(as.character(trend_grid$contrast)) %in% allowed
+      subsetted_trends <- safe("ordinal_polynomial_trend_subset", trends[keep])
+      if (!is.null(subsetted_trends)) trends <- subsetted_trends
+    }
+  }
+  trends_tidy <- safe(
+    "ordinal_polynomial_trends_summary",
+    .mira_emm_summary(trends, primary_method, confidence_level = confidence_level)
+  )
+  if (!is.null(trends_tidy) && "contrast" %in% names(trends_tidy)) {
+    allowed <- c("linear", "quadratic", if (n_time >= 4L) "cubic")
+    trends_tidy <- trends_tidy[tolower(as.character(trends_tidy$contrast)) %in% allowed, , drop = FALSE]
+  }
+
+  arm_emm <- arm_tidy <- arm_pairwise <- arm_pairwise_tidy <- NULL
+  arm_pairwise_tukey <- arm_time_emm <- arm_time_tidy <- NULL
+  simple_arm <- simple_arm_tidy <- simple_time <- simple_time_tidy <- NULL
+  interaction <- interaction_tidy <- NULL
+
+  if (isTRUE(arm_enabled)) {
+    arm_emm <- safe("arm", emmeans::emmeans(model, ~ arm_factor))
+    arm_tidy <- safe(
+      "arm_summary",
+      if (!is.null(arm_emm)) {
+        as.data.frame(
+          summary(arm_emm, infer = c(TRUE, FALSE), level = confidence_level),
+          stringsAsFactors = FALSE
+        )
+      } else NULL
+    )
+    arm_pairwise <- safe(
+      "arm_pairwise",
+      if (!is.null(arm_emm)) {
+        emmeans::contrast(arm_emm, method = "pairwise", adjust = "none")
+      } else NULL
+    )
+    arm_pairwise_tidy <- safe(
+      "arm_pairwise_summary",
+      .mira_emm_summary(
+        arm_pairwise, primary_method, confidence_level = confidence_level
+      )
+    )
+    arm_pairwise_tukey <- safe(
+      "arm_pairwise_tukey",
+      .mira_emm_summary(
+        arm_pairwise, primary_method, adjust = "tukey",
+        confidence_level = confidence_level
+      )
+    )
+
+    arm_time_emm <- safe(
+      "arm_time",
+      emmeans::emmeans(model, ~ arm_factor * time_factor)
+    )
+    arm_time_tidy <- safe(
+      "arm_time_summary",
+      if (!is.null(arm_time_emm)) {
+        as.data.frame(
+          summary(arm_time_emm, infer = c(TRUE, FALSE), level = confidence_level),
+          stringsAsFactors = FALSE
+        )
+      } else NULL
+    )
+
+    arm_by_time <- safe(
+      "arm_by_time",
+      emmeans::emmeans(model, ~ arm_factor | time_factor)
+    )
+    simple_arm <- safe(
+      "simple_arm",
+      if (!is.null(arm_by_time)) {
+        emmeans::contrast(arm_by_time, method = "pairwise", adjust = "none")
+      } else NULL
+    )
+    simple_arm_tidy <- safe(
+      "simple_arm_summary",
+      .mira_emm_summary(simple_arm, primary_method, confidence_level = confidence_level)
+    )
+
+    time_by_arm <- safe(
+      "time_by_arm",
+      emmeans::emmeans(model, ~ time_factor | arm_factor)
+    )
+    simple_time <- safe(
+      "simple_time",
+      if (!is.null(time_by_arm)) {
+        emmeans::contrast(time_by_arm, method = "pairwise", adjust = "none")
+      } else NULL
+    )
+    simple_time_tidy <- safe(
+      "simple_time_summary",
+      .mira_emm_summary(simple_time, primary_method, confidence_level = confidence_level)
+    )
+
+    interaction <- safe(
+      "interaction_contrasts",
+      if (!is.null(arm_time_emm)) {
+        emmeans::contrast(
+          arm_time_emm,
+          interaction = c(arm_factor = "pairwise", time_factor = "pairwise"),
+          by = NULL,
+          adjust = "none"
+        )
+      } else NULL
+    )
+    interaction_tidy <- safe(
+      "interaction_contrasts_summary",
+      .mira_emm_summary(interaction, primary_method, confidence_level = confidence_level)
+    )
+  }
+
+  list(
+    performed = TRUE,
+    package = "emmeans",
+    object = time_emm,
+    summary = time_tidy,
+    tidy = time_tidy,
+    time = list(
+      object = time_emm,
+      tidy = time_tidy,
+      pairwise = time_pairwise,
+      pairwise_tidy = time_pairwise_tidy,
+      pairwise_tukey = time_pairwise_tukey
+    ),
+    arm = list(
+      object = arm_emm,
+      tidy = arm_tidy,
+      pairwise = arm_pairwise,
+      pairwise_tidy = arm_pairwise_tidy,
+      pairwise_tukey = arm_pairwise_tukey
+    ),
+    arm_time = list(
+      object = arm_time_emm,
+      tidy = arm_time_tidy,
+      simple_arm = simple_arm,
+      simple_arm_tidy = simple_arm_tidy,
+      simple_time = simple_time,
+      simple_time_tidy = simple_time_tidy,
+      interaction = interaction,
+      interaction_tidy = interaction_tidy
+    ),
+    baseline_followup = list(
+      object = baseline_followup,
+      tidy = baseline_followup_tidy,
+      dunnett = baseline_followup_dunnett,
+      dunnett_method = "emmeans dunnettx approximation"
+    ),
+    baseline_final = list(object = baseline_final, tidy = baseline_final_tidy),
+    consecutive = list(object = consecutive, tidy = consecutive_tidy),
+    trends = list(
+      object = trends,
+      tidy = trends_tidy,
+      scale = "ordered timepoint levels",
+      note = paste0(
+        "Polynomial contrasts use the order of timepoints; they do not assume ",
+        "equally spaced chronological time."
+      )
+    ),
+    warnings = warnings,
+    error = NULL,
+    errors = errors,
+    reason_skipped = NULL
+  )
+}
+
+.mira_standardize_afex <- function(table) {
+  if (is.null(table)) return(NULL)
+  out <- as.data.frame(table, stringsAsFactors = FALSE)
+  effect_col <- .mira_column_name(out, candidates = c("Effect", "term"))
+  effect <- if (!is.na(effect_col)) as.character(out[[effect_col]]) else rownames(out)
+  if (is.null(effect) || length(effect) != nrow(out)) effect <- rep(NA_character_, nrow(out))
+  stat_col <- .mira_column_name(out, candidates = c("F", "F.value", "F value"))
+  p_col <- .mira_column_name(out, candidates = c("Pr(>F)", "p", "p.value"))
+  num_df_col <- .mira_column_name(out, candidates = c("num Df", "num_df", "Df"))
+  den_df_col <- .mira_column_name(out, candidates = c("den Df", "den_df"))
+  pes_col <- .mira_column_name(out, candidates = c("pes", "partial eta squared"), contains = "pes")
+  ges_col <- .mira_column_name(out, candidates = c("ges", "generalized eta squared"), contains = "ges")
+  value <- function(column) {
+    if (is.na(column)) rep(NA_real_, nrow(out)) else .mira_as_numeric(out[[column]])
+  }
+  data.frame(
+    effect = effect,
+    statistic = value(stat_col),
+    df_num = value(num_df_col),
+    df_den = value(den_df_col),
+    p_value = value(p_col),
+    partial_eta_squared = value(pes_col),
+    generalized_eta_squared = value(ges_col),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mira_run_rm_anova <- function(data,
+                               arm_enabled,
+                               covariates,
+                               categorical_covariates) {
+  if (!requireNamespace("afex", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "afex",
+      "Optional package 'afex' is not installed."
+    ))
+  }
+
+  between <- c(
+    if (isTRUE(arm_enabled)) "arm_factor" else character(0),
+    intersect(covariates, categorical_covariates)
+  )
+  numeric_covariates <- setdiff(covariates, categorical_covariates)
+  numeric_covariates <- numeric_covariates[vapply(
+    numeric_covariates,
+    function(variable) is.numeric(data[[variable]]),
+    logical(1L)
+  )]
+  observed <- unique(c(intersect(covariates, categorical_covariates), numeric_covariates))
+
+  fitted <- .mira_eval(
+    afex::aov_ez(
+      id = "patient_factor",
+      dv = "value",
+      data = data,
+      between = if (length(between) > 0L) between else NULL,
+      within = "time_factor",
+      covariate = if (length(numeric_covariates) > 0L) numeric_covariates else NULL,
+      observed = if (length(observed) > 0L) observed else NULL,
+      type = 3,
+      factorize = FALSE,
+      include_aov = TRUE,
+      anova_table = list(correction = "none", es = "pes")
+    )
+  )
+  if (is.null(fitted$value)) {
+    return(list(
+      performed = FALSE, package = "afex", object = NULL, summary = NULL,
+      tidy = NULL, warnings = fitted$warnings, error = fitted$error,
+      reason_skipped = "Repeated-measures ANOVA could not be estimated."
+    ))
+  }
+
+  object <- fitted$value
+  raw_pes_eval <- .mira_eval(stats::anova(object, correction = "none", es = "pes"))
+  raw_ges_eval <- .mira_eval(stats::anova(object, correction = "none", es = "ges"))
+  gg_eval <- .mira_eval(stats::anova(object, correction = "GG", es = "pes"))
+  hf_eval <- .mira_eval(stats::anova(object, correction = "HF", es = "pes"))
+  summary_eval <- .mira_eval(summary(object))
+
+  raw <- .mira_standardize_afex(raw_pes_eval$value)
+  ges <- .mira_standardize_afex(raw_ges_eval$value)
+  gg <- .mira_standardize_afex(gg_eval$value)
+  hf <- .mira_standardize_afex(hf_eval$value)
+  if (!is.null(raw) && !is.null(ges)) {
+    raw$generalized_eta_squared <- ges$generalized_eta_squared[
+      match(raw$effect, ges$effect)
+    ]
+  }
+  tidy <- raw
+  if (!is.null(tidy) && !is.null(gg)) {
+    tidy$df_num_gg <- gg$df_num[match(tidy$effect, gg$effect)]
+    tidy$df_den_gg <- gg$df_den[match(tidy$effect, gg$effect)]
+    tidy$p_gg <- gg$p_value[match(tidy$effect, gg$effect)]
+  }
+  if (!is.null(tidy) && !is.null(hf)) {
+    tidy$df_num_hf <- hf$df_num[match(tidy$effect, hf$effect)]
+    tidy$df_den_hf <- hf$df_den[match(tidy$effect, hf$effect)]
+    tidy$p_hf <- hf$p_value[match(tidy$effect, hf$effect)]
+  }
+
+  full_summary <- summary_eval$value
+  warnings <- unique(c(
+    fitted$warnings, raw_pes_eval$warnings, raw_ges_eval$warnings,
+    gg_eval$warnings, hf_eval$warnings, summary_eval$warnings
+  ))
+  errors <- Filter(Negate(is.null), list(
+    raw_pes = raw_pes_eval$error,
+    raw_ges = raw_ges_eval$error,
+    green_house_geisser = gg_eval$error,
+    huynh_feldt = hf_eval$error,
+    summary = summary_eval$error
+  ))
+
+  rm_subjects <- tryCatch(
+    as.integer(stats::nobs(object$lm)),
+    error = function(e) {
+      observed_by_subject <- tapply(
+        as.character(data$time_factor),
+        data$patient_factor,
+        function(x) length(unique(x))
+      )
+      as.integer(sum(observed_by_subject == nlevels(data$time_factor)))
+    }
+  )
+
+  list(
+    performed = TRUE,
+    package = "afex",
+    object = object,
+    summary = full_summary,
+    tidy = tidy,
+    tables = list(
+      uncorrected_partial_eta = raw_pes_eval$value,
+      uncorrected_generalized_eta = raw_ges_eval$value,
+      greenhouse_geisser = gg_eval$value,
+      huynh_feldt = hf_eval$value
+    ),
+    sphericity = list(
+      mauchly = tryCatch(full_summary[["sphericity.tests"]], error = function(e) NULL),
+      corrections = tryCatch(full_summary[["pval.adjustments"]], error = function(e) NULL)
+    ),
+    n = rm_subjects,
+    n_subjects = rm_subjects,
+    covariates = covariates,
+    warnings = warnings,
+    error = NULL,
+    errors = errors,
+    reason_skipped = NULL
+  )
+}
+
+.mira_rank_biserial_paired <- function(delta) {
+  delta <- delta[is.finite(delta) & delta != 0]
+  if (length(delta) == 0L) return(NA_real_)
+  ranks <- rank(abs(delta), ties.method = "average")
+  positive <- sum(ranks[delta > 0])
+  negative <- sum(ranks[delta < 0])
+  denominator <- positive + negative
+  if (!is.finite(denominator) || denominator == 0) NA_real_ else
+    (positive - negative) / denominator
+}
+
+.mira_run_friedman <- function(analysis_data, time_vars, time_labels, primary_method) {
+  complete <- analysis_data[
+    stats::complete.cases(analysis_data[time_vars]),
+    time_vars,
+    drop = FALSE
+  ]
+  global_eval <- .mira_eval(stats::friedman.test(as.matrix(complete)))
+  test <- global_eval$value
+  n_complete <- nrow(complete)
+  k <- length(time_vars)
+  kendall_w <- if (!is.null(test) && n_complete > 0L && k > 1L) {
+    as.numeric(test$statistic) / (n_complete * (k - 1L))
+  } else NA_real_
+
+  tests <- list()
+  rows <- list()
+  warnings <- global_eval$warnings
+  errors <- list(global = global_eval$error)
+  counter <- 1L
+  for (i in seq_len(length(time_vars) - 1L)) {
+    for (j in seq.int(i + 1L, length(time_vars))) {
+      from <- time_vars[[i]]
+      to <- time_vars[[j]]
+      keep <- stats::complete.cases(analysis_data[[from]], analysis_data[[to]])
+      x <- analysis_data[[from]][keep]
+      y <- analysis_data[[to]][keep]
+      evaluated <- .mira_eval(
+        stats::wilcox.test(y, x, paired = TRUE, exact = FALSE)
+      )
+      key <- paste(from, to, sep = "_to_")
+      tests[[key]] <- evaluated$value
+      warnings <- unique(c(warnings, evaluated$warnings))
+      errors[[key]] <- evaluated$error
+      rows[[counter]] <- data.frame(
+        from = from,
+        to = to,
+        from_label = unname(time_labels[from]),
+        to_label = unname(time_labels[to]),
+        n = sum(keep),
+        statistic = if (!is.null(evaluated$value)) {
+          as.numeric(evaluated$value$statistic)
+        } else NA_real_,
+        p_raw = if (!is.null(evaluated$value)) evaluated$value$p.value else NA_real_,
+        rank_biserial = .mira_rank_biserial_paired(y - x),
+        stringsAsFactors = FALSE
+      )
+      counter <- counter + 1L
+    }
+  }
+  posthoc <- if (length(rows) > 0L) do.call(rbind, rows) else data.frame()
+  posthoc <- .mira_adjust_family(posthoc, p_col = "p_raw", primary = primary_method)
+
+  tidy <- data.frame(
+    statistic = if (!is.null(test)) as.numeric(test$statistic) else NA_real_,
+    df = if (!is.null(test)) as.numeric(test$parameter) else NA_real_,
+    p_raw = if (!is.null(test)) test$p.value else NA_real_,
+    kendalls_w = kendall_w,
+    n = n_complete,
+    n_timepoints = k,
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    performed = !is.null(test),
+    package = "stats",
+    object = test,
+    test = test,
+    summary = tidy,
+    tidy = tidy,
+    posthoc = list(tests = tests, tidy = posthoc),
+    warnings = warnings,
+    error = global_eval$error,
+    errors = Filter(Negate(is.null), errors),
+    reason_skipped = if (is.null(test)) {
+      "Friedman test could not be computed on complete repeated profiles."
+    } else NULL
+  )
+}
+
+.mira_effect_indices <- function(coefficient_names, question) {
+  has_time <- grepl("time_factor", coefficient_names, fixed = TRUE)
+  has_arm <- grepl("arm_factor", coefficient_names, fixed = TRUE)
+  if (identical(question, "TIME_X_ARM")) {
+    which(has_time & has_arm)
+  } else if (identical(question, "TIME")) {
+    which(has_time)
+  } else if (identical(question, "ARM")) {
+    which(has_arm)
+  } else integer(0)
+}
+
+.mira_wald_chisq <- function(beta, covariance, indices) {
+  if (length(indices) == 0L) return(NULL)
+  beta <- as.numeric(beta)
+  covariance <- as.matrix(covariance)
+  constraint <- diag(length(beta))[indices, , drop = FALSE]
+  estimate <- as.numeric(constraint %*% beta)
+  variance <- constraint %*% covariance %*% t(constraint)
+  decomposition <- tryCatch(
+    eigen((variance + t(variance)) / 2, symmetric = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(decomposition)) return(NULL)
+  tolerance <- max(abs(decomposition$values), 1) * sqrt(.Machine$double.eps)
+  keep <- decomposition$values > tolerance
+  rank <- sum(keep)
+  if (rank == 0L) return(NULL)
+  rotated <- crossprod(decomposition$vectors[, keep, drop = FALSE], estimate)
+  statistic <- sum(as.numeric(rotated)^2 / decomposition$values[keep])
+  list(
+    statistic = statistic,
+    df = rank,
+    p_value = stats::pchisq(statistic, df = rank, lower.tail = FALSE),
+    constraints = constraint
+  )
+}
+
+.mira_gee_coefficients <- function(model, confidence_level) {
+  model_summary <- summary(model)
+  table <- as.data.frame(model_summary$coefficients, stringsAsFactors = FALSE)
+  table$term <- rownames(table)
+  rownames(table) <- NULL
+  table <- table[c("term", setdiff(names(table), "term"))]
+  estimate_col <- .mira_column_name(table, candidates = "Estimate")
+  se_col <- .mira_column_name(
+    table,
+    candidates = c("Std.err", "Std. Error", "San.se"),
+    contains = c("stderr", "sanse")
+  )
+  estimate <- if (!is.na(estimate_col)) .mira_as_numeric(table[[estimate_col]]) else
+    rep(NA_real_, nrow(table))
+  robust_se <- if (!is.na(se_col)) .mira_as_numeric(table[[se_col]]) else
+    rep(NA_real_, nrow(table))
+  critical <- stats::qnorm(1 - (1 - confidence_level) / 2)
+  table$robust_se <- robust_se
+  table$conf_low <- estimate - critical * robust_se
+  table$conf_high <- estimate + critical * robust_se
+  table
+}
+
+.mira_run_gee <- function(data, fixed_formula, confidence_level) {
+  if (!requireNamespace("geepack", quietly = TRUE)) {
+    skipped <- .mira_skipped_module(
+      "geepack",
+      "Optional package 'geepack' is not installed."
+    )
+    return(list(
+      performed = FALSE,
+      package = "geepack",
+      independence = skipped,
+      exchangeable = skipped,
+      ar1 = skipped,
+      warnings = character(0),
+      error = NULL,
+      reason_skipped = skipped$reason_skipped
+    ))
+  }
+
+  structures <- c(independence = "independence", exchangeable = "exchangeable", ar1 = "ar1")
+  output <- list()
+  all_warnings <- character(0)
+
+  for (name in names(structures)) {
+    correlation <- structures[[name]]
+    fitted <- .mira_eval(
+      geepack::geeglm(
+        formula = fixed_formula,
+        family = stats::gaussian(),
+        data = data,
+        id = data$patient_factor,
+        waves = data$time_index,
+        corstr = correlation,
+        std.err = "san.se"
+      )
+    )
+    all_warnings <- unique(c(all_warnings, fitted$warnings))
+    if (is.null(fitted$value)) {
+      output[[name]] <- list(
+        performed = FALSE, package = "geepack", model = NULL, object = NULL,
+        summary = NULL, coefficients = NULL, effect_tests = NULL, qic = NULL,
+        correlation_structure = correlation, formula = fixed_formula,
+        converged = FALSE, warnings = fitted$warnings, error = fitted$error,
+        reason_skipped = "GEE estimation failed for this working correlation."
+      )
+      next
+    }
+
+    model <- fitted$value
+    summary_eval <- .mira_eval(summary(model))
+    coefficient_eval <- .mira_eval(.mira_gee_coefficients(model, confidence_level))
+    qic_eval <- .mira_eval(geepack::QIC(model))
+    anova_eval <- .mira_eval(stats::anova(model))
+    beta_eval <- .mira_eval(stats::coef(model))
+    vcov_eval <- .mira_eval(stats::vcov(model))
+    effect_rows <- if (!is.null(beta_eval$value) && !is.null(vcov_eval$value)) {
+      lapply(c("TIME", "ARM", "TIME_X_ARM"), function(question) {
+        test <- .mira_wald_chisq(
+          beta_eval$value,
+          vcov_eval$value,
+          .mira_effect_indices(names(beta_eval$value), question)
+        )
+        if (is.null(test)) return(NULL)
+        data.frame(
+          question = question,
+          statistic = test$statistic,
+          df = test$df,
+          p_raw = test$p_value,
+          stringsAsFactors = FALSE
+        )
+      })
+    } else list()
+    effect_rows <- Filter(Negate(is.null), effect_rows)
+    effect_tests <- if (length(effect_rows) > 0L) do.call(rbind, effect_rows) else
+      data.frame(question = character(0), statistic = numeric(0), df = numeric(0),
+                 p_raw = numeric(0), stringsAsFactors = FALSE)
+    warnings <- unique(c(
+      fitted$warnings, summary_eval$warnings, coefficient_eval$warnings,
+      qic_eval$warnings, anova_eval$warnings, beta_eval$warnings, vcov_eval$warnings
+    ))
+    all_warnings <- unique(c(all_warnings, warnings))
+    output[[name]] <- list(
+      performed = TRUE,
+      package = "geepack",
+      model = model,
+      object = model,
+      summary = summary_eval$value,
+      coefficients = coefficient_eval$value,
+      robust_standard_errors = if (!is.null(coefficient_eval$value)) {
+        coefficient_eval$value[c("term", "robust_se", "conf_low", "conf_high")]
+      } else NULL,
+      wald = anova_eval$value,
+      effect_tests = effect_tests,
+      qic = qic_eval$value,
+      correlation_structure = correlation,
+      waves = "time_index (ordered timepoint index)",
+      formula = fixed_formula,
+      converged = tryCatch(isTRUE(model$geese$error == 0), error = function(e) NA),
+      warnings = warnings,
+      error = NULL,
+      errors = Filter(Negate(is.null), list(
+        summary = summary_eval$error,
+        coefficients = coefficient_eval$error,
+        qic = qic_eval$error,
+        anova = anova_eval$error,
+        coefficient_vector = beta_eval$error,
+        covariance = vcov_eval$error
+      )),
+      reason_skipped = NULL
+    )
+  }
+
+  list(
+    performed = any(vapply(output, function(x) isTRUE(x$performed), logical(1L))),
+    package = "geepack",
+    independence = output$independence,
+    exchangeable = output$exchangeable,
+    ar1 = output$ar1,
+    warnings = all_warnings,
+    error = NULL,
+    reason_skipped = NULL
+  )
+}
+
+.mira_lmer_diagnostics <- function(model) {
+  if (is.null(model)) {
+    return(list(converged = FALSE, singular = NA, variance_components = NULL))
+  }
+  optinfo <- tryCatch(model@optinfo, error = function(e) NULL)
+  messages <- if (!is.null(optinfo)) optinfo$conv$lme4$messages else NULL
+  optimizer_ok <- if (!is.null(optinfo) && !is.null(optinfo$conv$opt)) {
+    isTRUE(optinfo$conv$opt == 0)
+  } else TRUE
+  list(
+    converged = optimizer_ok && is.null(messages),
+    singular = tryCatch(lme4::isSingular(model, tol = 1e-4), error = function(e) NA),
+    variance_components = tryCatch(
+      as.data.frame(lme4::VarCorr(model)),
+      error = function(e) NULL
+    )
+  )
+}
+
+.mira_run_random_slope <- function(data,
+                                   arm_enabled,
+                                   covariates,
+                                   mixed_intercept_model) {
+  if (!requireNamespace("lme4", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "lme4",
+      "Optional package 'lme4' is not installed."
+    ))
+  }
+
+  random_term <- "(1 + time_ordinal | patient_factor)"
+  full_core <- if (isTRUE(arm_enabled)) "time_factor * arm_factor" else "time_factor"
+  formula <- .mira_make_lmer_formula(full_core, covariates, random_term)
+  fitted <- .mira_eval(
+    if (requireNamespace("lmerTest", quietly = TRUE)) {
+      lmerTest::lmer(
+        formula, data = data, REML = TRUE, na.action = stats::na.omit
+      )
+    } else {
+      lme4::lmer(
+        formula, data = data, REML = TRUE, na.action = stats::na.omit
+      )
+    }
+  )
+  if (is.null(fitted$value)) {
+    return(list(
+      performed = FALSE, package = "lme4", model = NULL, object = NULL,
+      summary = NULL, tidy = NULL, formula = formula, warnings = fitted$warnings,
+      error = fitted$error,
+      reason_skipped = "The random-slope mixed model could not be estimated."
+    ))
+  }
+
+  model <- fitted$value
+  diagnostics <- .mira_lmer_diagnostics(model)
+  summary_eval <- .mira_eval(summary(model))
+  anova_eval <- .mira_eval(stats::anova(model))
+  fixed_eval <- .mira_eval(as.data.frame(coef(summary(model)), stringsAsFactors = FALSE))
+  if (!is.null(fixed_eval$value)) {
+    fixed_eval$value$term <- rownames(fixed_eval$value)
+    rownames(fixed_eval$value) <- NULL
+    fixed_eval$value <- fixed_eval$value[c("term", setdiff(names(fixed_eval$value), "term"))]
+  }
+  vc <- diagnostics$variance_components
+  random_correlation <- NA_real_
+  if (!is.null(vc)) {
+    correlation_rows <- vc$grp == "patient_factor" & !is.na(vc$var2)
+    if (any(correlation_rows)) random_correlation <- vc$sdcor[which(correlation_rows)[[1L]]]
+  }
+
+  warnings <- unique(c(
+    fitted$warnings, summary_eval$warnings, anova_eval$warnings, fixed_eval$warnings
+  ))
+  errors <- Filter(Negate(is.null), list(
+    summary = summary_eval$error,
+    anova = anova_eval$error,
+    fixed_effects = fixed_eval$error
+  ))
+
+  comparison_eval <- .mira_eval(
+    if (!is.null(mixed_intercept_model)) {
+      stats::anova(mixed_intercept_model, model, refit = FALSE)
+    } else NULL
+  )
+  warnings <- unique(c(warnings, comparison_eval$warnings))
+  if (!is.null(comparison_eval$error)) errors$random_effects_comparison <- comparison_eval$error
+
+  ml_eval <- .mira_eval(
+    lme4::lmer(formula, data = data, REML = FALSE, na.action = stats::na.omit)
+  )
+  warnings <- unique(c(warnings, ml_eval$warnings))
+  if (!is.null(ml_eval$error)) errors$full_ml <- ml_eval$error
+
+  fit_reduced <- function(name, core) {
+    if (is.null(ml_eval$value)) return(NULL)
+    reduced_formula <- .mira_make_lmer_formula(core, covariates, random_term)
+    reduced_eval <- .mira_eval(
+      lme4::lmer(
+        reduced_formula, data = data, REML = FALSE, na.action = stats::na.omit
+      )
+    )
+    warnings <<- unique(c(warnings, reduced_eval$warnings))
+    if (!is.null(reduced_eval$error)) {
+      errors[[paste0(name, "_model")]] <<- reduced_eval$error
+      return(NULL)
+    }
+    test_eval <- .mira_eval(stats::anova(reduced_eval$value, ml_eval$value))
+    warnings <<- unique(c(warnings, test_eval$warnings))
+    if (!is.null(test_eval$error)) errors[[name]] <<- test_eval$error
+    test_eval$value
+  }
+
+  global_time <- global_arm <- interaction <- NULL
+  if (isTRUE(arm_enabled)) {
+    interaction <- fit_reduced("interaction", "time_factor + arm_factor")
+    global_time <- fit_reduced("global_time", "arm_factor")
+    global_arm <- fit_reduced("global_arm", "time_factor")
+  } else {
+    global_time <- fit_reduced("global_time", "1")
+  }
+
+  list(
+    performed = TRUE,
+    package = if (inherits(model, "lmerModLmerTest")) "lmerTest/lme4" else "lme4",
+    model = model,
+    object = model,
+    summary = summary_eval$value,
+    tidy = fixed_eval$value,
+    fixed_effects = fixed_eval$value,
+    fixed_effect_tests = anova_eval$value,
+    variance_components = vc,
+    random_intercept_slope_correlation = random_correlation,
+    formula = formula,
+    time_scale = "ordered timepoint index",
+    note = paste0(
+      "The random slope uses the ordered timepoint index and does not imply ",
+      "equally spaced chronological time."
+    ),
+    AIC = tryCatch(stats::AIC(model), error = function(e) NA_real_),
+    BIC = tryCatch(stats::BIC(model), error = function(e) NA_real_),
+    logLik = tryCatch(as.numeric(stats::logLik(model)), error = function(e) NA_real_),
+    converged = diagnostics$converged,
+    singular = diagnostics$singular,
+    random_effects_lrt = comparison_eval$value,
+    global_time_test = global_time,
+    global_arm_test = global_arm,
+    arm_time_interaction_test = interaction,
+    warnings = warnings,
+    error = NULL,
+    errors = errors,
+    reason_skipped = NULL
+  )
+}
+
+.mira_run_nlme <- function(data, fixed_formula) {
+  if (!requireNamespace("nlme", quietly = TRUE)) {
+    skipped <- .mira_skipped_module(
+      "nlme",
+      "Optional package 'nlme' is not installed."
+    )
+    return(list(
+      performed = FALSE, package = "nlme", compound_symmetry = skipped,
+      ar1 = skipped, comparison = NULL, warnings = character(0), error = NULL,
+      reason_skipped = skipped$reason_skipped
+    ))
+  }
+
+  structures <- list(
+    compound_symmetry = nlme::corCompSymm(form = ~1 | patient_factor),
+    ar1 = nlme::corAR1(form = ~time_index | patient_factor)
+  )
+  output <- list()
+  all_warnings <- character(0)
+  for (name in names(structures)) {
+    fitted <- .mira_eval(
+      nlme::lme(
+        fixed = fixed_formula,
+        random = ~1 | patient_factor,
+        correlation = structures[[name]],
+        data = data,
+        method = "REML",
+        na.action = stats::na.omit,
+        control = nlme::lmeControl(returnObject = TRUE)
+      )
+    )
+    all_warnings <- unique(c(all_warnings, fitted$warnings))
+    if (is.null(fitted$value)) {
+      output[[name]] <- list(
+        performed = FALSE, package = "nlme", model = NULL, object = NULL,
+        summary = NULL, coefficients = NULL, formula = fixed_formula,
+        correlation_structure = if (name == "compound_symmetry") {
+          "compound symmetry"
+        } else "AR(1)",
+        converged = FALSE, warnings = fitted$warnings, error = fitted$error,
+        reason_skipped = "The nlme correlation model could not be estimated."
+      )
+      next
+    }
+    model <- fitted$value
+    summary_eval <- .mira_eval(summary(model))
+    coefficients <- if (!is.null(summary_eval$value)) summary_eval$value$tTable else NULL
+    correlation_parameter <- tryCatch(
+      as.numeric(coef(model$modelStruct$corStruct, unconstrained = FALSE)),
+      error = function(e) NA_real_
+    )
+    warnings <- unique(c(fitted$warnings, summary_eval$warnings))
+    all_warnings <- unique(c(all_warnings, warnings))
+    output[[name]] <- list(
+      performed = TRUE,
+      package = "nlme",
+      model = model,
+      object = model,
+      summary = summary_eval$value,
+      coefficients = coefficients,
+      formula = fixed_formula,
+      correlation_structure = if (name == "compound_symmetry") {
+        "compound symmetry"
+      } else "AR(1)",
+      time_scale = if (name == "ar1") "ordered timepoint index" else NA_character_,
+      correlation_parameter = correlation_parameter,
+      AIC = tryCatch(stats::AIC(model), error = function(e) NA_real_),
+      BIC = tryCatch(stats::BIC(model), error = function(e) NA_real_),
+      logLik = tryCatch(as.numeric(stats::logLik(model)), error = function(e) NA_real_),
+      converged = !any(grepl(
+        "convergence|iteration limit|did not converge",
+        warnings,
+        ignore.case = TRUE
+      )),
+      warnings = warnings,
+      error = NULL,
+      errors = Filter(Negate(is.null), list(summary = summary_eval$error)),
+      reason_skipped = NULL
+    )
+  }
+
+  comparison_rows <- lapply(names(output), function(name) {
+    item <- output[[name]]
+    data.frame(
+      model = name,
+      correlation_structure = item$correlation_structure,
+      AIC = if (isTRUE(item$performed)) item$AIC else NA_real_,
+      BIC = if (isTRUE(item$performed)) item$BIC else NA_real_,
+      logLik = if (isTRUE(item$performed)) item$logLik else NA_real_,
+      converged = if (isTRUE(item$performed)) item$converged else FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  list(
+    performed = any(vapply(output, function(x) isTRUE(x$performed), logical(1L))),
+    package = "nlme",
+    compound_symmetry = output$compound_symmetry,
+    ar1 = output$ar1,
+    comparison = do.call(rbind, comparison_rows),
+    warnings = all_warnings,
+    error = NULL,
+    reason_skipped = NULL
+  )
+}
+
+.mira_run_robust_inference <- function(model, confidence_level) {
+  if (is.null(model)) {
+    return(.mira_skipped_module(
+      "clubSandwich",
+      "The random-intercept mixed model was not available."
+    ))
+  }
+  if (!requireNamespace("clubSandwich", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "clubSandwich",
+      "Optional package 'clubSandwich' is not installed."
+    ))
+  }
+  if (!requireNamespace("lme4", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "clubSandwich",
+      "Package 'lme4' is required for robust mixed-model inference."
+    ))
+  }
+
+  covariance_eval <- .mira_eval(clubSandwich::vcovCR(model, type = "CR2"))
+  if (is.null(covariance_eval$value)) {
+    return(list(
+      performed = FALSE, package = "clubSandwich", object = NULL,
+      summary = NULL, tidy = NULL, warnings = covariance_eval$warnings,
+      error = covariance_eval$error,
+      reason_skipped = "CR2 covariance estimation failed."
+    ))
+  }
+  covariance <- covariance_eval$value
+  coefficient_eval <- .mira_eval(
+    clubSandwich::coef_test(model, vcov = covariance, test = "Satterthwaite")
+  )
+  confidence_eval <- .mira_eval(
+    clubSandwich::conf_int(
+      model,
+      vcov = covariance,
+      level = confidence_level,
+      test = "Satterthwaite"
+    )
+  )
+
+  coefficients <- lme4::fixef(model)
+  effect_tests <- list()
+  warnings <- unique(c(
+    covariance_eval$warnings, coefficient_eval$warnings, confidence_eval$warnings
+  ))
+  errors <- Filter(Negate(is.null), list(
+    coefficients = coefficient_eval$error,
+    confidence_intervals = confidence_eval$error
+  ))
+  for (question in c("TIME", "ARM", "TIME_X_ARM")) {
+    indices <- .mira_effect_indices(names(coefficients), question)
+    if (length(indices) == 0L) next
+    constraint <- diag(length(coefficients))[indices, , drop = FALSE]
+    evaluated <- .mira_eval(
+      clubSandwich::Wald_test(
+        model,
+        constraints = constraint,
+        vcov = covariance,
+        test = "HTZ",
+        tidy = TRUE
+      )
+    )
+    warnings <- unique(c(warnings, evaluated$warnings))
+    if (!is.null(evaluated$error)) errors[[question]] <- evaluated$error
+    effect_tests[[question]] <- evaluated$value
+  }
+
+  list(
+    performed = TRUE,
+    package = "clubSandwich",
+    object = covariance,
+    covariance = covariance,
+    covariance_estimator = "CR2",
+    summary = coefficient_eval$value,
+    tidy = coefficient_eval$value,
+    coefficient_tests = coefficient_eval$value,
+    confidence_intervals = confidence_eval$value,
+    effect_tests = effect_tests,
+    test = "Satterthwaite coefficient tests; HTZ joint Wald tests",
+    warnings = warnings,
+    error = NULL,
+    errors = errors,
+    reason_skipped = NULL
+  )
+}
+
+.mira_run_r2 <- function(model) {
+  if (is.null(model)) {
+    return(.mira_skipped_module(
+      "performance",
+      "The mixed model was not available."
+    ))
+  }
+  if (!requireNamespace("performance", quietly = TRUE)) {
+    return(.mira_skipped_module(
+      "performance",
+      "Optional package 'performance' is not installed."
+    ))
+  }
+  evaluated <- .mira_eval(performance::r2_nakagawa(model))
+  if (is.null(evaluated$value)) {
+    return(list(
+      performed = FALSE, package = "performance", object = NULL,
+      summary = NULL, tidy = NULL, warnings = evaluated$warnings,
+      error = evaluated$error, reason_skipped = "Nakagawa R-squared could not be computed."
+    ))
+  }
+  values <- unlist(evaluated$value, use.names = TRUE)
+  marginal_idx <- grep("marginal", names(values), ignore.case = TRUE)
+  conditional_idx <- grep("conditional", names(values), ignore.case = TRUE)
+  tidy <- data.frame(
+    marginal_r2 = if (length(marginal_idx) > 0L) {
+      as.numeric(values[marginal_idx[[1L]]])
+    } else NA_real_,
+    conditional_r2 = if (length(conditional_idx) > 0L) {
+      as.numeric(values[conditional_idx[[1L]]])
+    } else NA_real_,
+    stringsAsFactors = FALSE
+  )
+  list(
+    performed = TRUE, package = "performance", object = evaluated$value,
+    summary = evaluated$value, tidy = tidy, warnings = evaluated$warnings,
+    error = NULL, reason_skipped = NULL
+  )
+}
+
+.mira_qic_value <- function(qic, name) {
+  if (is.null(qic)) return(NA_real_)
+  if (is.matrix(qic) || is.data.frame(qic)) {
+    column <- match(tolower(name), tolower(colnames(qic)), nomatch = 0L)
+    if (column > 0L) return(.mira_as_numeric(qic[1L, column])[[1L]])
+  }
+  values <- unlist(qic, use.names = TRUE)
+  index <- match(tolower(name), tolower(names(values)), nomatch = 0L)
+  if (index > 0L) .mira_as_numeric(values[[index]])[[1L]] else NA_real_
+}
+
+.mira_build_model_comparison <- function(data,
+                                         fixed_formula,
+                                         mixed_model,
+                                         mixed_converged,
+                                         mixed_singular,
+                                         random_slope,
+                                         nlme_models,
+                                         gee_models) {
+  default_n <- nrow(data)
+  default_subjects <- length(unique(data$patient_factor))
+  safe_nobs <- function(model) {
+    if (is.null(model)) return(default_n)
+    value <- tryCatch(as.integer(stats::nobs(model)), error = function(e) NA_integer_)
+    if (length(value) == 0L || is.na(value[[1L]])) default_n else value[[1L]]
+  }
+  likelihood <- function(model, fun) {
+    if (is.null(model)) return(NA_real_)
+    tryCatch(as.numeric(fun(model)), error = function(e) NA_real_)
+  }
+  row <- function(model_name,
+                  model,
+                  formula,
+                  converged,
+                  singular,
+                  correlation_structure,
+                  object_path,
+                  likelihood_based = TRUE,
+                  qic = NA_real_,
+                  cic = NA_real_) {
+    data.frame(
+      model = model_name,
+      formula = .mira_formula_text(formula),
+      n = safe_nobs(model),
+      n_subjects = default_subjects,
+      AIC = if (likelihood_based) likelihood(model, stats::AIC) else NA_real_,
+      BIC = if (likelihood_based) likelihood(model, stats::BIC) else NA_real_,
+      logLik = if (likelihood_based) likelihood(model, stats::logLik) else NA_real_,
+      QIC = qic,
+      CIC = cic,
+      converged = if (length(converged) == 0L) NA else as.logical(converged)[[1L]],
+      singular = if (length(singular) == 0L) NA else as.logical(singular)[[1L]],
+      correlation_structure = correlation_structure,
+      object_path = object_path,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  ri_formula <- if (!is.null(mixed_model)) {
+    stats::formula(mixed_model)
+  } else {
+    stats::as.formula(paste(
+      .mira_formula_text(fixed_formula),
+      "+ (1 | patient_factor)"
+    ))
+  }
+  random_slope_formula <- if (!is.null(random_slope$formula)) {
+    random_slope$formula
+  } else {
+    stats::as.formula(paste(
+      .mira_formula_text(fixed_formula),
+      "+ (1 + time_ordinal | patient_factor)"
+    ))
+  }
+  rows <- list(
+    row(
+      "mixed_random_intercept", mixed_model, ri_formula, mixed_converged,
+      mixed_singular, "random intercept", "result$model$fitted_model"
+    ),
+    row(
+      "mixed_random_slope", random_slope$model, random_slope_formula,
+      random_slope$converged, random_slope$singular,
+      "random intercept + ordinal-time slope",
+      "result$advanced_models$random_slope$model"
+    ),
+    row(
+      "nlme_compound_symmetry", nlme_models$compound_symmetry$model,
+      fixed_formula, nlme_models$compound_symmetry$converged, NA,
+      "compound symmetry", "result$advanced_models$nlme$compound_symmetry$model"
+    ),
+    row(
+      "nlme_ar1", nlme_models$ar1$model, fixed_formula,
+      nlme_models$ar1$converged, NA, "AR(1)",
+      "result$advanced_models$nlme$ar1$model"
+    )
+  )
+
+  for (name in c("independence", "exchangeable", "ar1")) {
+    item <- gee_models[[name]]
+    rows[[length(rows) + 1L]] <- row(
+      paste0("gee_", name), item$model, fixed_formula, item$converged, NA,
+      name, paste0("result$advanced_models$gee$", name, "$model"),
+      likelihood_based = FALSE,
+      qic = .mira_qic_value(item$qic, "QIC"),
+      cic = .mira_qic_value(item$qic, "CIC")
+    )
+  }
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  attr(out, "note") <- paste0(
+    "Likelihood criteria are descriptive and do not identify a uniquely true model. ",
+    "GEE rows use QIC/CIC and intentionally leave AIC, BIC, and logLik unavailable."
+  )
+  out
+}
+
+.mira_sensitivity_row <- function(question,
+                                  method,
+                                  statistic = NA_real_,
+                                  df = NA_character_,
+                                  p_raw = NA_real_,
+                                  effect_size = NA_real_,
+                                  effect_size_type = NA_character_,
+                                  n = NA_integer_,
+                                  object_path,
+                                  note = NA_character_) {
+  data.frame(
+    question = question,
+    method = method,
+    statistic = as.numeric(statistic)[[1L]],
+    df = as.character(df)[[1L]],
+    p_raw = as.numeric(p_raw)[[1L]],
+    effect_size = as.numeric(effect_size)[[1L]],
+    effect_size_type = as.character(effect_size_type)[[1L]],
+    n = as.integer(n)[[1L]],
+    object_path = object_path,
+    note = as.character(note)[[1L]],
+    stringsAsFactors = FALSE
+  )
+}
+
+.mira_lrt_sensitivity <- function(test, question, method, object_path, n, note = NA_character_) {
+  if (is.null(test)) return(NULL)
+  table <- tryCatch(as.data.frame(test), error = function(e) NULL)
+  if (is.null(table) || nrow(table) == 0L) return(NULL)
+  p_col <- .mira_column_name(
+    table,
+    candidates = c("Pr(>Chisq)", "p.value", "p"),
+    contains = c("prchisq", "pvalue")
+  )
+  statistic_col <- .mira_column_name(
+    table,
+    candidates = c("Chisq", "L.Ratio", "F", "Deviance"),
+    contains = c("chisq", "lratio")
+  )
+  df_col <- .mira_column_name(
+    table,
+    candidates = c("Chi Df", "Df", "numDF"),
+    contains = c("chidf", "numdf")
+  )
+  p <- if (!is.na(p_col)) .mira_as_numeric(table[[p_col]]) else rep(NA_real_, nrow(table))
+  candidate <- which(is.finite(p))
+  index <- if (length(candidate) > 0L) tail(candidate, 1L) else nrow(table)
+  .mira_sensitivity_row(
+    question = question,
+    method = method,
+    statistic = if (!is.na(statistic_col)) .mira_as_numeric(table[[statistic_col]])[[index]] else NA_real_,
+    df = if (!is.na(df_col)) .mira_as_numeric(table[[df_col]])[[index]] else NA_real_,
+    p_raw = p[[index]],
+    n = n,
+    object_path = object_path,
+    note = note
+  )
+}
+
+.mira_match_effect <- function(table, question) {
+  if (is.null(table) || nrow(table) == 0L || !"effect" %in% names(table)) return(integer(0))
+  effect <- tolower(gsub("[^[:alnum:]]+", "", table$effect))
+  has_time <- grepl("timefactor|time", effect)
+  has_arm <- grepl("armfactor|arm", effect)
+  if (question == "TIME_X_ARM") which(has_time & has_arm) else if (question == "TIME") {
+    which(has_time & !has_arm)
+  } else if (question == "ARM") which(has_arm & !has_time) else integer(0)
+}
+
+.mira_build_sensitivity <- function(mixed_tests,
+                                    rm_anova,
+                                    friedman,
+                                    gee,
+                                    random_slope,
+                                    robust,
+                                    n_default) {
+  rows <- list()
+  add <- function(value) {
+    if (!is.null(value)) rows[[length(rows) + 1L]] <<- value
+  }
+
+  add(.mira_lrt_sensitivity(
+    mixed_tests$global_time, "TIME", "Mixed model: random-intercept LRT",
+    "result$model$global_time_test", n_default
+  ))
+  add(.mira_lrt_sensitivity(
+    mixed_tests$global_arm, "ARM", "Mixed model: random-intercept LRT",
+    "result$model$global_arm_test", n_default
+  ))
+  add(.mira_lrt_sensitivity(
+    mixed_tests$interaction, "TIME_X_ARM", "Mixed model: random-intercept LRT",
+    "result$model$arm_time_interaction_test", n_default
+  ))
+
+  if (isTRUE(rm_anova$performed) && !is.null(rm_anova$tidy)) {
+    for (question in c("TIME", "ARM", "TIME_X_ARM")) {
+      index <- .mira_match_effect(rm_anova$tidy, question)
+      if (length(index) == 0L) next
+      r <- rm_anova$tidy[index[[1L]], , drop = FALSE]
+      df_raw <- paste(r$df_num, r$df_den, sep = "/")
+      add(.mira_sensitivity_row(
+        question, "RM-ANOVA (uncorrected)", r$statistic, df_raw, r$p_value,
+        r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
+        "result$advanced_tests$rm_anova$object",
+        "Complete-profile repeated-measures analysis."
+      ))
+      if (question != "ARM" && "p_gg" %in% names(r)) {
+        add(.mira_sensitivity_row(
+          question, "RM-ANOVA (Greenhouse-Geisser)", r$statistic,
+          paste(r$df_num_gg, r$df_den_gg, sep = "/"), r$p_gg,
+          r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
+          "result$advanced_tests$rm_anova$tables$greenhouse_geisser",
+          "Degrees of freedom and p-value corrected for sphericity."
+        ))
+      }
+      if (question != "ARM" && "p_hf" %in% names(r)) {
+        add(.mira_sensitivity_row(
+          question, "RM-ANOVA (Huynh-Feldt)", r$statistic,
+          paste(r$df_num_hf, r$df_den_hf, sep = "/"), r$p_hf,
+          r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
+          "result$advanced_tests$rm_anova$tables$huynh_feldt",
+          "Degrees of freedom and p-value corrected for sphericity."
+        ))
+      }
+    }
+  }
+
+  if (isTRUE(friedman$performed)) {
+    f <- friedman$tidy[1L, ]
+    add(.mira_sensitivity_row(
+      "TIME", "Friedman test", f$statistic, f$df, f$p_raw,
+      f$kendalls_w, "Kendall's W", f$n,
+      "result$advanced_tests$friedman$test",
+      "Rank-based complete-profile global test."
+    ))
+  }
+
+  for (structure in c("independence", "exchangeable", "ar1")) {
+    item <- gee[[structure]]
+    if (is.null(item) || !isTRUE(item$performed) || is.null(item$effect_tests)) next
+    for (i in seq_len(nrow(item$effect_tests))) {
+      r <- item$effect_tests[i, ]
+      add(.mira_sensitivity_row(
+        r$question, paste0("GEE (", structure, ")"), r$statistic, r$df, r$p_raw,
+        NA_real_, NA_character_, tryCatch(stats::nobs(item$model), error = function(e) n_default),
+        paste0("result$advanced_models$gee$", structure, "$model"),
+        "Robust sandwich Wald test under the stated working correlation."
+      ))
+    }
+  }
+
+  add(.mira_lrt_sensitivity(
+    random_slope$global_time_test, "TIME", "Mixed model: random-slope LRT",
+    "result$advanced_models$random_slope$global_time_test", n_default,
+    "Random slope uses the ordinal timepoint index."
+  ))
+  add(.mira_lrt_sensitivity(
+    random_slope$global_arm_test, "ARM", "Mixed model: random-slope LRT",
+    "result$advanced_models$random_slope$global_arm_test", n_default,
+    "Random slope uses the ordinal timepoint index."
+  ))
+  add(.mira_lrt_sensitivity(
+    random_slope$arm_time_interaction_test, "TIME_X_ARM",
+    "Mixed model: random-slope LRT",
+    "result$advanced_models$random_slope$arm_time_interaction_test", n_default,
+    "Random slope uses the ordinal timepoint index."
+  ))
+
+  if (isTRUE(robust$performed) && length(robust$effect_tests) > 0L) {
+    for (question in names(robust$effect_tests)) {
+      table <- robust$effect_tests[[question]]
+      if (is.null(table)) next
+      table <- tryCatch(
+        as.data.frame(table, stringsAsFactors = FALSE),
+        error = function(e) NULL
+      )
+      if (is.null(table)) next
+      if (nrow(table) == 0L) next
+      f_col <- .mira_column_name(table, candidates = c("Fstat", "F"))
+      dfn_col <- .mira_column_name(table, candidates = c("df_num", "df num"))
+      dfd_col <- .mira_column_name(table, candidates = c("df_denom", "df denom"))
+      p_col <- .mira_column_name(table, candidates = c("p_val", "p.value", "p"))
+      add(.mira_sensitivity_row(
+        question, "Mixed model: CR2/HTZ robust Wald test",
+        if (!is.na(f_col)) .mira_as_numeric(table[[f_col]])[[1L]] else NA_real_,
+        paste(
+          if (!is.na(dfn_col)) .mira_as_numeric(table[[dfn_col]])[[1L]] else NA_real_,
+          if (!is.na(dfd_col)) .mira_as_numeric(table[[dfd_col]])[[1L]] else NA_real_,
+          sep = "/"
+        ),
+        if (!is.na(p_col)) .mira_as_numeric(table[[p_col]])[[1L]] else NA_real_,
+        NA_real_, NA_character_, n_default,
+        paste0("result$robustness$club_sandwich$effect_tests$", question),
+        "CR2 covariance with small-sample HTZ correction."
+      ))
+    }
+  }
+
+  if (length(rows) == 0L) {
+    return(data.frame(
+      question = character(0), method = character(0), statistic = numeric(0),
+      df = character(0), p_raw = numeric(0), effect_size = numeric(0),
+      effect_size_type = character(0), n = integer(0), object_path = character(0),
+      note = character(0), stringsAsFactors = FALSE
+    ))
+  }
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  attr(out, "interpretation") <- paste0(
+    "Use this table to compare sensitivity across methods. It is not a majority vote ",
+    "and does not designate an effect as true based on the number of small p-values."
+  )
+  out
+}
+
+.mira_multiplicity_family <- function(table, primary_method, object_path) {
+  list(
+    primary_method = primary_method,
+    available_adjustments = c("raw", "bonferroni", "holm", "BH", "BY"),
+    table = table,
+    object_path = object_path
+  )
+}
+
+.mira_run_advanced_inference <- function(analysis_data,
+                                         long_data,
+                                         time_vars,
+                                         time_labels,
+                                         arm_enabled,
+                                         arm_levels,
+                                         covariates,
+                                         categorical_covariates,
+                                         primary_method,
+                                         confidence_level,
+                                         model_enabled,
+                                         mixed_model,
+                                         mixed_converged,
+                                         mixed_singular,
+                                         global_time_test,
+                                         global_arm_test,
+                                         interaction_test,
+                                         change,
+                                         icc_model) {
+  time_levels <- unname(time_labels[time_vars])
+  advanced_data <- .mira_prepare_advanced_data(
+    long_data = long_data,
+    time_levels = time_levels,
+    arm_enabled = arm_enabled,
+    arm_levels = arm_levels,
+    covariates = covariates,
+    categorical_covariates = categorical_covariates
+  )
+  fixed_formula <- .mira_make_fixed_formula(arm_enabled, covariates)
+  friedman <- .mira_run_friedman(
+    analysis_data, time_vars, time_labels, primary_method
+  )
+
+  if (isTRUE(model_enabled)) {
+    emmeans <- .mira_run_emmeans(
+      mixed_model, arm_enabled, primary_method, confidence_level
+    )
+    rm_anova <- .mira_run_rm_anova(
+      advanced_data, arm_enabled, covariates, categorical_covariates
+    )
+    gee <- .mira_run_gee(advanced_data, fixed_formula, confidence_level)
+    random_slope <- .mira_run_random_slope(
+      advanced_data, arm_enabled, covariates, mixed_model
+    )
+    nlme_models <- .mira_run_nlme(advanced_data, fixed_formula)
+    robust <- .mira_run_robust_inference(mixed_model, confidence_level)
+  } else {
+    reason <- "Advanced model-based analyses were disabled by model = FALSE."
+    emmeans <- .mira_skipped_module("emmeans", reason)
+    rm_anova <- .mira_skipped_module("afex", reason)
+    random_slope <- .mira_skipped_module("lme4", reason)
+    robust <- .mira_skipped_module("clubSandwich", reason)
+    gee_item <- .mira_skipped_module("geepack", reason)
+    gee <- list(
+      performed = FALSE, package = "geepack", independence = gee_item,
+      exchangeable = gee_item, ar1 = gee_item, warnings = character(0),
+      error = NULL, reason_skipped = reason
+    )
+    nlme_item <- .mira_skipped_module("nlme", reason)
+    nlme_models <- list(
+      performed = FALSE, package = "nlme", compound_symmetry = nlme_item,
+      ar1 = nlme_item, comparison = NULL, warnings = character(0),
+      error = NULL, reason_skipped = reason
+    )
+  }
+
+  random_intercept_r2 <- .mira_run_r2(mixed_model)
+  random_slope_r2 <- .mira_run_r2(random_slope$model)
+  model_comparison <- .mira_build_model_comparison(
+    advanced_data, fixed_formula, mixed_model, mixed_converged, mixed_singular,
+    random_slope, nlme_models, gee
+  )
+  sensitivity <- .mira_build_sensitivity(
+    mixed_tests = list(
+      global_time = global_time_test,
+      global_arm = global_arm_test,
+      interaction = interaction_test
+    ),
+    rm_anova = rm_anova,
+    friedman = friedman,
+    gee = gee,
+    random_slope = random_slope,
+    robust = robust,
+    n_default = nrow(advanced_data)
+  )
+
+  paired_effects <- if (!is.null(change) && nrow(change) > 0L) {
+    change[c("from", "to", "from_label", "to_label", "n", "cohens_dz")]
+  } else data.frame()
+  friedman_effects <- if (!is.null(friedman$posthoc$tidy) &&
+                          nrow(friedman$posthoc$tidy) > 0L) {
+    friedman$posthoc$tidy[c(
+      "from", "to", "from_label", "to_label", "n", "rank_biserial"
+    )]
+  } else data.frame()
+  rm_effects <- if (isTRUE(rm_anova$performed) && !is.null(rm_anova$tidy)) {
+    rm_anova$tidy[c(
+      "effect", "partial_eta_squared", "generalized_eta_squared"
+    )]
+  } else data.frame()
+
+  emmeans_ok <- isTRUE(emmeans$performed)
+  multiplicity <- list(
+    primary_method = primary_method,
+    note = "P-values are adjusted within scientifically distinct contrast families.",
+    time_pairwise = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$time$pairwise_tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$time$pairwise"
+    ),
+    baseline_vs_followup = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$baseline_followup$tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$baseline_followup$object"
+    ),
+    consecutive_time = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$consecutive$tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$consecutive$object"
+    ),
+    ordinal_trends = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$trends$tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$trends$object"
+    ),
+    arm_pairwise = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$arm$pairwise_tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$arm$pairwise"
+    ),
+    simple_effects = list(
+      arm_within_time = .mira_multiplicity_family(
+        if (emmeans_ok) emmeans$arm_time$simple_arm_tidy else NULL,
+        primary_method,
+        "result$advanced_tests$emmeans$arm_time$simple_arm"
+      ),
+      time_within_arm = .mira_multiplicity_family(
+        if (emmeans_ok) emmeans$arm_time$simple_time_tidy else NULL,
+        primary_method,
+        "result$advanced_tests$emmeans$arm_time$simple_time"
+      )
+    ),
+    interaction_contrasts = .mira_multiplicity_family(
+      if (emmeans_ok) emmeans$arm_time$interaction_tidy else NULL,
+      primary_method,
+      "result$advanced_tests$emmeans$arm_time$interaction"
+    ),
+    friedman_posthoc = .mira_multiplicity_family(
+      friedman$posthoc$tidy,
+      primary_method,
+      "result$advanced_tests$friedman$posthoc$tests"
+    )
+  )
+
+  list(
+    advanced_tests = list(
+      emmeans = emmeans,
+      rm_anova = rm_anova,
+      friedman = friedman
+    ),
+    advanced_models = list(
+      random_slope = random_slope,
+      nlme = nlme_models,
+      gee = gee,
+      model_comparison = model_comparison
+    ),
+    robustness = list(club_sandwich = robust),
+    effect_sizes = list(
+      paired_cohens_dz = paired_effects,
+      paired_rank_biserial = friedman_effects,
+      rm_anova = rm_effects,
+      friedman = list(kendalls_w = friedman$tidy$kendalls_w, object_path =
+                        "result$advanced_tests$friedman$test"),
+      mixed_models = list(
+        random_intercept = random_intercept_r2,
+        random_slope = random_slope_r2,
+        ICC = icc_model
+      )
+    ),
+    multiplicity = multiplicity,
+    sensitivity = sensitivity,
+    data = advanced_data,
+    formula = fixed_formula
+  )
+}
+
+.mira_failed_advanced <- function(error, warnings = character(0)) {
+  reason <- "Advanced longitudinal inference was unavailable because its protected wrapper failed."
+  skipped <- .mira_skipped_module(NA_character_, reason)
+  skipped$error <- error
+  skipped$warnings <- warnings
+  empty_sensitivity <- data.frame(
+    question = character(0), method = character(0), statistic = numeric(0),
+    df = character(0), p_raw = numeric(0), effect_size = numeric(0),
+    effect_size_type = character(0), n = integer(0), object_path = character(0),
+    note = character(0), stringsAsFactors = FALSE
+  )
+  list(
+    advanced_tests = list(emmeans = skipped, rm_anova = skipped, friedman = skipped),
+    advanced_models = list(
+      random_slope = skipped,
+      nlme = list(compound_symmetry = skipped, ar1 = skipped, comparison = NULL),
+      gee = list(independence = skipped, exchangeable = skipped, ar1 = skipped),
+      model_comparison = data.frame()
+    ),
+    robustness = list(club_sandwich = skipped),
+    effect_sizes = list(),
+    multiplicity = list(),
+    sensitivity = empty_sensitivity,
+    data = NULL,
+    formula = NULL,
+    error = error,
     warnings = warnings
   )
 }
@@ -668,13 +2543,13 @@
   }
 
   if (!strict_id && missing_id_n > 0L) {
-    warning(sprintf("Sono presenti %d ID mancanti.", missing_id_n), call. = FALSE)
+    warning(sprintf("There are %d missing IDs.", missing_id_n), call. = FALSE)
   }
 
   if (!strict_id && duplicated_id_n > 0L) {
     warning(
       sprintf(
-        "%d ID duplicati: saranno trattati come osservazioni dello stesso soggetto.",
+        "%d duplicated IDs will be treated as observations from the same subject.",
         duplicated_id_n
       ),
       call. = FALSE
@@ -714,7 +2589,7 @@
     if (length(observed_arms) < 2L) {
       warning(
         sprintf(
-          "La variabile '%s' contiene meno di due gruppi osservati; le analisi tra arm saranno disabilitate.",
+          "Variable '%s' contains fewer than two observed groups; treatment-arm analyses will be disabled.",
           arm
         ),
         call. = FALSE
@@ -760,7 +2635,7 @@
     if (missing_arm_n > 0L) {
       warning(
         sprintf(
-          "%d soggetti hanno arm mancante e saranno esclusi solo dalle analisi tra gruppi.",
+          "%d subjects have a missing treatment arm and will be excluded only from between-group analyses.",
           missing_arm_n
         ),
         call. = FALSE
@@ -919,7 +2794,7 @@
   if (total_non_finite > 0L) {
     warning(
       sprintf(
-        "%d valori Inf/-Inf nelle variabili longitudinali saranno trattati come NA nelle analisi.",
+        "%d Inf/-Inf values in longitudinal variables will be treated as NA in analyses.",
         total_non_finite
       ),
       call. = FALSE
@@ -1822,6 +3697,7 @@
   model_covariates_used <- character(0)
   model_covariates_skipped <- character(0)
   model_fixed_parameters <- NA_integer_
+  model_data <- NULL
 
   if (model) {
     if (!requireNamespace("lme4", quietly = TRUE)) {
@@ -2116,6 +3992,48 @@
   variability[[paste0(outcome_name, "_grand_mean")]] <- variability$grand_mean
   variability[[paste0(outcome_name, "_between_subject_sd")]] <- variability$between_subject_sd
   variability[[paste0(outcome_name, "_within_subject_sd")]] <- variability$within_subject_sd
+
+  # ----------------------------------------------------------
+  # 12B. ADVANCED LONGITUDINAL INFERENCE
+  # ----------------------------------------------------------
+
+  advanced_covariates <- if (isTRUE(model) &&
+                             requireNamespace("lme4", quietly = TRUE)) {
+    model_covariates_used
+  } else {
+    .covariates
+  }
+  advanced_eval <- .mira_eval(
+    .mira_run_advanced_inference(
+      analysis_data = analysis_data,
+      long_data = if (!is.null(model_data)) model_data else long_data,
+      time_vars = time_vars,
+      time_labels = time_labels,
+      arm_enabled = arm_available && arm_tests && length(arm_levels) >= 2L,
+      arm_levels = arm_levels,
+      covariates = advanced_covariates,
+      categorical_covariates = intersect(
+        .categorical_covariates,
+        advanced_covariates
+      ),
+      primary_method = p_adjust_method,
+      confidence_level = confidence_level,
+      model_enabled = model,
+      mixed_model = mixed_model,
+      mixed_converged = model_converged,
+      mixed_singular = model_singular,
+      global_time_test = global_time_test,
+      global_arm_test = global_arm_test,
+      interaction_test = arm_time_interaction_test,
+      change = change,
+      icc_model = icc_model
+    )
+  )
+  advanced_results <- if (is.null(advanced_eval$value)) {
+    .mira_failed_advanced(advanced_eval$error, advanced_eval$warnings)
+  } else {
+    advanced_eval$value
+  }
 
   # ----------------------------------------------------------
   # 13. OUTLIERS (IQR FLAGS; NOT AUTOMATIC EXCLUSIONS)
@@ -3020,6 +4938,12 @@
       covariates_skipped = model_covariates_skipped,
       fixed_parameters = model_fixed_parameters
     ),
+    advanced_tests = advanced_results$advanced_tests,
+    advanced_models = advanced_results$advanced_models,
+    robustness = advanced_results$robustness,
+    effect_sizes = advanced_results$effect_sizes,
+    multiplicity = advanced_results$multiplicity,
+    sensitivity = advanced_results$sensitivity,
     outliers = list(
       note = "IQR flags are diagnostic flags and are not automatically excluded from analyses.",
       by_time = if (outliers) outlier_results else NULL,
@@ -3234,8 +5158,8 @@
     groups <- .mira_name_groups(detected$groups)
     if (length(detected$ambiguous_groups) > 0L) {
       warnings <- c(warnings, sprintf(
-        paste0("Gruppi longitudinali con timepoint ambigui esclusi dall'auto-detection: %s. ",
-               "Specificare time_vars e, se necessario, time_labels."),
+        paste0("Longitudinal groups with ambiguous timepoints were excluded from automatic detection: %s. ",
+               "Specify time_vars and, if needed, time_labels."),
         paste(names(detected$ambiguous_groups), collapse = ", ")
       ))
     }
@@ -3289,8 +5213,8 @@
   ambiguous_manual <- names(groups)[vapply(groups, function(x) isTRUE(x$ambiguous_order), logical(1L))]
   if (!is.null(time_vars) && is.null(time_labels) && length(ambiguous_manual) > 0L) {
     warnings <- c(warnings, sprintf(
-      paste0("Ordine dei timepoint non deducibile per %s: è stato mantenuto l'ordine di time_vars. ",
-             "Specificare time_labels per rendere la mappa esplicita."),
+      paste0("Timepoint order could not be inferred for %s: the time_vars order was retained. ",
+             "Specify time_labels to make the mapping explicit."),
       paste(ambiguous_manual, collapse = ", ")
     ))
   }
@@ -3384,7 +5308,7 @@
   observed <- unique(raw[!is.na(raw)])
   if (length(observed) == 0L) {
     return(list(value = NULL, automatic = is.null(reference_arm),
-                warnings = sprintf("La variabile arm '%s' non contiene gruppi osservati.", arm)))
+                warnings = sprintf("Treatment-arm variable '%s' contains no observed groups.", arm)))
   }
 
   if (!is.null(reference_arm)) {
@@ -3408,7 +5332,7 @@
     control_counts <- table(factor(raw, levels = control_like), useNA = "no")
     chosen <- control_like[which.max(as.numeric(control_counts))]
     warnings <- sprintf(
-      "Più reference arm plausibili (%s): scelto il più numeroso '%s'.",
+      "Multiple plausible reference arms (%s): the largest group '%s' was selected.",
       paste(control_like, collapse = ", "), chosen
     )
   } else {
@@ -3485,12 +5409,12 @@
     }
     if (!strict_id && missing_id_n > 0L) {
       id_validation_warnings <- c(id_validation_warnings, sprintf(
-        "La variabile ID '%s' contiene %d valori mancanti.", selected_id, missing_id_n
+        "ID variable '%s' contains %d missing values.", selected_id, missing_id_n
       ))
     }
     if (!strict_id && duplicated_id_n > 0L) {
       id_validation_warnings <- c(id_validation_warnings, sprintf(
-        "La variabile ID '%s' contiene %d duplicati.", selected_id, duplicated_id_n
+        "ID variable '%s' contains %d duplicates.", selected_id, duplicated_id_n
       ))
     }
   }
@@ -3532,7 +5456,7 @@
   )
   if (length(detected_longitudinal$non_numeric_matches) > 0L) {
     warnings <- c(warnings, sprintf(
-      "Colonne con nome longitudinale ma tipo non numerico escluse: %s.",
+      "Columns with longitudinal names but non-numeric types were excluded: %s.",
       paste(detected_longitudinal$non_numeric_matches, collapse = ", ")
     ))
   }
@@ -3849,7 +5773,7 @@ mira_info <- function(data,
   failed <- names(outcome_results)[vapply(outcome_results, inherits, logical(1L),
                                           what = "mira_info_error")]
   if (length(failed) > 0L) {
-    warning(sprintf("Analisi non completate per: %s. Consultare result$outcomes.",
+    warning(sprintf("Analyses were not completed for: %s. See result$outcomes.",
                     paste(failed, collapse = ", ")), call. = FALSE)
   }
 
@@ -4527,6 +6451,134 @@ print.mira_info <- function(x,
   }
 
   # ------------------------------------------------------------------
+  # ADVANCED LONGITUDINAL INFERENCE
+  # ------------------------------------------------------------------
+  if (model && (!is.null(x$advanced_tests) || !is.null(x$advanced_models))) {
+    section("ADVANCED LONGITUDINAL INFERENCE")
+
+    rm <- x$advanced_tests$rm_anova
+    cat("RM-ANOVA:\n")
+    if (!is.null(rm) && isTRUE(rm$performed) && !is.null(rm$tidy)) {
+      for (question in c("TIME", "ARM", "TIME_X_ARM")) {
+        idx <- .mira_match_effect(rm$tidy, question)
+        if (length(idx) == 0L) next
+        row <- rm$tidy[idx[[1L]], , drop = FALSE]
+        gg <- if ("p_gg" %in% names(row)) fmt_p(row$p_gg) else "NA"
+        cat(sprintf("  %s: F=%s | p=%s | GG p=%s\n",
+                    question, fmt_num(row$statistic), fmt_p(row$p_value), gg))
+      }
+      cat("  Full object: result$advanced_tests$rm_anova$object\n")
+    } else {
+      reason <- if (!is.null(rm$reason_skipped)) rm$reason_skipped else "not available"
+      cat("  Not available: ", reason, "\n", sep = "")
+    }
+
+    friedman <- x$advanced_tests$friedman
+    cat("Friedman:\n")
+    if (!is.null(friedman) && isTRUE(friedman$performed)) {
+      row <- friedman$tidy[1L, ]
+      cat(sprintf("  statistic=%s | df=%s | p=%s | Kendall W=%s\n",
+                  fmt_num(row$statistic), fmt_num(row$df, 0L),
+                  fmt_p(row$p_raw), fmt_num(row$kendalls_w)))
+      cat("  Full test: result$advanced_tests$friedman$test\n")
+    } else {
+      reason <- if (!is.null(friedman$reason_skipped)) {
+        friedman$reason_skipped
+      } else "not available"
+      cat("  Not available: ", reason, "\n", sep = "")
+    }
+
+    cat("GEE robust Wald inference:\n")
+    gee <- x$advanced_models$gee
+    for (structure in c("independence", "exchangeable", "ar1")) {
+      item <- gee[[structure]]
+      if (!is.null(item) && isTRUE(item$performed)) {
+        time_row <- item$effect_tests[item$effect_tests$question == "TIME", , drop = FALSE]
+        interaction_row <- item$effect_tests[
+          item$effect_tests$question == "TIME_X_ARM", , drop = FALSE
+        ]
+        cat(sprintf(
+          "  %-12s TIME p=%s%s\n",
+          structure,
+          if (nrow(time_row) > 0L) fmt_p(time_row$p_raw[[1L]]) else "NA",
+          if (nrow(interaction_row) > 0L) {
+            paste0(" | TIME x ARM p=", fmt_p(interaction_row$p_raw[[1L]]))
+          } else ""
+        ))
+      } else {
+        cat(sprintf("  %-12s not available\n", structure))
+      }
+    }
+    cat("  Models: result$advanced_models$gee\n")
+
+    cat("Mixed models:\n")
+    random_slope <- x$advanced_models$random_slope
+    cat(sprintf("  random intercept: %s\n",
+                if (!is.null(x$model$fitted_model)) "available" else "not available"))
+    if (!is.null(random_slope) && isTRUE(random_slope$performed)) {
+      cat(sprintf("  random slope: available | converged=%s | singular=%s\n",
+                  as.character(random_slope$converged), as.character(random_slope$singular)))
+      cat("  Full object: result$advanced_models$random_slope$model\n")
+    } else {
+      cat("  random slope: not available\n")
+    }
+
+    cat("Correlation structures:\n")
+    nlme_models <- x$advanced_models$nlme
+    for (name in c("compound_symmetry", "ar1")) {
+      item <- nlme_models[[name]]
+      label <- if (name == "compound_symmetry") "CS" else "AR1"
+      if (!is.null(item) && isTRUE(item$performed)) {
+        cat(sprintf("  %s: available | AIC=%s | BIC=%s\n",
+                    label, fmt_num(item$AIC), fmt_num(item$BIC)))
+      } else {
+        cat(sprintf("  %s: not available\n", label))
+      }
+    }
+    cat("  Models: result$advanced_models$nlme\n")
+
+    cat("Robust mixed-model inference:\n")
+    robust <- x$robustness$club_sandwich
+    if (!is.null(robust) && isTRUE(robust$performed)) {
+      cat("  CR2 covariance with Satterthwaite/HTZ tests available.\n")
+      cat("  Full results: result$robustness$club_sandwich\n")
+    } else {
+      cat("  Not available.\n")
+    }
+
+    emmeans <- x$advanced_tests$emmeans
+    cat("Key marginal contrasts:\n")
+    if (!is.null(emmeans) && isTRUE(emmeans$performed)) {
+      baseline_final <- emmeans$baseline_final$tidy
+      baseline_followup <- emmeans$baseline_followup$tidy
+      if (!is.null(baseline_final) && nrow(baseline_final) > 0L) {
+        cat(sprintf("  baseline vs final: estimate=%s | primary-adjusted p=%s\n",
+                    fmt_num(baseline_final$estimate[[1L]]),
+                    fmt_p(baseline_final$p_primary[[1L]])))
+      }
+      cat(sprintf("  baseline vs follow-ups: %d contrast(s)\n",
+                  if (is.null(baseline_followup)) 0L else nrow(baseline_followup)))
+      cat("  Full objects: result$advanced_tests$emmeans\n")
+    } else {
+      cat("  Not available.\n")
+    }
+
+    sensitivity <- x$sensitivity
+    cat("Sensitivity:\n")
+    if (is.data.frame(sensitivity) && nrow(sensitivity) > 0L) {
+      available_p <- sensitivity$p_raw[is.finite(sensitivity$p_raw)]
+      range_text <- if (length(available_p) > 0L) {
+        paste0(fmt_p(min(available_p)), " to ", fmt_p(max(available_p)))
+      } else "NA"
+      cat(sprintf("  %d method/effect rows; raw p-value range: %s\n",
+                  nrow(sensitivity), range_text))
+      cat("  Comparison table: result$sensitivity\n")
+    } else {
+      cat("  No comparable inference rows available.\n")
+    }
+  }
+
+  # ------------------------------------------------------------------
   # OUTLIERS
   # ------------------------------------------------------------------
   if (outliers) {
@@ -4660,6 +6712,12 @@ print.mira_info <- function(x,
   cat("  $variability    Within/between-subject variability and ICC estimates\n")
   cat("  $trajectories   Subject-level baseline-to-final changes and direction\n")
   cat("  $model          Mixed-effects model, diagnostics, ANOVA and global time test\n")
+  cat("  $advanced_tests RM-ANOVA, Friedman, emmeans and longitudinal contrasts\n")
+  cat("  $advanced_models Random-slope, nlme and GEE models plus comparison table\n")
+  cat("  $robustness     CR2 cluster-robust mixed-model inference\n")
+  cat("  $effect_sizes   Method-appropriate longitudinal effect sizes\n")
+  cat("  $multiplicity   Separate contrast families with primary and sensitivity adjustments\n")
+  cat("  $sensitivity    Effect-aligned comparison across longitudinal methods\n")
   cat("  $outliers       Timepoint and change IQR diagnostic flags\n")
   cat("  $plots          ggplot objects generated by mira_info()\n")
   cat("  $long_data      Long-format analysis dataset\n")
@@ -4689,6 +6747,37 @@ summary.mira_info <- function(object, ...) {
     ch
   }
 
+  advanced_summary <- NULL
+  if (!is.null(object$advanced_tests) || !is.null(object$advanced_models)) {
+    rm <- object$advanced_tests$rm_anova
+    friedman <- object$advanced_tests$friedman
+    emmeans <- object$advanced_tests$emmeans
+    random_slope <- object$advanced_models$random_slope
+    robust <- object$robustness$club_sandwich
+    gee_available <- vapply(
+      c("independence", "exchangeable", "ar1"),
+      function(name) isTRUE(object$advanced_models$gee[[name]]$performed),
+      logical(1L)
+    )
+    advanced_summary <- list(
+      rm_anova = if (!is.null(rm) && isTRUE(rm$performed)) rm$tidy else NULL,
+      friedman = if (!is.null(friedman) && isTRUE(friedman$performed)) {
+        friedman$tidy
+      } else NULL,
+      gee_available = gee_available,
+      random_slope = list(
+        performed = !is.null(random_slope) && isTRUE(random_slope$performed),
+        converged = if (!is.null(random_slope)) random_slope$converged else NA,
+        singular = if (!is.null(random_slope)) random_slope$singular else NA
+      ),
+      robust_inference = !is.null(robust) && isTRUE(robust$performed),
+      baseline_final_emmean = if (!is.null(emmeans) && isTRUE(emmeans$performed)) {
+        emmeans$baseline_final$tidy
+      } else NULL,
+      sensitivity = object$sensitivity
+    )
+  }
+
   out <- list(
     outcome = object$outcome,
     n_patients = ov$n_patients,
@@ -4703,7 +6792,8 @@ summary.mira_info <- function(object, ...) {
     global_arm_test = object$model$global_arm_test,
     arm_time_interaction_test = object$model$arm_time_interaction_test,
     model_singular = object$model$singular,
-    model_converged = object$model$converged
+    model_converged = object$model$converged,
+    advanced = advanced_summary
   )
 
   class(out) <- c("summary.mira_info", "list")
@@ -4737,6 +6827,22 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
 
   if (!is.null(x$global_time_test)) {
     cat("Global time test available in $global_time_test.\n")
+  }
+
+  if (!is.null(x$advanced)) {
+    cat("Advanced longitudinal inference:\n")
+    cat(sprintf("  RM-ANOVA: %s | Friedman: %s | GEE structures: %d/3\n",
+                if (!is.null(x$advanced$rm_anova)) "available" else "not available",
+                if (!is.null(x$advanced$friedman)) "available" else "not available",
+                sum(x$advanced$gee_available)))
+    cat(sprintf("  Random slope: %s | Robust CR2: %s\n",
+                if (isTRUE(x$advanced$random_slope$performed)) "available" else "not available",
+                if (isTRUE(x$advanced$robust_inference)) "available" else "not available"))
+    sensitivity_n <- if (is.data.frame(x$advanced$sensitivity)) {
+      nrow(x$advanced$sensitivity)
+    } else 0L
+    cat(sprintf("  Sensitivity rows: %d (full table in $advanced$sensitivity).\n",
+                sensitivity_n))
   }
 
   invisible(x)

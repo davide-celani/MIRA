@@ -1,49 +1,4 @@
-# ============================================================
-# MIRA_INFO v4.0 COMPLETE REPORT
-# Data-driven, multi-outcome longitudinal analysis for wide-format data
-#
-# Preferred longitudinal column names are OUTCOME_t0, OUTCOME_t1, ...,
-# but automatic detection also supports numeric, baseline/month, BL/M,
-# visit, week and day suffixes. Explicit user choices always take priority.
-#
-# Main improvements vs. v3.0:
-#   - automatic, inspectable detection of ID, outcomes, timepoints and arm
-#   - support for multiple outcomes and an arbitrary number of timepoints
-#   - flexible longitudinal-name parser and custom regex/function parsers
-#   - explicit outcome/time/arm/covariate overrides
-#   - conservative fallbacks for ambiguous IDs, arms and covariates
-#   - inspect-only mira_detect() workflow and result$config provenance
-#   - outcome-specific optional analyses, clinical direction and thresholds
-#   - covariate-adjusted mixed models when covariates are selected safely
-#   - estimated marginal means, planned contrasts and ordered polynomial trends
-#   - RM-ANOVA, Friedman/Kendall W and paired rank-based post-hoc inference
-#   - GEE, random-slope mixed models and nlme CS/AR(1) correlation models
-#   - CR2 cluster-robust inference, method-specific effect sizes and multiplicity
-#   - model-comparison and effect-aligned sensitivity summaries
-#
-# Preserved v3.0 capabilities:
-#   - consistent handling of Inf/-Inf as unavailable observations
-#   - safe ID validation for wide longitudinal data
-#   - correct reordering of manual time_labels together with time_vars
-#   - generic increase/decrease/stable classification
-#   - optional direction of clinical improvement (higher/lower/unknown)
-#   - multiplicity-adjusted pairwise p-values (Holm by default)
-#   - pairwise sample-size matrix for correlations
-#   - model diagnostics (warnings, convergence, singularity)
-#   - likelihood-ratio global time test when lme4 is available
-#   - model-based ICC in addition to balanced-data ANOVA ICC
-#   - plotting requires ggplot2 only (no hidden dplyr dependency)
-#   - dynamic confidence-level labels (not hard-coded to 95%)
-#   - compact print(), summary(), and plot() S3 methods
-#   - automatic treatment-arm detection when a column named `arm` exists
-#   - arm x time descriptives and baseline balance diagnostics
-#   - Welch/Kruskal omnibus arm tests at each timepoint
-#   - multiplicity-adjusted pairwise arm comparisons with Hedges g
-#   - between-arm comparisons of baseline-to-follow-up change
-#   - differential missingness tests across treatment arms
-#   - mixed-effects arm x time interaction and global likelihood-ratio tests
-#   - arm-specific exploratory plots
-# ============================================================
+
 
 .mira_key <- function(x) {
   tolower(gsub("[^[:alnum:]]+", "_", trimws(as.character(x))))
@@ -1934,7 +1889,7 @@
       converged = if (length(converged) == 0L) NA else as.logical(converged)[[1L]],
       singular = if (length(singular) == 0L) NA else as.logical(singular)[[1L]],
       correlation_structure = correlation_structure,
-      object_path = object_path,
+      object_path = if (is.null(model)) NA_character_ else object_path,
       stringsAsFactors = FALSE
     )
   }
@@ -1958,23 +1913,23 @@
   rows <- list(
     row(
       "mixed_random_intercept", mixed_model, ri_formula, mixed_converged,
-      mixed_singular, "random intercept", "result$model$fitted_model"
+      mixed_singular, "random intercept", "$model$fitted_model"
     ),
     row(
       "mixed_random_slope", random_slope$model, random_slope_formula,
       random_slope$converged, random_slope$singular,
       "random intercept + ordinal-time slope",
-      "result$advanced_models$random_slope$model"
+      "$advanced_models$random_slope$model"
     ),
     row(
       "nlme_compound_symmetry", nlme_models$compound_symmetry$model,
       fixed_formula, nlme_models$compound_symmetry$converged, NA,
-      "compound symmetry", "result$advanced_models$nlme$compound_symmetry$model"
+      "compound symmetry", "$advanced_models$nlme$compound_symmetry$model"
     ),
     row(
       "nlme_ar1", nlme_models$ar1$model, fixed_formula,
       nlme_models$ar1$converged, NA, "AR(1)",
-      "result$advanced_models$nlme$ar1$model"
+      "$advanced_models$nlme$ar1$model"
     )
   )
 
@@ -1982,7 +1937,7 @@
     item <- gee_models[[name]]
     rows[[length(rows) + 1L]] <- row(
       paste0("gee_", name), item$model, fixed_formula, item$converged, NA,
-      name, paste0("result$advanced_models$gee$", name, "$model"),
+      name, paste0("$advanced_models$gee$", name, "$model"),
       likelihood_based = FALSE,
       qic = .mira_qic_value(item$qic, "QIC"),
       cic = .mira_qic_value(item$qic, "CIC")
@@ -2080,15 +2035,15 @@
 
   add(.mira_lrt_sensitivity(
     mixed_tests$global_time, "TIME", "Mixed model: random-intercept LRT",
-    "result$model$global_time_test", n_default
+    "$model$global_time_test", n_default
   ))
   add(.mira_lrt_sensitivity(
     mixed_tests$global_arm, "ARM", "Mixed model: random-intercept LRT",
-    "result$model$global_arm_test", n_default
+    "$model$global_arm_test", n_default
   ))
   add(.mira_lrt_sensitivity(
     mixed_tests$interaction, "TIME_X_ARM", "Mixed model: random-intercept LRT",
-    "result$model$arm_time_interaction_test", n_default
+    "$model$arm_time_interaction_test", n_default
   ))
 
   if (isTRUE(rm_anova$performed) && !is.null(rm_anova$tidy)) {
@@ -2100,7 +2055,7 @@
       add(.mira_sensitivity_row(
         question, "RM-ANOVA (uncorrected)", r$statistic, df_raw, r$p_value,
         r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
-        "result$advanced_tests$rm_anova$object",
+        "$advanced_tests$rm_anova$object",
         "Complete-profile repeated-measures analysis."
       ))
       if (question != "ARM" && "p_gg" %in% names(r)) {
@@ -2108,7 +2063,7 @@
           question, "RM-ANOVA (Greenhouse-Geisser)", r$statistic,
           paste(r$df_num_gg, r$df_den_gg, sep = "/"), r$p_gg,
           r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
-          "result$advanced_tests$rm_anova$tables$greenhouse_geisser",
+          "$advanced_tests$rm_anova$tables$greenhouse_geisser",
           "Degrees of freedom and p-value corrected for sphericity."
         ))
       }
@@ -2117,7 +2072,7 @@
           question, "RM-ANOVA (Huynh-Feldt)", r$statistic,
           paste(r$df_num_hf, r$df_den_hf, sep = "/"), r$p_hf,
           r$partial_eta_squared, "partial eta squared", rm_anova$n_subjects,
-          "result$advanced_tests$rm_anova$tables$huynh_feldt",
+          "$advanced_tests$rm_anova$tables$huynh_feldt",
           "Degrees of freedom and p-value corrected for sphericity."
         ))
       }
@@ -2129,7 +2084,7 @@
     add(.mira_sensitivity_row(
       "TIME", "Friedman test", f$statistic, f$df, f$p_raw,
       f$kendalls_w, "Kendall's W", f$n,
-      "result$advanced_tests$friedman$test",
+      "$advanced_tests$friedman$test",
       "Rank-based complete-profile global test."
     ))
   }
@@ -2142,7 +2097,7 @@
       add(.mira_sensitivity_row(
         r$question, paste0("GEE (", structure, ")"), r$statistic, r$df, r$p_raw,
         NA_real_, NA_character_, tryCatch(stats::nobs(item$model), error = function(e) n_default),
-        paste0("result$advanced_models$gee$", structure, "$model"),
+        paste0("$advanced_models$gee$", structure, "$model"),
         "Robust sandwich Wald test under the stated working correlation."
       ))
     }
@@ -2150,18 +2105,18 @@
 
   add(.mira_lrt_sensitivity(
     random_slope$global_time_test, "TIME", "Mixed model: random-slope LRT",
-    "result$advanced_models$random_slope$global_time_test", n_default,
+    "$advanced_models$random_slope$global_time_test", n_default,
     "Random slope uses the ordinal timepoint index."
   ))
   add(.mira_lrt_sensitivity(
     random_slope$global_arm_test, "ARM", "Mixed model: random-slope LRT",
-    "result$advanced_models$random_slope$global_arm_test", n_default,
+    "$advanced_models$random_slope$global_arm_test", n_default,
     "Random slope uses the ordinal timepoint index."
   ))
   add(.mira_lrt_sensitivity(
     random_slope$arm_time_interaction_test, "TIME_X_ARM",
     "Mixed model: random-slope LRT",
-    "result$advanced_models$random_slope$arm_time_interaction_test", n_default,
+    "$advanced_models$random_slope$arm_time_interaction_test", n_default,
     "Random slope uses the ordinal timepoint index."
   ))
 
@@ -2189,7 +2144,7 @@
         ),
         if (!is.na(p_col)) .mira_as_numeric(table[[p_col]])[[1L]] else NA_real_,
         NA_real_, NA_character_, n_default,
-        paste0("result$robustness$club_sandwich$effect_tests$", question),
+        paste0("$robustness$club_sandwich$effect_tests$", question),
         "CR2 covariance with small-sample HTZ correction."
       ))
     }
@@ -2217,7 +2172,7 @@
     primary_method = primary_method,
     available_adjustments = c("raw", "bonferroni", "holm", "BH", "BY"),
     table = table,
-    object_path = object_path
+    object_path = if (is.null(table)) NA_character_ else object_path
   )
 }
 
@@ -2329,49 +2284,49 @@
     time_pairwise = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$time$pairwise_tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$time$pairwise"
+      "$advanced_tests$emmeans$time$pairwise"
     ),
     baseline_vs_followup = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$baseline_followup$tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$baseline_followup$object"
+      "$advanced_tests$emmeans$baseline_followup$object"
     ),
     consecutive_time = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$consecutive$tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$consecutive$object"
+      "$advanced_tests$emmeans$consecutive$object"
     ),
     ordinal_trends = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$trends$tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$trends$object"
+      "$advanced_tests$emmeans$trends$object"
     ),
     arm_pairwise = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$arm$pairwise_tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$arm$pairwise"
+      "$advanced_tests$emmeans$arm$pairwise"
     ),
     simple_effects = list(
       arm_within_time = .mira_multiplicity_family(
         if (emmeans_ok) emmeans$arm_time$simple_arm_tidy else NULL,
         primary_method,
-        "result$advanced_tests$emmeans$arm_time$simple_arm"
+        "$advanced_tests$emmeans$arm_time$simple_arm"
       ),
       time_within_arm = .mira_multiplicity_family(
         if (emmeans_ok) emmeans$arm_time$simple_time_tidy else NULL,
         primary_method,
-        "result$advanced_tests$emmeans$arm_time$simple_time"
+        "$advanced_tests$emmeans$arm_time$simple_time"
       )
     ),
     interaction_contrasts = .mira_multiplicity_family(
       if (emmeans_ok) emmeans$arm_time$interaction_tidy else NULL,
       primary_method,
-      "result$advanced_tests$emmeans$arm_time$interaction"
+      "$advanced_tests$emmeans$arm_time$interaction"
     ),
     friedman_posthoc = .mira_multiplicity_family(
       friedman$posthoc$tidy,
       primary_method,
-      "result$advanced_tests$friedman$posthoc$tests"
+      "$advanced_tests$friedman$posthoc$tests"
     )
   )
 
@@ -2392,8 +2347,12 @@
       paired_cohens_dz = paired_effects,
       paired_rank_biserial = friedman_effects,
       rm_anova = rm_effects,
-      friedman = list(kendalls_w = friedman$tidy$kendalls_w, object_path =
-                        "result$advanced_tests$friedman$test"),
+      friedman = list(
+        kendalls_w = friedman$tidy$kendalls_w,
+        object_path = if (!is.null(friedman$test)) {
+          "$advanced_tests$friedman$test"
+        } else NA_character_
+      ),
       mixed_models = list(
         random_intercept = random_intercept_r2,
         random_slope = random_slope_r2,
@@ -5539,6 +5498,34 @@
   )
 }
 
+
+
+
+
+
+#' Inspect longitudinal configuration without running analyses
+#'
+#' Resolves subject identifiers, longitudinal outcome groups, ordered
+#' timepoints, treatment arm and reference level, adjustment covariates,
+#' improvement directions, and stability thresholds using the same validation
+#' and detection rules as [mira_info()]. No outcome-specific statistical
+#' analysis is performed.
+#'
+#' `mira_detect()` provides the configuration-only workflow directly. The same
+#' result can be requested from `mira_info()` with `inspect_only = TRUE`, which
+#' additionally resolves the optional-analysis switches accepted by that
+#' function.
+#'
+#' @inheritParams mira_info
+#'
+#' @return Invisibly returns an object with classes `mira_detect` and `list`.
+#'   It contains `call`, the output-schema `version`, resolved `config`, a
+#'   `data_overview`, `detected_variables`, and configuration `diagnostics`.
+#'   If `verbose = TRUE`, the corresponding detection report is printed first.
+#'
+#' @seealso [mira_info()]
+#'
+#' @export
 mira_detect <- function(data,
                         id = NULL,
                         outcomes = NULL,
@@ -5576,9 +5563,646 @@ mira_detect <- function(data,
   invisible(result)
 }
 
-# Public signature preserves the positional order of v3.0. New arguments are
-# appended, so existing named and positional calls continue to target the same
-# legacy parameters. id now defaults to NULL to enable safe auto-detection.
+#' Analyse wide-format longitudinal and repeated-measures outcomes
+#'
+#' Performs analyses of one or more numeric longitudinal outcomes stored in wide format,
+#' with one measurement column per timepoint. Subject identifiers, outcome
+#' groups, time order, treatment arm, and adjustment covariates can be detected
+#' from the data or specified explicitly. The function computes descriptive,
+#' change, missingness, variability, and trajectory summaries and can add
+#' treatment-group comparisons, correlations, diagnostic flags, plots, and a
+#' suite of longitudinal models. Results are returned as structured objects for
+#' programmatic use; printing is only a presentation layer.
+#'
+#' @param data A non-empty `data.frame` in wide longitudinal format. Repeated
+#'   measurements must be numeric columns, normally with one row per subject.
+#'   Column names must be unique. Other columns may contain a subject identifier,
+#'   treatment arm, or time-invariant covariates. `Inf` and `-Inf` in selected
+#'   longitudinal columns are retained in the supplied data but treated as
+#'   unavailable (`NA`) for analysis.
+#' @param id `NULL` (the default) or a length-one character string naming the
+#'   subject-ID column. An explicit name must exist and takes precedence over
+#'   detection. With `NULL`, the function searches semantically ID-like names and
+#'   requires the selected column to be complete and unique. If there is no
+#'   single safe candidate, it creates an internal row ID named
+#'   `.mira_subject_id` (with additional underscores if needed) and records this
+#'   in `config$id_generated`.
+#' @param time_vars `NULL` (the default), a character vector of at least two
+#'   longitudinal column names, or a list of such vectors, one per outcome. All
+#'   selected columns must exist, be numeric, and be distinct within each outcome
+#'   group. A named list uses its element names as outcome names. For an unnamed
+#'   list, `outcomes` may supply one name per element; otherwise names are
+#'   inferred from the columns where possible. A character vector whose names
+#'   all parse into more than one outcome family is split into those families.
+#'   With `NULL`, all unambiguous automatically detected outcome groups are used.
+#'   Explicit groups are ordered by parsed time values when every value is
+#'   finite and unique; otherwise their supplied order is retained.
+#' @param time_labels `NULL` (the default), an atomic vector, or a list of
+#'   display labels. Labels must be non-missing, non-empty, unique within an
+#'   outcome, and have the same length as the corresponding `time_vars` group.
+#'   For multiple outcomes, use a list named by outcome or a single vector named
+#'   by every selected longitudinal column. For one outcome, an unnamed vector
+#'   or an unnamed one-element list is also accepted. A vector named by source
+#'   column is matched by name. Otherwise, when explicit `time_vars` are
+#'   reordered from parsed suffixes, the labels are reordered by the same
+#'   permutation. `NULL` uses parsed suffixes, or the source column name when
+#'   parsing did not supply a label.
+#' @param arm `NULL` (the default) or a length-one character string naming a
+#'   treatment or grouping column. An explicit name must exist and overrides
+#'   detection. With `NULL`, only an unambiguous, plausibly categorical column
+#'   with an arm-like name is selected; otherwise between-group analyses remain
+#'   disabled. The arm is still carried into long-format and trajectory output
+#'   when selected, even if `arm_tests` is false.
+#' @param reference_arm `NULL` (the default) or one non-empty character value
+#'   identifying an observed level of `arm`. It is an error to supply this
+#'   without a resolved arm or to name an unobserved level. With `NULL`, a single
+#'   control-like level (`control`, `ctrl`, `placebo`, `standard`, `comparator`,
+#'   `sham`, `untreated`, or `usual care` with an optional space, underscore, or
+#'   hyphen, all matched case-insensitively) is preferred. If several such levels
+#'   exist, the largest is used; if none exists, the largest observed arm is
+#'   used. Ties follow the order in which levels occur in `data`. The chosen
+#'   level is first in model and comparison level order.
+#' @param arm_tests A non-missing logical scalar, defaulting to `TRUE`. If
+#'   `TRUE`, and a resolved arm has at least two usable groups, compute
+#'   arm-by-time descriptives, missingness and balance diagnostics, between-arm
+#'   tests, change comparisons, and arm terms in requested models. It can be
+#'   overridden by `analyses`.
+#' @param alpha A finite numeric scalar strictly between 0 and 1; the default is
+#'   `0.05`. The confidence level is `1 - alpha` for mean, change, Welch,
+#'   marginal-mean, and supported model-based confidence intervals. It is not
+#'   used to remove results or to define clinical improvement.
+#' @param plots A non-missing logical scalar, defaulting to `TRUE`, requesting
+#'   stored `ggplot2` plots. Plotting is automatically disabled for an outcome
+#'   with no finite values and can be overridden by `analyses`. If `ggplot2` is
+#'   unavailable, analysis continues, `plots` is empty, and `plot_error` records
+#'   the reason.
+#' @param model A non-missing logical scalar, defaulting to `TRUE`, requesting
+#'   the random-intercept mixed model and the optional model-based longitudinal
+#'   modules. It is automatically disabled for an outcome with fewer than three
+#'   finite values in total or no timepoint containing at least two distinct
+#'   finite values, and it can be overridden by `analyses`. The base-R Friedman
+#'   module is attempted independently of this switch.
+#' @param outliers A non-missing logical scalar, defaulting to `TRUE`, requesting
+#'   Tukey 1.5-IQR flags for values at each timepoint and for every available
+#'   pairwise change. At least four finite values are required for a set of flags.
+#'   Flagged observations are diagnostic only and are never removed
+#'   automatically. This argument can be overridden by `analyses`.
+#' @param correlations A non-missing logical scalar, defaulting to `TRUE`,
+#'   requesting Pearson and Spearman correlations between timepoint columns,
+#'   using pairwise-complete observations, together with the corresponding
+#'   pairwise sample-size matrix. It is automatically disabled unless at least
+#'   two timepoints each contain at least two finite observations and at least
+#'   two distinct finite values, and can be overridden by `analyses`.
+#' @param verbose A non-missing logical scalar, defaulting to `TRUE`. If `TRUE`,
+#'   the appropriate `print()` method is called before the result is returned
+#'   invisibly. Assigning the call, for example `fit <- mira_info(data)`, still
+#'   captures the complete object. If `FALSE`, no automatic report is printed;
+#'   warnings are unaffected.
+#' @param p_adjust_method A length-one character string in
+#'   `stats::p.adjust.methods`, defaulting to `"holm"`, passed to
+#'   [stats::p.adjust()] as the primary adjustment. Adjustments are made within
+#'   the implemented comparison families, not across every test produced by the
+#'   function. Unadjusted advanced contrast summaries are augmented with raw,
+#'   primary, Bonferroni, Holm, Benjamini-Hochberg, and Benjamini-Yekutieli
+#'   values where estimable.
+#' @param improvement_direction `NULL`, `"auto"` (the default), `"higher"`,
+#'   `"lower"`, or `"unknown"`; for multiple outcomes it may be a character
+#'   vector named by outcome. Each named outcome must match exactly once after
+#'   case-and-punctuation normalization; an unnamed vector of length greater
+#'   than one is invalid. `"higher"` and `"lower"` determine whether positive
+#'   or negative change is labelled improved; `"unknown"` reports only increase,
+#'   decrease, and stability.
+#'   `"auto"` (also selected by `NULL`) maps `bcva`, `visual_acuity`, and `va` to
+#'   higher-is-better and `cmt`, `crt`, and `iop` to lower-is-better after name
+#'   normalization; all other outcome names fall back to `"unknown"`. This
+#'   setting changes labels and counts, not estimates or hypothesis tests, and
+#'   does not validate clinical importance.
+#' @param stable_threshold `NULL`, `"auto"` (the default), a finite non-negative
+#'   numeric scalar, or a finite non-negative numeric vector named by outcome.
+#'   Each named outcome must match exactly once after case-and-punctuation
+#'   normalization; an unnamed numeric vector of length greater than one is
+#'   invalid. `NULL` and `"auto"` use zero. A change greater than the threshold
+#'   is an increase, a change less than its negative is a decrease, and all
+#'   intervening values are stable. The threshold affects response
+#'   classifications and trajectory labels, not statistical tests; it is not
+#'   estimated or clinically validated by the function.
+#' @param strict_id A non-missing logical scalar, defaulting to `TRUE`. With
+#'   `TRUE`, missing or duplicated values in a selected, non-generated ID column
+#'   are fatal because wide input is assumed to contain one row per subject. With
+#'   `FALSE`, these conditions generate warnings and duplicated IDs are treated
+#'   as records from the same subject by subject-indexed models. Use `FALSE` only
+#'   when that interpretation is intentional.
+#' @param outcomes `NULL` (the default), `"auto"`, or a character vector of
+#'   outcome names, unique after case-and-punctuation normalization. `NULL` and
+#'   `"auto"` select all unambiguous detected groups. Explicit names select
+#'   detected groups by normalized name, label an explicitly supplied single
+#'   `time_vars` group, or provide labels for an unnamed `time_vars` list. As a
+#'   compatibility convenience, when `time_vars` is `NULL` and `outcomes`
+#'   contains at least two values that are all column names, those values are
+#'   treated as `time_vars` rather than as outcome-family names. The
+#'   implementation also accepts `character(0)` as an explicit selection and
+#'   returns an empty `mira_info_multi` container.
+#' @param covariates `NULL` (the default), `"auto"`, or a character vector of
+#'   column names; `character(0)` explicitly selects none. Explicit columns must
+#'   exist, be unique, and not overlap selected or detected longitudinal
+#'   variables, the chosen ID or arm, retained ID/arm candidates, or reserved
+#'   internal columns (`patient`, `outcome`, `time`, `time_index`, `time_label`,
+#'   `arm`, `value`, `patient_factor`, `time_factor`, and `arm_factor`). With
+#'   `NULL` or `"auto"`, eligible numeric and low-cardinality categorical columns
+#'   are detected after excluding ID-, arm-, and longitudinal-like variables.
+#'   Every candidate needs at least two distinct non-missing values; factor,
+#'   character, and logical candidates may have at most
+#'   `max(10, floor(nrow(data) / 4))` such values,
+#'   whereas numeric candidates have no corresponding upper limit. Numeric
+#'   columns with at most five distinct observed values are classified as
+#'   categorical. The fixed-effect cost is one degree of freedom for a numeric
+#'   covariate and `number of observed levels - 1` for a categorical covariate.
+#'   Automatic covariates are used only when the combined cost does not exceed
+#'   `floor(nrow(data) / 10)`; otherwise none are selected and a warning records
+#'   the candidates.
+#' @param analyses `NULL` (the default) or a character vector selecting optional
+#'   modules from `"plots"`, `"model"`, `"outliers"`, `"correlations"`, and
+#'   `"arm_tests"`. With `NULL`, the five individual logical arguments retain
+#'   their supplied values. Matching is case-insensitive and duplicate names are
+#'   removed. When non-NULL, this vector completely replaces the five
+#'   corresponding logical switches: omitted modules are set to false. `"all"`
+#'   selects every optional module; `"none"` or `character(0)` selects none. The
+#'   implementation expands `"all"` before checking `"none"`; consequently
+#'   `c("all", "none")` selects all, whereas any `"none"` without `"all"` clears
+#'   the selection. Remaining unknown names are errors. The logical arguments
+#'   are still validated before this override. Core summaries and the Friedman
+#'   branch are not disabled by `analyses = "none"`.
+#' @param variable_pattern Exactly `"auto"` (the default), a non-empty
+#'   regular-expression string, or a parser function called once per column
+#'   name. With `"auto"`, the supported suffix rules are described under
+#'   **Input data and longitudinal naming**. A custom regular-expression match
+#'   is recognized only when it yields at least two capture groups: the first is
+#'   the outcome name and the second is the time label; time order is derived
+#'   from that label. A custom function must return `NULL` for a non-match or a
+#'   list (a one-row data frame is also accepted) containing `outcome`, with
+#'   optional `time_label` and `time_order`. A missing `time_label` defaults to
+#'   the column name, and a missing `time_order` is derived from the label.
+#'   Custom regular expressions use the default case-sensitive, non-Perl behavior
+#'   of `regexec()`. The first value of each parser field is used, with
+#'   `time_order` coerced to numeric.
+#' @param inspect_only A non-missing logical scalar, defaulting to `FALSE`. If
+#'   `TRUE`, perform input validation and configuration resolution, emit
+#'   configuration warnings, and return a `mira_detect` object without running
+#'   any outcome analysis. The resolved `analyses` settings are included in
+#'   `config`. `verbose = TRUE` prints the detection report.
+#'
+#' @details
+#' `mira_info()` first validates global arguments and resolves the analysis
+#' configuration. It groups repeated-measure columns by parsed outcome name,
+#' orders their timepoints, resolves or generates an ID, selects an arm and
+#' reference level when possible, and selects covariates. Explicit `id`,
+#' `time_vars`, `time_labels`, `arm`, `reference_arm`, `outcomes`, and
+#' `covariates` values take precedence over inference. The resolved decisions,
+#' alternatives, and automatic/manual provenance are retained in `config` and
+#' `detected_variables`.
+#'
+#' Consequently, `mira_info(data)` selects every unambiguous detected outcome,
+#' chooses or generates an ID, attempts arm and covariate detection, uses the
+#' outcome-name map for improvement direction with a zero stability threshold,
+#' requests all five optional modules, and prints the resulting report. Every
+#' requested module remains conditional on usable data and its dependency.
+#'
+#' Unless `inspect_only = TRUE`, each outcome is analysed separately. The wide
+#' measurements are converted to an outcome-specific long table while the wide
+#' copy is used for timepoint summaries and pairwise changes. Optional analyses
+#' are adapted per outcome: a requested model, correlation matrix, plot suite,
+#' or arm analysis can be disabled when the outcome lacks the minimum usable
+#' data. These adaptations are recorded under `diagnostics$adaptation`.
+#'
+#' For a single outcome, an analysis error stops the call. With multiple
+#' outcomes, each outcome is protected separately: successful outcomes remain
+#' available, failures become `mira_info_error` entries, and one warning names
+#' the failed outcomes. Missing optional packages and most advanced-model
+#' failures instead produce structured skipped modules with `performed = FALSE`,
+#' an error or `reason_skipped`, and any captured warnings.
+#'
+#' @section Input data and longitudinal naming:
+#' Automatic parsing requires a separator (`.`, `_`, or `-`) between an outcome
+#' stem and a recognized suffix. Matching is case-insensitive for the automatic
+#' rules. The implemented suffixes are:
+#'
+#' - `tN`;
+#' - `timeN`, `visitN`, `visN`, or `vN`, with an optional separator before `N`;
+#' - `baseline`, `base`, or `BL`;
+#' - `monthN`, `monthsN`, `moN`, or `mN`;
+#' - `weekN`, `weeksN`, `wkN`, or `wN`;
+#' - `dayN`, `daysN`, or `dN`;
+#' - `followupN`, `follow-upN`, or `fuN`; and
+#' - a bare numeric suffix `N`.
+#'
+#' Here `N` is a sequence of digits. The time/visit, month, week, day, and
+#' follow-up forms also allow an optional `.`, `_`, or `-` immediately before
+#' `N`; `tN` requires the letter and digits to be adjacent. Examples include
+#' `score_t0`, `score_BL`, `score_M6`, `score_visit_2`, and `score_12`. Baseline
+#' labels receive order zero; otherwise the first number in the suffix determines
+#' order. At least two numeric columns are required per automatically detected
+#' group. A group is excluded from automatic analysis when time labels repeat
+#' (case-insensitively) or finite time orders repeat. It remains visible under
+#' `detected_variables$ambiguous_longitudinal` and can be supplied explicitly.
+#' Columns that match a longitudinal name rule but are not numeric are excluded
+#' and reported in a warning and in the parsed longitudinal map.
+#'
+#' @section Automatic detection and explicit overrides:
+#' ID detection ranks complete, unique columns with names such as `patient_id`,
+#' `subject_id`, `participant_id`, `usubjid`, `subjid`, `patid`, `record_id`,
+#' `study_id`, `patient`, `subject`, `participant`, `id`, or another name ending
+#' in `_id`. Structural uniqueness alone is not enough to promote an arbitrary
+#' column. Ambiguous or unsafe detection therefore creates a row ID rather than
+#' guessing.
+#'
+#' Arm detection considers arm-like names including `arm`, `treatment_arm`,
+#' `treatment_group`, randomized/randomised group, `treatment`, `intervention`,
+#' `group`, and `cohort`. A candidate must have from two through
+#' `max(10, floor(nrow(data) / 4))` distinct non-missing values and a unique
+#' highest semantic rank. Character, factor, and logical columns qualify
+#' throughout that range; other column types qualify only with at most ten
+#' distinct non-missing values. Ambiguity leaves the arm unset. Detection
+#' warnings report excluded or alternative candidates without changing explicit
+#' choices.
+#'
+#' @section Core and optional analyses:
+#' The following outcome-specific results are computed independently of the
+#' optional switches:
+#'
+#' - per-timepoint counts, missing and non-finite counts, mean, standard
+#'   deviation, variance, standard error, Student-t confidence interval, median,
+#'   quartiles, range, and coefficient of variation (`100 * SD / abs(mean)`,
+#'   unavailable when the mean is zero);
+#' - all ordered timepoint-pair changes (`to - from`) using subjects observed at
+#'   both timepoints, with a mean-change t interval, Cohen's `dz`, two-sided
+#'   paired t test, asymptotic paired Wilcoxon signed-rank test (`exact = FALSE`),
+#'   and direction/response counts;
+#' - availability summaries; baseline-to-final trajectories with relative change
+#'   `100 * (final - baseline) / abs(baseline)` when baseline is finite and
+#'   nonzero; pooled within-subject residual standard deviation; between-subject
+#'   standard deviation of subject means; and a complete-profile one-way
+#'   ICC(1,1);
+#' - a Friedman test on complete repeated profiles, Kendall's W, and all
+#'   asymptotic pairwise Wilcoxon signed-rank post-hoc tests with paired
+#'   rank-biserial correlations computed after removing zero changes. This
+#'   branch is stored under `advanced_tests$friedman` and is attempted even when
+#'   `model = FALSE`.
+#'
+#' The complete-profile ANOVA ICC is
+#' `(MS_between - MS_within) / (MS_between + (k - 1) * MS_within)`, where `k` is
+#' the number of selected timepoints. The model ICC, when available, is the
+#' random-intercept variance divided by the sum of random-intercept and residual
+#' variances; `variability$ICC` prefers this estimate and otherwise uses the
+#' ANOVA estimate.
+#'
+#' Requested correlations, IQR flags, plots, arm analyses, and model-based
+#' methods are added conditionally. The primary mixed model, when estimable and
+#' `lme4` is installed, is a Gaussian random-intercept model fitted by REML with
+#' categorical time, additive selected covariates, and, when enabled, the full
+#' time-by-arm interaction. `lmerTest::lmer()` is used when `lmerTest` is
+#' installed; otherwise `lme4::lmer()` is used. Separate maximum-likelihood
+#' nested-model comparisons test time and, where applicable, arm and the
+#' time-by-arm interaction. The output also reports convergence messages,
+#' singularity, variance components through the fitted object, and a
+#' random-intercept/residual ICC.
+#'
+#' When `model` is enabled, the function conditionally attempts:
+#'
+#' - estimated marginal means and pairwise, baseline-versus-follow-up,
+#'   baseline-versus-final, consecutive-time, arm, simple, and interaction
+#'   contrasts with `emmeans`, plus linear, quadratic, and, when available,
+#'   cubic ordered polynomial contrasts; Tukey summaries are retained for
+#'   ordinary pairwise contrasts and a `dunnettx` summary for baseline-versus-
+#'   follow-up contrasts, labelled in the result as an approximation. Polynomial
+#'   trends use timepoint order and do not assert equal chronological spacing;
+#' - type-III repeated-measures ANOVA with `afex`, including uncorrected,
+#'   Greenhouse-Geisser, and Huynh-Feldt tables, Mauchly information when
+#'   available, and partial/generalized eta-squared output;
+#' - Gaussian GEE fits with `geepack` under independence, exchangeable, and
+#'   AR(1) working correlations, sandwich standard errors, and joint Wald tests;
+#' - a random-intercept-and-ordinal-time-slope model with `lme4`, including
+#'   likelihood-ratio sensitivity tests and random-effect diagnostics; because
+#'   the slope uses the ordered index, it does not represent actual unequal
+#'   chronological spacing;
+#' - REML random-intercept `nlme` fits with compound-symmetry and AR(1) residual
+#'   correlations, with AR(1) indexed by ordered timepoint number; and
+#' - `clubSandwich` CR2 covariance estimates with Satterthwaite coefficient
+#'   tests and HTZ joint Wald tests.
+#'
+#' For GEE and CR2 joint tests, `TIME` selects every fixed-effect coefficient
+#' whose name contains the time factor (including interaction coefficients),
+#' `ARM` analogously selects every arm coefficient, and `TIME_X_ARM` selects only
+#' coefficients containing both. Thus these are joint coefficient tests, not
+#' comparisons of a single reference-cell coefficient.
+#'
+#' The mixed models specify a conditional mean with subject-specific random
+#' effects, whereas GEE describes a population-averaged marginal mean under the
+#' stated working correlation. These are different inferential targets even when
+#' their numerical estimates are similar.
+#'
+#' A model-comparison table reports likelihood criteria for likelihood-based
+#' models and QIC/CIC for GEE without treating those criteria as a single common
+#' scale. `performance`, when installed, supplies Nakagawa marginal and
+#' conditional R-squared values for available mixed models. The sensitivity
+#' table aligns raw tests of time, arm, and interaction across methods; it is a
+#' comparison aid, not a voting rule for scientific conclusions, and the rows
+#' can use different analysis samples or null hypotheses.
+#'
+#' @section Treatment-arm analyses:
+#' Arm analyses require a resolved arm, `arm_tests = TRUE`, at least two observed
+#' groups, and usable outcome values. Empty strings and missing arm values are
+#' excluded from between-group work but do not remove subjects from analyses
+#' that do not use arm. The first ordered timepoint is treated as baseline.
+#'
+#' The arm module provides arm-by-time descriptives; differential-unavailability
+#' tests using Pearson chi-squared tests or Fisher's exact tests when any expected
+#' count is below five; Welch and Kruskal-Wallis omnibus tests at each timepoint;
+#' and two-sided pairwise Welch t and asymptotic unpaired Wilcoxon tests
+#' (`exact = FALSE`). Pairwise tables report `arm_b - arm_a`, a Welch interval,
+#' and Hedges' g. `baseline_balance` is the first-timepoint subset of these
+#' exploratory pairwise comparisons. For every follow-up, analogous descriptives
+#' and between-arm tests are computed for
+#' change from baseline. These comparisons are associational summaries and do
+#' not by themselves establish a causal treatment effect.
+#'
+#' @section Covariate adjustment:
+#' Selected covariates enter model formulas as additive fixed effects. Core
+#' descriptive and pairwise-change tables remain unadjusted; adjustment applies
+#' only to the model-based results. In the repeated-measures ANOVA, categorical
+#' covariates are between-subject factors and numeric covariates are supplied as
+#' covariates. The same resolved covariates are used, when possible, by the
+#' primary mixed model, marginal means, random-slope model, GEE, and `nlme` fits.
+#' Character and logical values are converted to factors; non-finite numeric
+#' covariate values and blank character values become missing, and covariates
+#' with fewer than two usable
+#' values are omitted from the primary mixed model and recorded in
+#' `model$covariates_skipped`. Adjustment is statistical and does not imply that
+#' the selected variables suffice for causal control.
+#'
+#' @section Missing data:
+#' The function performs no imputation. Descriptives use all finite values at
+#' each timepoint. Output distinguishes raw `NA` counts (`missing`), `Inf` or
+#' `-Inf` counts (`non_finite`), and their combined analysis-unavailable count.
+#' Change estimates and paired tests use a separate pairwise-complete subset for
+#' each comparison; correlations also use pairwise-complete observations.
+#' Baseline-to-final trajectories require both endpoints, and arm change
+#' comparisons require baseline and the relevant
+#' follow-up. The complete-profile ANOVA ICC and Friedman test require every
+#' selected timepoint. The `afex` analysis receives the prepared repeated-
+#' measures data and applies its own repeated-measures completeness requirements.
+#' Mixed, GEE, and residual-correlation models use long rows complete for
+#' outcome, ID, required arm, and retained covariates, so their analysis samples
+#' can differ from the descriptive and pairwise samples. Module-specific sample
+#' sizes and prepared data are retained where available.
+#'
+#' @section Multiplicity:
+#' The primary `p_adjust_method` is applied separately to paired t-test and
+#' paired Wilcoxon families across timepoint pairs. Within the arm module it is
+#' applied separately to missingness tests across time, Welch and Kruskal-Wallis
+#' omnibus families, and Welch and Wilcoxon pairwise families for observed values
+#' and changes. Advanced contrast and Friedman post-hoc tables define additional
+#' scientifically distinct families. Their tables preserve raw p-values and
+#' store primary, Bonferroni, Holm, BH, and BY adjustments. Global
+#' likelihood-ratio, ANOVA, GEE, and sensitivity-table p-values are not pooled
+#' into a single adjustment family.
+#'
+#' @section Optional dependencies and failure handling:
+#' Base summaries and rank tests use R's `stats` package. Optional capabilities
+#' require `ggplot2` (plots), `lme4` (mixed models), `lmerTest` (used in place of
+#' `lme4::lmer()` when present), `emmeans` (marginal means and contrasts), `afex`
+#' (repeated-measures ANOVA), `geepack` (GEE), `nlme` (residual correlation
+#' models), `clubSandwich` (CR2 inference), and `performance` (Nakagawa
+#' R-squared). Except for plotting, each advanced module records `performed`,
+#' package, warnings, error, and/or `reason_skipped` information. Absence of one
+#' package does not prevent independent modules from being attempted. Absence of
+#' `ggplot2` is recorded in `plot_error`. Captured model-fitting warnings are
+#' diagnostics, not evidence that a fit is scientifically adequate.
+#'
+#' @section Warnings and errors:
+#' Invalid argument types or values, missing named columns, duplicated data-frame
+#' column names, duplicate or non-numeric time variables, invalid labels,
+#' unresolved requested outcomes, and strict-ID violations stop configuration.
+#' Automatic ambiguity, generated IDs, excluded detection candidates,
+#' non-finite outcome values, missing arm values, and conservative covariate
+#' suppression generate warnings. Fewer than two observed arm groups disable
+#' arm analysis with a warning. Most unavailable or failed optional modules are
+#' represented in the result rather than stopping it. An unexpected analysis
+#' error is fatal for a single outcome but is isolated as a `mira_info_error`
+#' entry during a multi-outcome call.
+#'
+#' @return Invisibly returns an object whose class and structure depend on the
+#'   requested mode.
+#'
+#' With `inspect_only = TRUE`, the result has classes `mira_detect` and `list`
+#' and contains:
+#'
+#' \describe{
+#'   \item{call, version}{The matched call and output-schema version, currently
+#'     `"4.0.0"`.}
+#'   \item{config}{Resolved ID, outcome groups, ordered time variables and
+#'     labels, arm/reference, covariates, improvement directions, thresholds,
+#'     optional-analysis switches, provenance, sources, and alternatives.}
+#'   \item{data_overview}{Row and column counts plus a column profile containing
+#'     class, numeric status, distinct-value count, and missingness.}
+#'   \item{detected_variables}{ID and arm candidates, the parsed longitudinal
+#'     map, accepted and ambiguous groups, and detected covariate classes.}
+#'   \item{diagnostics}{Configuration and detection warnings.}
+#' }
+#'
+#' A successful single-outcome analysis has classes `mira_info` and `list`.
+#' Its important top-level components are:
+#'
+#' \describe{
+#'   \item{call, version}{The matched public call and output-schema version,
+#'     currently `"4.0.0"`.}
+#'   \item{settings, overview}{Outcome-specific settings and sample,
+#'     completeness, timepoint, covariate, and arm summaries.}
+#'   \item{outcome, outcome_display, time_vars, time_labels}{Outcome identifiers
+#'     (including an upper-case display form) and the ordered source-to-display
+#'     timepoint map.}
+#'   \item{descriptives}{One row per timepoint with availability, location,
+#'     dispersion, and mean-confidence-interval statistics.}
+#'   \item{missing}{Lists `by_time` and `by_patient` availability tables; the
+#'     latter has one row per wide input row and carries the resolved ID value.}
+#'   \item{change}{All estimable ordered timepoint-pair changes, confidence
+#'     intervals, Cohen's `dz`, direction counts, raw tests, and adjusted tests.}
+#'   \item{arm_analysis}{An `enabled` flag, arm metadata, and conditional
+#'     descriptives, baseline balance, missingness, timepoint comparisons, and
+#'     baseline-to-follow-up change comparisons. Disabled results are `NULL`.}
+#'   \item{correlations}{Pearson and Spearman matrices and `pairwise_n`; values
+#'     are `NULL` when correlations were disabled or adapted away.}
+#'   \item{variability}{Within- and between-subject standard deviations,
+#'     complete-profile ANOVA ICC, model ICC, the preferred available `ICC`, and
+#'     ANOVA mean-square components.}
+#'   \item{trajectories}{Baseline, final, absolute and relative change, numeric
+#'     direction, clinical direction, and arm when available, with one row per
+#'     wide input row.}
+#'   \item{model}{The primary fitted model and summary, fixed-effect ANOVA,
+#'     global likelihood-ratio tests, convergence/singularity diagnostics,
+#'     warnings/error, and requested, used, or skipped covariates.}
+#'   \item{advanced_tests}{Structured `emmeans`, repeated-measures ANOVA, and
+#'     Friedman modules.}
+#'   \item{advanced_models}{The random-slope, `nlme`, and GEE modules plus a
+#'     model-comparison table and paths to available fit objects.}
+#'   \item{robustness}{The `club_sandwich` CR2 module.}
+#'   \item{effect_sizes}{Paired Cohen's `dz`, paired rank-biserial correlations,
+#'     ANOVA eta-squared measures, Kendall's W, mixed-model R-squared modules,
+#'     and model ICC where available.}
+#'   \item{multiplicity}{Contrast-family tables, available adjustments, and
+#'     source-object paths.}
+#'   \item{sensitivity}{A method-by-scientific-question table for time, arm, and
+#'     interaction tests, with raw p-values and source paths.}
+#'   \item{outliers}{A note and optional IQR-flag tables `by_time` and `change`.}
+#'   \item{plots, plot_error}{Named `ggplot` objects and an optional dependency
+#'     message. Possible names are `boxplot`, `spaghetti`, `mean_ci`, `change`,
+#'     `change_from_baseline`, `change_ci`, `missingness`,
+#'     `correlation_heatmap`, `response`, `arm_mean_ci`, `arm_boxplot`,
+#'     `arm_change`, `arm_change_ci`, `arm_difference_ci`, and
+#'     `arm_missingness`, subject to enabled modules and available data.}
+#'   \item{long_data}{Outcome-specific long-format data with subject, source
+#'     time variable, ordered index and label, arm, value, and selected
+#'     covariates.}
+#'   \item{config, data_overview, detected_variables, diagnostics}{Resolved
+#'     configuration, detection evidence, and per-outcome adaptations.}
+#'   \item{outcomes}{A one-element outcome-indexed list, permitting the same
+#'     access convention as multi-outcome results.}
+#' }
+#'
+#' A multi-outcome result has classes `mira_info_multi`, `mira_info`, and `list`.
+#' Its top level contains `call`, `version`, `config`, `data_overview`,
+#' `detected_variables`, `diagnostics`, and the outcome-indexed `outcomes` list.
+#' Each successful element of `outcomes` is an outcome-specific `mira_info`
+#' object with the components above. A failed element has classes
+#' `mira_info_error` and `list` and contains `outcome` and `error`. Use
+#' `names(result$outcomes)` and `result$outcomes[[name]]` for programmatic access.
+#'
+#' All modes are returned invisibly. `print()` provides detection, compact
+#' multi-outcome, error, or full single-outcome reports as appropriate;
+#' `summary()` has methods for single- and multi-outcome results. `plot()` prints
+#' and invisibly returns a stored plot; for a multi-outcome object, specify
+#' `outcome` when more than one successful outcome is available. Requesting a
+#' plot that was not generated is an error.
+#'
+#' @seealso [mira_detect()] for configuration inspection without analysis,
+#'   [base::summary()], [graphics::plot()], [stats::p.adjust()],
+#'   [stats::friedman.test()], and [stats::wilcox.test()].
+#'
+#' @export
+#'
+#' @examples
+#' # A small wide-format data set with automatically recognized timepoints.
+#' set.seed(2026)
+#' n <- 30
+#' baseline <- rnorm(n, mean = 50, sd = 8)
+#' wide <- data.frame(
+#'   subject_id = sprintf("S%02d", seq_len(n)),
+#'   score_t0 = baseline,
+#'   score_t1 = baseline + rnorm(n, mean = -2, sd = 4),
+#'   score_t2 = baseline + rnorm(n, mean = -4, sd = 4)
+#' )
+#'
+#' # 1. Minimal automatic workflow. Optional modules are omitted here to keep
+#' # the example quick; core descriptives, changes, variability, trajectories,
+#' # and the Friedman branch are still computed.
+#' fit <- mira_info(wide, analyses = "none", verbose = FALSE)
+#' fit$descriptives[, c("label", "n", "mean", "sd")]
+#' fit$change[, c("from_label", "to_label", "mean_change", "paired_t_p_adj")]
+#'
+#' # 2. Inspect automatic choices without analysing outcomes.
+#' detected <- mira_info(
+#'   wide, analyses = "none", inspect_only = TRUE, verbose = FALSE
+#' )
+#' detected$config[c("id", "outcomes", "arm", "covariates")]
+#' detected$config$time_vars
+#' detected$detected_variables$longitudinal_map
+#'
+#' # 3. Explicitly configure columns whose names do not encode time.
+#' explicit_data <- data.frame(
+#'   case = seq_len(n),
+#'   pre = rnorm(n, 10, 2),
+#'   post = rnorm(n, 9, 2)
+#' )
+#' explicit_fit <- mira_info(
+#'   explicit_data,
+#'   id = "case",
+#'   time_vars = c("pre", "post"),
+#'   time_labels = c("Baseline", "Week 8"),
+#'   outcomes = "symptom",
+#'   analyses = "none",
+#'   verbose = FALSE
+#' )
+#' explicit_fit$time_labels
+#'
+#' # 4. Request arm-specific exploratory comparisons without model fitting.
+#' trial <- wide
+#' trial$arm <- rep(c("Control", "Treatment"), each = n / 2)
+#' trial$age <- round(rnorm(n, 60, 7))
+#' trial$site <- factor(rep(c("A", "B", "C"), length.out = n))
+#' arm_fit <- mira_info(
+#'   trial,
+#'   id = "subject_id",
+#'   outcomes = "score",
+#'   arm = "arm",
+#'   reference_arm = "Control",
+#'   covariates = character(0),
+#'   analyses = "arm_tests",
+#'   verbose = FALSE
+#' )
+#' arm_fit$arm_analysis$time_pairwise[, c(
+#'   "time_label", "arm_a", "arm_b", "mean_difference_b_minus_a",
+#'   "welch_t_p_adj"
+#' )]
+#'
+#' # 5. Explicit covariates adjust model-based estimates; their inclusion is not
+#' # a causal guarantee. This call can fit several optional longitudinal models.
+#' \donttest{
+#' if (requireNamespace("lme4", quietly = TRUE)) {
+#'   adjusted_fit <- mira_info(
+#'     trial,
+#'     id = "subject_id",
+#'     outcomes = "score",
+#'     arm = "arm",
+#'     reference_arm = "Control",
+#'     covariates = c("age", "site"),
+#'     analyses = c("model", "arm_tests"),
+#'     verbose = FALSE
+#'   )
+#'   adjusted_fit$model$covariates_used
+#'   stats::formula(adjusted_fit$model$fitted_model)
+#' }
+#' }
+#'
+#' # 6. Analyse two automatically parsed outcome families.
+#' mobility_baseline <- rnorm(n, mean = 20, sd = 4)
+#' multi_data <- transform(
+#'   wide,
+#'   mobility_t0 = mobility_baseline,
+#'   mobility_t1 = mobility_baseline + rnorm(n, 1, 2),
+#'   mobility_t2 = mobility_baseline + rnorm(n, 2, 2)
+#' )
+#' multi_fit <- mira_info(
+#'   multi_data,
+#'   outcomes = c("score", "mobility"),
+#'   improvement_direction = c(score = "lower", mobility = "higher"),
+#'   analyses = "none",
+#'   verbose = FALSE
+#' )
+#' names(multi_fit$outcomes)
+#' multi_fit$outcomes[["mobility"]]$descriptives
+#' summary(multi_fit)
+#'
+#' # 7. Select only correlations, diagnostic flags, and plots.
+#' selected_fit <- mira_info(
+#'   wide,
+#'   analyses = c("correlations", "outliers", "plots"),
+#'   verbose = FALSE
+#' )
+#' selected_fit$correlations$pairwise_n
+#' vapply(selected_fit$outliers$by_time, nrow, integer(1))
+#' if (requireNamespace("ggplot2", quietly = TRUE)) {
+#'   plot(selected_fit, which = "mean_ci")
+#' }
+#' @export
 mira_info <- function(data,
                       id = NULL,
                       time_vars = NULL,
@@ -5773,7 +6397,7 @@ mira_info <- function(data,
   failed <- names(outcome_results)[vapply(outcome_results, inherits, logical(1L),
                                           what = "mira_info_error")]
   if (length(failed) > 0L) {
-    warning(sprintf("Analyses were not completed for: %s. See result$outcomes.",
+    warning(sprintf("Analyses were not completed for: %s. See the $outcomes component.",
                     paste(failed, collapse = ", ")), call. = FALSE)
   }
 
@@ -5804,8 +6428,67 @@ mira_info <- function(data,
   invisible(result)
 }
 
+.mira_output_component_descriptions <- c(
+  call = "Matched function call that created the object.",
+  version = "MIRA output-schema version recorded in this object.",
+  settings = "Outcome-specific analysis settings actually applied.",
+  overview = "Outcome-specific sample, timepoint, completeness, and arm overview.",
+  outcome = "Machine-readable outcome identifier.",
+  outcome_display = "Human-readable outcome label used in output and plots.",
+  time_vars = "Ordered source-column names for the repeated measurements.",
+  time_labels = "Named display labels for the ordered timepoint columns.",
+  descriptives = "Per-timepoint descriptive statistics and confidence intervals.",
+  missing = "Availability summaries by timepoint and by subject.",
+  change = "All pairwise longitudinal changes, effect sizes, and adjusted tests.",
+  arm_analysis = "Arm-specific descriptives, balance, missingness, and comparisons.",
+  correlations = "Pearson and Spearman matrices with pairwise sample sizes.",
+  variability = "Within- and between-subject variability with ICC estimates.",
+  trajectories = "Subject-level baseline-to-final changes and direction labels.",
+  model = "Mixed-effects model, diagnostics, ANOVA, and global tests.",
+  advanced_tests = "RM-ANOVA, Friedman, emmeans, and longitudinal contrasts.",
+  advanced_models = "Random-slope, nlme, and GEE fits with model comparison.",
+  robustness = "Cluster-robust CR2 inference for the mixed-effects model.",
+  effect_sizes = "Method-specific longitudinal effect-size results.",
+  multiplicity = "Multiplicity-adjustment families and source-object paths.",
+  sensitivity = "Effect-aligned inference comparison across methods.",
+  outliers = "IQR diagnostic flags by timepoint and change comparison.",
+  plots = "Available ggplot objects indexed by plot name.",
+  plot_error = "Plot-generation error message, or NULL when no error occurred.",
+  long_data = "Long-format analysis data used by downstream methods.",
+  config = "Resolved configuration and automatic/manual selection provenance.",
+  data_overview = "Dataset-wide dimensions and column-level profile.",
+  detected_variables = "Detection candidates and longitudinal-variable map.",
+  diagnostics = "Detection warnings, adaptations, and failed outcomes when applicable.",
+  outcomes = "Outcome-indexed results, one entry per requested outcome."
+)
+
+.mira_print_output_guide <- function(x, title = "AVAILABLE OUTPUT ELEMENTS") {
+  cat("\n", title, "\n", sep = "")
+  cat(strrep("-", 84L), "\n", sep = "")
+
+  components <- names(x)
+  if (is.null(components) || length(components) == 0L) {
+    cat("No named output elements are available.\n")
+    return(invisible(NULL))
+  }
+
+  for (component in components) {
+    description <- unname(.mira_output_component_descriptions[component])
+    if (length(description) == 0L || is.na(description) || !nzchar(description)) {
+      description <- "Additional output component."
+    }
+    cat(sprintf("  $%-20s %s\n", component, description))
+  }
+
+  invisible(NULL)
+}
+
+#' @export
 print.mira_detect <- function(x, ...) {
-  cat(sprintf("MIRA detection v%s\n", x$version))
+  cat("MIRA INFO\n")
+  cat(strrep("=", 84L), "\n", sep = "")
+  cat("\nDETECTION OVERVIEW\n")
+  cat(strrep("-", 84L), "\n", sep = "")
   cat(sprintf("Rows: %d | Columns: %d\n",
               x$data_overview$n_rows, x$data_overview$n_columns))
   cat(sprintf("ID: %s%s\n", x$config$id,
@@ -5822,7 +6505,7 @@ print.mira_detect <- function(x, ...) {
     cat(sprintf("Reference arm: %s\n",
                 if (is.null(x$config$reference_arm)) "none" else x$config$reference_arm))
   }
-  cat(sprintf("Covariates used: %s\n",
+  cat(sprintf("Selected covariates: %s\n",
               if (length(x$config$covariates) == 0L) "none" else
                 paste(x$config$covariates, collapse = ", ")))
   cat(sprintf("Detected numeric covariates: %s\n",
@@ -5835,11 +6518,16 @@ print.mira_detect <- function(x, ...) {
     cat("Diagnostics:\n")
     cat(paste0("  - ", x$diagnostics$warnings, collapse = "\n"), "\n")
   }
+  .mira_print_output_guide(x)
   invisible(x)
 }
 
+#' @export
 print.mira_info_multi <- function(x, ...) {
-  cat(sprintf("MIRA INFO v%s — MULTI-OUTCOME REPORT\n", x$version))
+  cat("MIRA INFO\n")
+  cat(strrep("=", 84L), "\n", sep = "")
+  cat("\nMULTI-OUTCOME OVERVIEW\n")
+  cat(strrep("-", 84L), "\n", sep = "")
   cat(sprintf("Rows: %d | ID: %s | Outcomes: %d\n",
               x$data_overview$n_rows, x$config$id, length(x$outcomes)))
   cat(sprintf("Arm: %s | Covariates: %s\n",
@@ -5863,11 +6551,17 @@ print.mira_info_multi <- function(x, ...) {
     )
   })
   print(do.call(rbind, rows), row.names = FALSE)
-  cat("Access results with: result$outcomes$OUTCOME_NAME\n")
+  .mira_print_output_guide(x)
+  cat("\nAccess an outcome-specific result through $outcomes[[\"OUTCOME_NAME\"]]\n")
   invisible(x)
 }
 
+#' @export
 print.mira_info_error <- function(x, ...) {
+  cat("MIRA INFO\n")
+  cat(strrep("=", 84L), "\n", sep = "")
+  cat("\nANALYSIS ERROR\n")
+  cat(strrep("-", 84L), "\n", sep = "")
   cat(sprintf("Outcome %s: analysis not completed — %s\n", x$outcome, x$error))
   invisible(x)
 }
@@ -5877,6 +6571,7 @@ print.mira_info_error <- function(x, ...) {
 # PRINT METHOD
 # ============================================================
 
+#' @export
 print.mira_info <- function(x,
                             digits = 3,
                             max_rows = 20,
@@ -5920,6 +6615,33 @@ print.mira_info <- function(x,
     )
   }
 
+  has_rows <- function(z) {
+    rows <- tryCatch(nrow(z), error = function(e) NULL)
+    !is.null(rows) && length(rows) == 1L && !is.na(rows) && rows > 0L
+  }
+
+  fmt_text <- function(z, fallback = "none") {
+    if (is.null(z) || length(z) == 0L) return(fallback)
+    z <- as.character(z)
+    z <- z[!is.na(z) & nzchar(z)]
+    if (length(z) == 0L) fallback else paste(z, collapse = ", ")
+  }
+
+  extract_test_p <- function(test) {
+    if (is.null(test)) return(NA_real_)
+    table <- tryCatch(as.data.frame(test), error = function(e) NULL)
+    if (is.null(table) || nrow(table) == 0L) return(NA_real_)
+    p_col <- .mira_column_name(
+      table,
+      candidates = c("Pr(>Chisq)", "p.value", "p_value", "p"),
+      contains = c("prchisq", "pvalue")
+    )
+    if (is.na(p_col)) return(NA_real_)
+    values <- .mira_as_numeric(table[[p_col]])
+    available <- which(is.finite(values))
+    if (length(available) == 0L) NA_real_ else values[[tail(available, 1L)]]
+  }
+
   effect_label <- function(d) {
     if (length(d) == 0L || is.na(d)) return(NA_character_)
     a <- abs(d)
@@ -5929,7 +6651,7 @@ print.mira_info <- function(x,
   limit_table <- function(z, label = "rows") {
     if (!is.data.frame(z) || nrow(z) == 0L) return(z)
     if (is.finite(max_rows) && nrow(z) > max_rows) {
-      cat(sprintf("Showing first %d of %d %s. Use print(result, max_rows = Inf) for all.\n",
+      cat(sprintf("Showing the first %d of %d %s. Set max_rows = Inf in print() to display all rows.\n",
                   as.integer(max_rows), nrow(z), label))
       return(utils::head(z, as.integer(max_rows)))
     }
@@ -5941,24 +6663,149 @@ print.mira_info <- function(x,
   conf_pct <- x$settings$confidence_percent
   conf_label <- paste0(formatC(conf_pct, format = "fg", digits = 4L), "% CI")
 
-  cat("\n")
+  baseline_final <- NULL
+  if (!is.null(x$change) && nrow(x$change) > 0L && length(ov$timepoints) >= 2L) {
+    baseline_final <- x$change[
+      x$change$from == ov$timepoints[[1L]] &
+        x$change$to == ov$timepoints[[length(ov$timepoints)]],
+      ,
+      drop = FALSE
+    ]
+  }
+
+  cat("MIRA INFO\n")
   line("=")
-  cat(sprintf("MIRA INFO v%s — COMPLETE REPORT — %s\n", x$version, ov$outcome_display))
-  line("=")
+
+  # ------------------------------------------------------------------
+  # KEY RESULTS
+  # ------------------------------------------------------------------
+  section("KEY RESULTS")
+  cat(sprintf("Outcome: %s\n", ov$outcome_display))
+  cat(sprintf(
+    "Subjects: %d | Rows: %d | Timepoints: %d | Complete profiles: %d/%d (%s)\n",
+    ov$n_patients, ov$n_rows, ov$n_timepoints,
+    ov$complete_profiles, ov$n_rows, fmt_pct(ov$complete_profiles_pct)
+  ))
+
+  if (isTRUE(ov$arm_analysis)) {
+    cat(sprintf(
+      "Treatment arms: %d | Reference: %s | Arm variable: %s\n",
+      length(ov$arm_levels), ov$reference_arm, ov$arm_variable
+    ))
+  }
+
+  if (!is.null(d) && nrow(d) > 0L) {
+    baseline_row <- d[1L, , drop = FALSE]
+    cat(sprintf(
+      "Baseline (%s): N=%d | mean=%s | SD=%s\n",
+      baseline_row$label, baseline_row$n,
+      fmt_num(baseline_row$mean), fmt_num(baseline_row$sd)
+    ))
+    if (nrow(d) > 1L) {
+      final_row <- d[nrow(d), , drop = FALSE]
+      cat(sprintf(
+        "Final (%s): N=%d | mean=%s | SD=%s\n",
+        final_row$label, final_row$n,
+        fmt_num(final_row$mean), fmt_num(final_row$sd)
+      ))
+    }
+  }
+
+  if (!is.null(x$missing$by_time) && nrow(x$missing$by_time) > 0L) {
+    total_cells <- ov$n_rows * ov$n_timepoints
+    unavailable_cells <- sum(x$missing$by_time$unavailable_n, na.rm = TRUE)
+    available_cells <- total_cells - unavailable_cells
+    cat(sprintf(
+      "Available longitudinal cells: %d/%d (%s)\n",
+      available_cells, total_cells,
+      fmt_pct(if (total_cells > 0L) available_cells / total_cells * 100 else NA_real_)
+    ))
+  }
+
+  if (!is.null(baseline_final) && nrow(baseline_final) == 1L) {
+    bf_key <- baseline_final[1L, , drop = FALSE]
+    cat(sprintf(
+      "Baseline-to-final change: mean=%s | %s [%s, %s] | Cohen dz=%s (%s)\n",
+      fmt_num(bf_key$mean_change), conf_label,
+      fmt_num(bf_key$ci_lower), fmt_num(bf_key$ci_upper),
+      fmt_num(bf_key$cohens_dz), effect_label(bf_key$cohens_dz)
+    ))
+    cat(sprintf(
+      "Adjusted paired tests: t=%s | Wilcoxon=%s\n",
+      fmt_p(bf_key$paired_t_p_adj), fmt_p(bf_key$wilcoxon_p_adj)
+    ))
+    if (x$settings$improvement_direction != "unknown") {
+      cat(sprintf(
+        "Clinical direction: improved=%s | stable=%s | worsened=%s\n",
+        fmt_pct(bf_key$improved_pct), fmt_pct(bf_key$stable_pct),
+        fmt_pct(bf_key$worsened_pct)
+      ))
+    }
+  }
+
+  if (model) {
+    if (!is.null(x$model$fitted_model)) {
+      cat(sprintf(
+        "Mixed model: available | converged=%s | singular=%s\n",
+        as.character(x$model$converged), as.character(x$model$singular)
+      ))
+    } else if (!is.null(x$model$error)) {
+      cat("Mixed model: unavailable | ", x$model$error, "\n", sep = "")
+    } else {
+      cat("Mixed model: not available\n")
+    }
+
+    global_tests <- character(0)
+    if (!is.null(x$model$global_time_test)) {
+      global_tests <- c(
+        global_tests,
+        paste0("time p=", fmt_p(extract_test_p(x$model$global_time_test)))
+      )
+    }
+    if (!is.null(x$model$global_arm_test)) {
+      global_tests <- c(
+        global_tests,
+        paste0("arm p=", fmt_p(extract_test_p(x$model$global_arm_test)))
+      )
+    }
+    if (!is.null(x$model$arm_time_interaction_test)) {
+      global_tests <- c(
+        global_tests,
+        paste0(
+          "arm x time p=",
+          fmt_p(extract_test_p(x$model$arm_time_interaction_test))
+        )
+      )
+    }
+    if (length(global_tests) > 0L) {
+      cat("Global mixed-model tests: ", paste(global_tests, collapse = " | "), "\n", sep = "")
+    }
+  }
+
+  if (outliers && !is.null(x$outliers$by_time)) {
+    time_flags <- sum(vapply(x$outliers$by_time, nrow, integer(1L)))
+    change_flags <- if (!is.null(x$outliers$change)) {
+      sum(vapply(x$outliers$change, nrow, integer(1L)))
+    } else 0L
+    cat(sprintf(
+      "IQR diagnostic flags: timepoint=%d | change=%d\n",
+      time_flags, change_flags
+    ))
+  }
 
   # ------------------------------------------------------------------
   # ANALYSIS SETTINGS
   # ------------------------------------------------------------------
   section("ANALYSIS SETTINGS")
   cat(sprintf("Outcome: %s | ID variable: %s\n", ov$outcome_display, ov$id))
-  cat(sprintf("Confidence level: %s | alpha: %s | p-adjust: %s\n",
+  cat(sprintf("Confidence level: %s | alpha: %s | p-value adjustment: %s\n",
               conf_label, fmt_num(x$settings$alpha), x$settings$p_adjust_method))
   cat(sprintf("Improvement direction: %s | Stable threshold: %s\n",
               x$settings$improvement_direction, fmt_num(x$settings$stable_threshold)))
   cat(sprintf("Strict ID checks: %s | Non-finite handling: %s\n",
               as.character(x$settings$strict_id), x$settings$non_finite_handling))
   if (!is.null(x$config)) {
-    cat(sprintf("Covariates used: %s\n",
+    cat(sprintf("Selected covariates: %s\n",
                 if (length(x$config$covariates) == 0L) "none" else
                   paste(x$config$covariates, collapse = ", ")))
   }
@@ -5970,6 +6817,20 @@ print.mira_info <- function(x,
       ov$reference_arm,
       length(ov$arm_levels)
     ))
+  }
+
+  if (!is.null(x$config$auto_detected)) {
+    automatic <- x$config$auto_detected
+    mode <- function(value) if (isTRUE(value)) "automatic" else "manual"
+    id_mode <- if (isTRUE(x$config$id_generated)) "generated" else mode(automatic$id)
+    arm_mode <- if (is.null(x$config$arm)) "none" else mode(automatic$arm)
+    cat(sprintf(
+      "Selection mode: ID=%s | outcome=%s | time variables=%s | arm=%s | covariates=%s\n",
+      id_mode, mode(automatic$outcomes), mode(automatic$time_vars),
+      arm_mode, mode(automatic$covariates)
+    ))
+    cat("Full configuration provenance: $config\n")
+    cat("Detection candidates and map:  $detected_variables\n")
   }
 
   # ------------------------------------------------------------------
@@ -6088,9 +6949,13 @@ print.mira_info <- function(x,
       bb_print <- data.frame(
         Arm_A = bb$arm_a,
         Arm_B = bb$arm_b,
+        N_A = bb$n_a,
+        N_B = bb$n_b,
         Mean_A = round(bb$mean_a, digits),
         Mean_B = round(bb$mean_b, digits),
         Difference_B_minus_A = round(bb$mean_difference_b_minus_a, digits),
+        CI_low = round(bb$ci_lower, digits),
+        CI_high = round(bb$ci_upper, digits),
         Hedges_g = round(bb$hedges_g, digits),
         Welch_p = vapply(bb$welch_t_p, fmt_p, character(1L)),
         Wilcoxon_p = vapply(bb$wilcoxon_p, fmt_p, character(1L)),
@@ -6129,17 +6994,54 @@ print.mira_info <- function(x,
         Time = ap$time_label,
         Arm_A = ap$arm_a,
         Arm_B = ap$arm_b,
+        N_A = ap$n_a,
+        N_B = ap$n_b,
         Difference_B_minus_A = round(ap$mean_difference_b_minus_a, digits),
         CI_low = round(ap$ci_lower, digits),
         CI_high = round(ap$ci_upper, digits),
         Hedges_g = round(ap$hedges_g, digits),
+        Welch_p = vapply(ap$welch_t_p, fmt_p, character(1L)),
         Welch_p_adj = vapply(ap$welch_t_p_adj, fmt_p, character(1L)),
+        Wilcoxon_p = vapply(ap$wilcoxon_p, fmt_p, character(1L)),
         Wilcoxon_p_adj = vapply(ap$wilcoxon_p_adj, fmt_p, character(1L)),
         check.names = FALSE
       )
 
       cat("\nPairwise arm comparisons by timepoint:\n")
       print(limit_table(ap_print, "arm pairwise comparisons"), row.names = FALSE)
+    }
+
+    if (!is.null(x$arm_analysis$change_descriptives) &&
+        nrow(x$arm_analysis$change_descriptives) > 0L) {
+
+      acd <- x$arm_analysis$change_descriptives
+
+      acd_print <- data.frame(
+        Arm = acd$arm,
+        Follow_up = acd$to_label,
+        N = acd$n,
+        Mean_change = round(acd$mean_change, digits),
+        SD_change = round(acd$sd_change, digits),
+        SE_change = round(acd$se_change, digits),
+        Median_change = round(acd$median_change, digits),
+        CI_low = round(acd$ci_lower, digits),
+        CI_high = round(acd$ci_upper, digits),
+        Stable_pct = round(acd$stable_pct, 1L),
+        check.names = FALSE
+      )
+
+      if (x$settings$improvement_direction != "unknown") {
+        acd_print$Improved_pct <- round(acd$improved_pct, 1L)
+        acd_print$Worsened_pct <- round(acd$worsened_pct, 1L)
+        acd_print <- acd_print[c(
+          "Arm", "Follow_up", "N", "Mean_change", "SD_change", "SE_change",
+          "Median_change", "CI_low", "CI_high", "Improved_pct", "Stable_pct",
+          "Worsened_pct"
+        )]
+      }
+
+      cat("\nChange from baseline by arm and follow-up:\n")
+      print(limit_table(acd_print, "arm change descriptive rows"), row.names = FALSE)
     }
 
     if (!is.null(x$arm_analysis$change_omnibus) &&
@@ -6170,12 +7072,18 @@ print.mira_info <- function(x,
         Follow_up = cp$to_label,
         Arm_A = cp$arm_a,
         Arm_B = cp$arm_b,
+        N_A = cp$n_a,
+        N_B = cp$n_b,
         Mean_change_A = round(cp$mean_change_a, digits),
         Mean_change_B = round(cp$mean_change_b, digits),
         Difference_in_change_B_minus_A =
           round(cp$difference_in_change_b_minus_a, digits),
+        CI_low = round(cp$ci_lower, digits),
+        CI_high = round(cp$ci_upper, digits),
         Hedges_g = round(cp$hedges_g, digits),
+        Welch_p = vapply(cp$welch_t_p, fmt_p, character(1L)),
         Welch_p_adj = vapply(cp$welch_t_p_adj, fmt_p, character(1L)),
+        Wilcoxon_p = vapply(cp$wilcoxon_p, fmt_p, character(1L)),
         Wilcoxon_p_adj = vapply(cp$wilcoxon_p_adj, fmt_p, character(1L)),
         check.names = FALSE
       )
@@ -6281,6 +7189,8 @@ print.mira_info <- function(x,
       Mean_from = round(ch$mean_from, digits),
       Mean_to = round(ch$mean_to, digits),
       Mean_change = round(ch$mean_change, digits),
+      SD_change = round(ch$sd_change, digits),
+      SE_change = round(ch$se_change, digits),
       CI_low = round(ch$ci_lower, digits),
       CI_high = round(ch$ci_upper, digits),
       Cohen_dz = round(ch$cohens_dz, digits),
@@ -6365,12 +7275,24 @@ print.mira_info <- function(x,
       cat("Mixed model not available.\n")
     } else {
       fit <- x$model$fitted_model
-      cat(sprintf("Covariates used: %s\n",
-                  if (length(x$model$covariates_used) == 0L) "none" else
-                    paste(x$model$covariates_used, collapse = ", ")))
+      model_formula <- tryCatch(
+        paste(deparse(stats::formula(fit)), collapse = " "),
+        error = function(e) NA_character_
+      )
+      if (!is.na(model_formula) && nzchar(model_formula)) {
+        cat("Formula: ", model_formula, "\n", sep = "")
+      }
+      cat(sprintf("Covariates requested: %s\n",
+                  fmt_text(x$model$covariates_requested)))
+      cat(sprintf("Covariates retained:  %s\n",
+                  fmt_text(x$model$covariates_used)))
       if (length(x$model$covariates_skipped) > 0L) {
         cat(sprintf("Covariates skipped (insufficient variation): %s\n",
                     paste(x$model$covariates_skipped, collapse = ", ")))
+      }
+      if (length(x$model$fixed_parameters) == 1L &&
+          is.finite(x$model$fixed_parameters)) {
+        cat(sprintf("Fixed-effect parameters: %d\n", x$model$fixed_parameters))
       }
       cat(sprintf("Converged: %s | Singular: %s\n",
                   as.character(x$model$converged), as.character(x$model$singular)))
@@ -6404,8 +7326,8 @@ print.mira_info <- function(x,
         print(x$model$anova)
       }
 
-      cat("\nFull fitted model object: result$model$fitted_model\n")
-      cat("Full model summary:       result$model$summary\n")
+      cat("\nFull fitted model object: $model$fitted_model\n")
+      cat("Full model summary:       $model$summary\n")
     }
   }
 
@@ -6413,7 +7335,7 @@ print.mira_info <- function(x,
   # GLOBAL ARM / TIME TESTS
   # ------------------------------------------------------------------
 
-  if (isTRUE(ov$arm_analysis)) {
+  if (model && isTRUE(ov$arm_analysis)) {
 
     section("GLOBAL ARM × TIME TESTS")
 
@@ -6438,7 +7360,7 @@ print.mira_info <- function(x,
   # ------------------------------------------------------------------
   # GLOBAL TIME TEST
   # ------------------------------------------------------------------
-  if (!isTRUE(ov$arm_analysis)) {
+  if (model && !isTRUE(ov$arm_analysis)) {
     section("GLOBAL TEST OF TIME")
     if (!is.null(x$model$global_time_test)) {
       cat("Likelihood-ratio test: ML full model with time vs. random-intercept model without time.\n")
@@ -6464,23 +7386,24 @@ print.mira_info <- function(x,
         if (length(idx) == 0L) next
         row <- rm$tidy[idx[[1L]], , drop = FALSE]
         gg <- if ("p_gg" %in% names(row)) fmt_p(row$p_gg) else "NA"
-        cat(sprintf("  %s: F=%s | p=%s | GG p=%s\n",
-                    question, fmt_num(row$statistic), fmt_p(row$p_value), gg))
+        hf <- if ("p_hf" %in% names(row)) fmt_p(row$p_hf) else "NA"
+        cat(sprintf("  %s: F=%s | p=%s | GG p=%s | HF p=%s\n",
+                    question, fmt_num(row$statistic), fmt_p(row$p_value), gg, hf))
       }
-      cat("  Full object: result$advanced_tests$rm_anova$object\n")
+      cat("  Full object: $advanced_tests$rm_anova$object\n")
     } else {
       reason <- if (!is.null(rm$reason_skipped)) rm$reason_skipped else "not available"
       cat("  Not available: ", reason, "\n", sep = "")
     }
 
     friedman <- x$advanced_tests$friedman
-    cat("Friedman:\n")
+    cat("\nFriedman:\n")
     if (!is.null(friedman) && isTRUE(friedman$performed)) {
       row <- friedman$tidy[1L, ]
       cat(sprintf("  statistic=%s | df=%s | p=%s | Kendall W=%s\n",
                   fmt_num(row$statistic), fmt_num(row$df, 0L),
                   fmt_p(row$p_raw), fmt_num(row$kendalls_w)))
-      cat("  Full test: result$advanced_tests$friedman$test\n")
+      cat("  Full test: $advanced_tests$friedman$test\n")
     } else {
       reason <- if (!is.null(friedman$reason_skipped)) {
         friedman$reason_skipped
@@ -6488,42 +7411,44 @@ print.mira_info <- function(x,
       cat("  Not available: ", reason, "\n", sep = "")
     }
 
-    cat("GEE robust Wald inference:\n")
+    cat("\nGEE robust Wald inference:\n")
     gee <- x$advanced_models$gee
     for (structure in c("independence", "exchangeable", "ar1")) {
       item <- gee[[structure]]
       if (!is.null(item) && isTRUE(item$performed)) {
         time_row <- item$effect_tests[item$effect_tests$question == "TIME", , drop = FALSE]
+        arm_row <- item$effect_tests[item$effect_tests$question == "ARM", , drop = FALSE]
         interaction_row <- item$effect_tests[
           item$effect_tests$question == "TIME_X_ARM", , drop = FALSE
         ]
-        cat(sprintf(
-          "  %-12s TIME p=%s%s\n",
-          structure,
-          if (nrow(time_row) > 0L) fmt_p(time_row$p_raw[[1L]]) else "NA",
+        gee_tests <- c(
+          if (nrow(time_row) > 0L) paste0("TIME p=", fmt_p(time_row$p_raw[[1L]])),
+          if (nrow(arm_row) > 0L) paste0("ARM p=", fmt_p(arm_row$p_raw[[1L]])),
           if (nrow(interaction_row) > 0L) {
-            paste0(" | TIME x ARM p=", fmt_p(interaction_row$p_raw[[1L]]))
-          } else ""
-        ))
+            paste0("TIME x ARM p=", fmt_p(interaction_row$p_raw[[1L]]))
+          }
+        )
+        if (length(gee_tests) == 0L) gee_tests <- "no estimable global effects"
+        cat(sprintf("  %-12s %s\n", structure, paste(gee_tests, collapse = " | ")))
       } else {
         cat(sprintf("  %-12s not available\n", structure))
       }
     }
-    cat("  Models: result$advanced_models$gee\n")
+    cat("  Models: $advanced_models$gee\n")
 
-    cat("Mixed models:\n")
+    cat("\nMixed models:\n")
     random_slope <- x$advanced_models$random_slope
     cat(sprintf("  random intercept: %s\n",
                 if (!is.null(x$model$fitted_model)) "available" else "not available"))
     if (!is.null(random_slope) && isTRUE(random_slope$performed)) {
       cat(sprintf("  random slope: available | converged=%s | singular=%s\n",
                   as.character(random_slope$converged), as.character(random_slope$singular)))
-      cat("  Full object: result$advanced_models$random_slope$model\n")
+      cat("  Full object: $advanced_models$random_slope$model\n")
     } else {
       cat("  random slope: not available\n")
     }
 
-    cat("Correlation structures:\n")
+    cat("\nCorrelation structures:\n")
     nlme_models <- x$advanced_models$nlme
     for (name in c("compound_symmetry", "ar1")) {
       item <- nlme_models[[name]]
@@ -6535,36 +7460,73 @@ print.mira_info <- function(x,
         cat(sprintf("  %s: not available\n", label))
       }
     }
-    cat("  Models: result$advanced_models$nlme\n")
+    cat("  Models: $advanced_models$nlme\n")
 
-    cat("Robust mixed-model inference:\n")
+    comparison <- x$advanced_models$model_comparison
+    if (has_rows(comparison) && "object_path" %in% names(comparison)) {
+      available_models <- comparison[
+        !is.na(comparison$object_path) & nzchar(comparison$object_path),
+        ,
+        drop = FALSE
+      ]
+      if (nrow(available_models) > 0L) {
+        comparison_print <- data.frame(
+          Model = available_models$model,
+          N = available_models$n,
+          Subjects = available_models$n_subjects,
+          AIC = round(available_models$AIC, digits),
+          BIC = round(available_models$BIC, digits),
+          QIC = round(available_models$QIC, digits),
+          CIC = round(available_models$CIC, digits),
+          Converged = available_models$converged,
+          Singular = available_models$singular,
+          check.names = FALSE
+        )
+        optional_columns <- c("AIC", "BIC", "QIC", "CIC", "Converged", "Singular")
+        keep_optional <- optional_columns[vapply(
+          comparison_print[optional_columns],
+          function(column) any(!is.na(column)),
+          logical(1L)
+        )]
+        comparison_print <- comparison_print[c("Model", "N", "Subjects", keep_optional)]
+        cat("\nAvailable-model comparison:\n")
+        print(comparison_print, row.names = FALSE)
+        comparison_note <- attr(comparison, "note")
+        if (!is.null(comparison_note) && nzchar(comparison_note)) {
+          cat("Note: ", comparison_note, "\n", sep = "")
+        }
+        cat("Full comparison and model paths: $advanced_models$model_comparison\n")
+      }
+    }
+
+    cat("\nRobust mixed-model inference:\n")
     robust <- x$robustness$club_sandwich
     if (!is.null(robust) && isTRUE(robust$performed)) {
       cat("  CR2 covariance with Satterthwaite/HTZ tests available.\n")
-      cat("  Full results: result$robustness$club_sandwich\n")
+      cat("  Full results: $robustness$club_sandwich\n")
     } else {
       cat("  Not available.\n")
     }
 
     emmeans <- x$advanced_tests$emmeans
-    cat("Key marginal contrasts:\n")
+    cat("\nKey marginal contrasts:\n")
     if (!is.null(emmeans) && isTRUE(emmeans$performed)) {
-      baseline_final <- emmeans$baseline_final$tidy
+      emmeans_baseline_final <- emmeans$baseline_final$tidy
       baseline_followup <- emmeans$baseline_followup$tidy
-      if (!is.null(baseline_final) && nrow(baseline_final) > 0L) {
+      if (!is.null(emmeans_baseline_final) && nrow(emmeans_baseline_final) > 0L) {
         cat(sprintf("  baseline vs final: estimate=%s | primary-adjusted p=%s\n",
-                    fmt_num(baseline_final$estimate[[1L]]),
-                    fmt_p(baseline_final$p_primary[[1L]])))
+                    fmt_num(emmeans_baseline_final$estimate[[1L]]),
+                    fmt_p(emmeans_baseline_final$p_primary[[1L]])))
       }
       cat(sprintf("  baseline vs follow-ups: %d contrast(s)\n",
                   if (is.null(baseline_followup)) 0L else nrow(baseline_followup)))
-      cat("  Full objects: result$advanced_tests$emmeans\n")
+      cat("  Full objects: $advanced_tests$emmeans\n")
     } else {
       cat("  Not available.\n")
     }
 
     sensitivity <- x$sensitivity
-    cat("Sensitivity:\n")
+    cat("\nSensitivity:\n")
     if (is.data.frame(sensitivity) && nrow(sensitivity) > 0L) {
       available_p <- sensitivity$p_raw[is.finite(sensitivity$p_raw)]
       range_text <- if (length(available_p) > 0L) {
@@ -6572,10 +7534,159 @@ print.mira_info <- function(x,
       } else "NA"
       cat(sprintf("  %d method/effect rows; raw p-value range: %s\n",
                   nrow(sensitivity), range_text))
-      cat("  Comparison table: result$sensitivity\n")
+      sensitivity_print <- data.frame(
+        Effect = sensitivity$question,
+        Method = sensitivity$method,
+        Statistic = round(sensitivity$statistic, digits),
+        df = sensitivity$df,
+        p = vapply(sensitivity$p_raw, fmt_p, character(1L)),
+        Effect_size = round(sensitivity$effect_size, digits),
+        Effect_size_type = sensitivity$effect_size_type,
+        N = sensitivity$n,
+        check.names = FALSE
+      )
+      print(limit_table(sensitivity_print, "sensitivity rows"), row.names = FALSE)
+      cat("  Full comparison, source paths, and notes: $sensitivity\n")
     } else {
       cat("  No comparable inference rows available.\n")
     }
+  }
+
+  # ------------------------------------------------------------------
+  # ADDITIONAL EFFECT SIZES
+  # ------------------------------------------------------------------
+  rm_effects <- if (model) x$effect_sizes$rm_anova else NULL
+  rank_effects <- x$effect_sizes$paired_rank_biserial
+  r2_rows <- list()
+
+  add_r2_row <- function(label, item, object_path) {
+    if (!model || is.null(item) || !isTRUE(item$performed) || !has_rows(item$tidy)) {
+      return(NULL)
+    }
+    data.frame(
+      Model = label,
+      Marginal_R2 = round(item$tidy$marginal_r2[[1L]], digits),
+      Conditional_R2 = round(item$tidy$conditional_r2[[1L]], digits),
+      Object = object_path,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  }
+
+  if (!is.null(x$effect_sizes$mixed_models)) {
+    r2_rows <- Filter(Negate(is.null), list(
+      add_r2_row(
+        "Random intercept",
+        x$effect_sizes$mixed_models$random_intercept,
+        "$effect_sizes$mixed_models$random_intercept"
+      ),
+      add_r2_row(
+        "Random slope",
+        x$effect_sizes$mixed_models$random_slope,
+        "$effect_sizes$mixed_models$random_slope"
+      )
+    ))
+  }
+
+  if (has_rows(rm_effects) || has_rows(rank_effects) || length(r2_rows) > 0L) {
+    section("ADDITIONAL EFFECT SIZES")
+
+    if (has_rows(rm_effects)) {
+      rm_effects_print <- data.frame(
+        Effect = rm_effects$effect,
+        Partial_eta_squared = round(rm_effects$partial_eta_squared, digits),
+        Generalized_eta_squared = round(rm_effects$generalized_eta_squared, digits),
+        check.names = FALSE
+      )
+      cat("RM-ANOVA effect sizes:\n")
+      print(rm_effects_print, row.names = FALSE)
+      cat("Full results: $effect_sizes$rm_anova\n")
+    }
+
+    if (has_rows(rank_effects)) {
+      rank_effects_print <- data.frame(
+        From = rank_effects$from_label,
+        To = rank_effects$to_label,
+        N = rank_effects$n,
+        Rank_biserial = round(rank_effects$rank_biserial, digits),
+        check.names = FALSE
+      )
+      cat("\nPaired rank-biserial effect sizes:\n")
+      print(limit_table(rank_effects_print, "rank-biserial comparisons"), row.names = FALSE)
+      cat("Full results: $effect_sizes$paired_rank_biserial\n")
+    }
+
+    if (length(r2_rows) > 0L) {
+      cat("\nNakagawa R-squared:\n")
+      print(do.call(rbind, r2_rows), row.names = FALSE)
+    }
+
+    cat("Paired Cohen dz values are reported under LONGITUDINAL CHANGE and stored in ",
+        "$effect_sizes$paired_cohens_dz\n", sep = "")
+  }
+
+  # ------------------------------------------------------------------
+  # MULTIPLICITY CONTROL
+  # ------------------------------------------------------------------
+  multiplicity <- x$multiplicity
+  family_entries <- list()
+  if (!is.null(multiplicity)) {
+    if (model) {
+      family_entries <- c(family_entries, list(
+        list("Time pairwise contrasts", multiplicity$time_pairwise,
+             "$multiplicity$time_pairwise$table"),
+        list("Baseline vs follow-up", multiplicity$baseline_vs_followup,
+             "$multiplicity$baseline_vs_followup$table"),
+        list("Consecutive timepoints", multiplicity$consecutive_time,
+             "$multiplicity$consecutive_time$table"),
+        list("Ordinal trends", multiplicity$ordinal_trends,
+             "$multiplicity$ordinal_trends$table"),
+        list("Arm pairwise contrasts", multiplicity$arm_pairwise,
+             "$multiplicity$arm_pairwise$table"),
+        list("Arm within time", multiplicity$simple_effects$arm_within_time,
+             "$multiplicity$simple_effects$arm_within_time$table"),
+        list("Time within arm", multiplicity$simple_effects$time_within_arm,
+             "$multiplicity$simple_effects$time_within_arm$table"),
+        list("Interaction contrasts", multiplicity$interaction_contrasts,
+             "$multiplicity$interaction_contrasts$table")
+      ))
+    }
+    family_entries <- c(family_entries, list(
+      list("Friedman post hoc", multiplicity$friedman_posthoc,
+           "$multiplicity$friedman_posthoc$table")
+    ))
+  }
+
+  family_rows <- Filter(Negate(is.null), lapply(family_entries, function(entry) {
+    family <- entry[[2L]]
+    if (is.null(family) || !has_rows(family$table)) return(NULL)
+    data.frame(
+      Family = entry[[1L]],
+      Comparisons = nrow(family$table),
+      Primary_adjustment = fmt_text(family$primary_method, "not recorded"),
+      Table = entry[[3L]],
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  }))
+
+  if (length(family_rows) > 0L) {
+    section("MULTIPLICITY CONTROL")
+    family_summary <- do.call(rbind, family_rows)
+    rownames(family_summary) <- NULL
+    print(family_summary, row.names = FALSE)
+    available_adjustments <- unique(unlist(lapply(family_entries, function(entry) {
+      family <- entry[[2L]]
+      if (is.null(family) || !has_rows(family$table)) character(0) else
+        family$available_adjustments
+    }), use.names = FALSE))
+    if (length(available_adjustments) > 0L) {
+      cat("Stored adjustments: ", paste(available_adjustments, collapse = ", "), "\n", sep = "")
+    }
+    if (!is.null(multiplicity$note) && nzchar(multiplicity$note)) {
+      cat("Note: ", multiplicity$note, "\n", sep = "")
+    }
+    cat("Each family also records its source object in $object_path; full details: $multiplicity\n")
   }
 
   # ------------------------------------------------------------------
@@ -6659,10 +7770,13 @@ print.mira_info <- function(x,
       }
     }
 
-    tr_print <- tr[c(
-      "patient", "baseline", "final", "absolute_change",
-      "relative_change_percent", "direction", "clinical_direction"
-    )]
+    trajectory_columns <- c(
+      "patient",
+      if (isTRUE(ov$arm_analysis)) "arm",
+      "baseline", "final", "absolute_change", "relative_change_percent",
+      "direction", "clinical_direction"
+    )
+    tr_print <- tr[trajectory_columns]
     numeric_cols <- vapply(tr_print, is.numeric, logical(1L))
     tr_print[numeric_cols] <- lapply(tr_print[numeric_cols], round, digits = digits)
     cat("\nPatient-level trajectories:\n")
@@ -6671,10 +7785,79 @@ print.mira_info <- function(x,
   }
 
   # ------------------------------------------------------------------
+  # DIAGNOSTICS AND AUTOMATIC ADAPTATIONS
+  # ------------------------------------------------------------------
+  diagnostic_warnings <- x$diagnostics$warnings
+  diagnostic_warnings <- as.character(diagnostic_warnings)
+  diagnostic_warnings <- unique(
+    diagnostic_warnings[!is.na(diagnostic_warnings) & nzchar(diagnostic_warnings)]
+  )
+
+  adaptation <- x$diagnostics$adaptation
+  is_adaptation_item <- function(item) {
+    is.list(item) &&
+      all(c("available_by_time", "variable_timepoints", "disabled") %in% names(item))
+  }
+  adaptation_items <- if (is_adaptation_item(adaptation)) {
+    stats::setNames(
+      list(adaptation),
+      fmt_text(x$outcome_display, fmt_text(x$outcome, "Outcome"))
+    )
+  } else if (is.list(adaptation)) {
+    adaptation
+  } else {
+    list()
+  }
+  if (length(adaptation_items) > 0L && is.null(names(adaptation_items))) {
+    names(adaptation_items) <- paste0("Outcome ", seq_along(adaptation_items))
+  }
+
+  adaptation_lines <- unlist(lapply(seq_along(adaptation_items), function(i) {
+    item <- adaptation_items[[i]]
+    if (!is_adaptation_item(item)) return(character(0))
+    disabled <- as.character(item$disabled)
+    disabled <- disabled[!is.na(disabled) & nzchar(disabled)]
+    if (length(disabled) == 0L) return(character(0))
+    label <- names(adaptation_items)[[i]]
+    sprintf("%s: %s", label, paste(disabled, collapse = "; "))
+  }), use.names = FALSE)
+
+  if (length(diagnostic_warnings) > 0L || length(adaptation_lines) > 0L) {
+    section("DIAGNOSTICS AND AUTOMATIC ADAPTATIONS")
+    if (length(diagnostic_warnings) > 0L) {
+      cat("Configuration and detection warnings:\n")
+      cat(paste0("  - ", diagnostic_warnings, collapse = "\n"), "\n")
+    }
+    if (length(adaptation_lines) > 0L) {
+      if (length(diagnostic_warnings) > 0L) cat("\n")
+      cat("Analyses automatically disabled for insufficient usable data:\n")
+      cat(paste0("  - ", adaptation_lines, collapse = "\n"), "\n")
+    }
+    cat("Full diagnostic record: $diagnostics\n")
+  }
+
+  # ------------------------------------------------------------------
   # PLOTS
   # ------------------------------------------------------------------
   if (plots) {
     section("PLOTS AVAILABLE")
+    plot_descriptions <- c(
+      boxplot = "Outcome distributions by timepoint with observations and mean CIs.",
+      spaghetti = "Individual trajectories with the population mean and confidence band.",
+      mean_ci = "Mean outcome and confidence interval across timepoints.",
+      change = "Distribution of individual baseline-to-final changes.",
+      change_from_baseline = "Change-from-baseline distributions at each follow-up.",
+      change_ci = "Mean changes from baseline with confidence intervals.",
+      missingness = "Unavailable-observation percentage by timepoint.",
+      correlation_heatmap = "Pearson correlation heatmap across repeated timepoints.",
+      response = "Baseline-to-final direction or clinical-response percentages.",
+      arm_mean_ci = "Mean outcome and confidence intervals over time by arm.",
+      arm_boxplot = "Outcome distributions by treatment arm and timepoint.",
+      arm_change = "Baseline-to-final change distributions by treatment arm.",
+      arm_change_ci = "Mean changes from baseline with confidence intervals by arm.",
+      arm_difference_ci = "Between-arm mean differences with confidence intervals.",
+      arm_missingness = "Unavailable-observation percentage by arm and timepoint."
+    )
     if (length(x$plots) == 0L) {
       cat("No plot objects available.\n")
     } else {
@@ -6683,7 +7866,11 @@ print.mira_info <- function(x,
         cat("No plot objects available.\n")
       } else {
         for (nm in available_plots) {
-          cat(sprintf("  %-12s -> plot(result, which = \"%s\")  /  result$plots$%s\n", nm, nm, nm))
+          description <- unname(plot_descriptions[nm])
+          if (length(description) == 0L || is.na(description)) {
+            description <- "Additional available plot."
+          }
+          cat(sprintf("  $plots$%-24s %s\n", nm, description))
         }
       }
     }
@@ -6693,36 +7880,9 @@ print.mira_info <- function(x,
   # ------------------------------------------------------------------
   # COMPLETE OUTPUT GUIDE
   # ------------------------------------------------------------------
-  section("COMPLETE OUTPUT GUIDE")
-  if (!is.null(x$config)) {
-    cat("  $config         Final choices and automatic/manual provenance\n")
-    cat("  $data_overview Dataset-wide column classes, cardinality and missingness\n")
-    cat("  $detected_variables  Detection candidates and longitudinal map\n")
-    if (!is.null(x$outcomes)) {
-      cat("  $outcomes       Outcome-indexed results (also present for one outcome)\n")
-    }
-  }
-  cat(sprintf("  $outcome        Detected outcome (%s)\n", ov$outcome_display))
-  cat("  $overview       Dataset structure, IDs, completeness and timepoints\n")
-  cat("  $settings       Confidence level, p-adjustment and clinical direction settings\n")
-  cat("  $descriptives   Detailed statistics for every timepoint\n")
-  cat("  $missing        Missing/non-finite/unavailable data by timepoint and subject\n")
-  cat("  $change         All longitudinal pairwise comparisons and adjusted tests\n")
-  cat("  $correlations   Pearson, Spearman and pairwise sample-size matrices\n")
-  cat("  $variability    Within/between-subject variability and ICC estimates\n")
-  cat("  $trajectories   Subject-level baseline-to-final changes and direction\n")
-  cat("  $model          Mixed-effects model, diagnostics, ANOVA and global time test\n")
-  cat("  $advanced_tests RM-ANOVA, Friedman, emmeans and longitudinal contrasts\n")
-  cat("  $advanced_models Random-slope, nlme and GEE models plus comparison table\n")
-  cat("  $robustness     CR2 cluster-robust mixed-model inference\n")
-  cat("  $effect_sizes   Method-appropriate longitudinal effect sizes\n")
-  cat("  $multiplicity   Separate contrast families with primary and sensitivity adjustments\n")
-  cat("  $sensitivity    Effect-aligned comparison across longitudinal methods\n")
-  cat("  $outliers       Timepoint and change IQR diagnostic flags\n")
-  cat("  $plots          ggplot objects generated by mira_info()\n")
-  cat("  $long_data      Long-format analysis dataset\n")
-  cat("\nUse names(result) for all top-level components.\n")
-  cat("Use print(result, max_rows = Inf) to print every patient/comparison/flag.\n")
+  .mira_print_output_guide(x, title = "COMPLETE OUTPUT GUIDE")
+  cat("\nUse names() on the saved object to verify its current top-level components.\n")
+  cat("Set max_rows = Inf in print() to display every patient, comparison, and flag row.\n")
   line("=")
   invisible(x)
 }
@@ -6732,6 +7892,7 @@ print.mira_info <- function(x,
 # SUMMARY METHOD
 # ============================================================
 
+#' @export
 summary.mira_info <- function(object, ...) {
   ov <- object$overview
   ch <- object$change
@@ -6800,9 +7961,14 @@ summary.mira_info <- function(object, ...) {
   out
 }
 
-
+#' @method print summary.mira_info
+#' @export
 print.summary.mira_info <- function(x, digits = 3, ...) {
-  cat(sprintf("mira_info summary — %s\n", toupper(x$outcome)))
+  cat("MIRA INFO\n")
+  cat(strrep("=", 84L), "\n", sep = "")
+  cat("\nSUMMARY\n")
+  cat(strrep("-", 84L), "\n", sep = "")
+  cat(sprintf("Outcome: %s\n", x$outcome))
   cat(sprintf("Subjects: %d | Timepoints: %d | Complete profiles: %.1f%%\n",
               x$n_patients, x$n_timepoints, x$complete_profiles_pct))
 
@@ -6818,15 +7984,15 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
                      formatC(x$variability$ICC[[1L]], format = "f", digits = digits))))
 
   if (!is.null(x$arm_time_interaction_test)) {
-    cat("Arm × time interaction test available in $arm_time_interaction_test.\n")
+    cat("Arm × time interaction test available in $arm_time_interaction_test\n")
   }
 
   if (!is.null(x$global_arm_test)) {
-    cat("Global arm test available in $global_arm_test.\n")
+    cat("Global arm test available in $global_arm_test\n")
   }
 
   if (!is.null(x$global_time_test)) {
-    cat("Global time test available in $global_time_test.\n")
+    cat("Global time test available in $global_time_test\n")
   }
 
   if (!is.null(x$advanced)) {
@@ -6841,8 +8007,8 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
     sensitivity_n <- if (is.data.frame(x$advanced$sensitivity)) {
       nrow(x$advanced$sensitivity)
     } else 0L
-    cat(sprintf("  Sensitivity rows: %d (full table in $advanced$sensitivity).\n",
-                sensitivity_n))
+    cat(sprintf("  Sensitivity rows: %d\n", sensitivity_n))
+    cat("  Full sensitivity table: $advanced$sensitivity\n")
   }
 
   invisible(x)
@@ -6853,6 +8019,7 @@ print.summary.mira_info <- function(x, digits = 3, ...) {
 # PLOT METHOD
 # ============================================================
 
+#' @export
 plot.mira_info <- function(
     x,
     which = c(
@@ -6895,6 +8062,7 @@ plot.mira_info <- function(
 # MULTI-OUTCOME SUMMARY AND PLOT METHODS
 # ============================================================
 
+#' @export
 summary.mira_info_multi <- function(object, ...) {
   summaries <- lapply(object$outcomes, function(result) {
     if (inherits(result, "mira_info_error")) return(result)
@@ -6910,6 +8078,8 @@ summary.mira_info_multi <- function(object, ...) {
   out
 }
 
+#' @method print summary.mira_info_multi
+#' @export
 print.summary.mira_info_multi <- function(x, digits = 3, ...) {
   cat(sprintf("mira_info multi-outcome summary — %d outcomes\n", length(x$outcomes)))
   for (outcome in names(x$outcomes)) {
@@ -6924,6 +8094,7 @@ print.summary.mira_info_multi <- function(x, digits = 3, ...) {
   invisible(x)
 }
 
+#' @export
 plot.mira_info_multi <- function(x, outcome = NULL, which = "boxplot", ...) {
   available <- names(x$outcomes)[!vapply(x$outcomes, inherits, logical(1L),
                                          what = "mira_info_error")]

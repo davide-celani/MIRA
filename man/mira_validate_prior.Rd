@@ -7,10 +7,10 @@
 mira_validate_prior(prior)
 }
 \arguments{
-\item{prior}{A \code{mira_prior} object.}
+\item{prior}{A \code{mira_prior} object or complete named list.}
 }
 \value{
-Invisibly returns TRUE.
+Invisibly returns \code{TRUE}.
 }
 \description{
 Validate a MIRA prior specification

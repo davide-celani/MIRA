@@ -2094,6 +2094,7 @@ mira_report_freq <- function(
   invisible(result)
 }
 
+#' @export
 print.mira_report_freq <- function(x, ...) {
   cat("MIRA Quarto report\n")
   cat(sprintf("Directory: %s\n", x$output_dir))

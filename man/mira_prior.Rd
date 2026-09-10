@@ -2,13 +2,30 @@
 % Please edit documentation in R/mira_prior.R
 \name{mira_prior}
 \alias{mira_prior}
-\title{Create a MIRA prior specification}
+\title{Create outcome- and likelihood-specific priors for the MIRA model}
 \usage{
 mira_prior(
   stan_data,
-  profile = c("default", "weak", "regularized", "informative", "custom"),
-  mu_time_mean = NULL,
-  mu_time_sd = NULL,
+  outcome = c("auto", "BCVA", "CMT", "generic"),
+  likelihood = "auto",
+  informativeness = c("standard", "weak", "informative", "custom"),
+  time_unit = c("months", "years", "weeks", "days"),
+  custom_prior = NULL,
+  profile = NULL,
+  baseline_mean = NULL,
+  baseline_sd = NULL,
+  beta_time_mean = NULL,
+  beta_time_sd = NULL,
+  tau_common_rate = NULL,
+  beta_treatment_sd = NULL,
+  tau_treatment_rate = NULL,
+  arm_baseline_sd_rate = NULL,
+  gender_baseline_sd = NULL,
+  beta_gender_sd = NULL,
+  tau_gender_rate = NULL,
+  age_baseline_sd = NULL,
+  beta_age_sd = NULL,
+  tau_age_rate = NULL,
   sigma_intercept_rate = NULL,
   sigma_slope_rate = NULL,
   sigma_rate = NULL,
@@ -19,34 +36,92 @@ mira_prior(
 \arguments{
 \item{stan_data}{Data prepared by \code{\link[=mira_prepare_data]{mira_prepare_data()}}.}
 
-\item{profile}{Character string specifying a predefined prior
-profile. Available profiles are \code{"default"}, \code{"weak"},
+\item{outcome}{Outcome scale: \code{"auto"}, \code{"BCVA"}, \code{"CMT"}, or
+\code{"generic"}. With \code{"auto"}, \code{stan_data$outcome_name} is used.}
+
+\item{likelihood}{Likelihood/link specification. \code{"auto"} uses the value
+stored by \code{\link[=mira_prepare_data]{mira_prepare_data()}} (or Student-t for BCVA/generic and
+log-normal for CMT). Explicit values are \code{"student_t"}, \code{"gaussian"},
+and \code{"lognormal"}.}
+
+\item{informativeness}{Prior strength:
+\itemize{
+\item \code{"weak"}: broad, less informative priors;
+\item \code{"standard"}: clinically scaled default priors (\code{"normal"} is an
+accepted alias);
+\item \code{"informative"}: narrower priors;
+\item \code{"custom"}: standard priors with user-supplied replacements.
+}}
+
+\item{time_unit}{Unit used by \code{stan_data$time_value}. Clinical slope and
+continuous-time RW1 priors are defined per month and converted to this
+unit.}
+
+\item{custom_prior}{Optional named list of replacements. It may use the
+short argument names, such as \code{baseline_mean}, or the exact Stan names,
+such as \code{baseline_prior_mean}. Unspecified fields inherit the selected
+outcome's standard prior.}
+
+\item{profile}{Optional legacy profile. Supported for compatibility with
+existing code: \code{"auto"}, \code{"bcva"}, \code{"cmt"}, \code{"default"}, \code{"weak"},
 \code{"regularized"}, \code{"informative"}, and \code{"custom"}.}
 
-\item{mu_time_mean}{Prior mean for the population time-specific means.}
+\item{baseline_mean}{Prior mean for the reference-arm baseline.}
 
-\item{mu_time_sd}{Prior standard deviation for the population
-time-specific means.}
+\item{baseline_sd}{Prior SD for the reference-arm baseline.}
 
-\item{sigma_intercept_rate}{Rate parameter for the exponential
-prior on the random-intercept standard deviation.}
+\item{beta_time_mean}{Prior mean for the reference-arm time slope.}
 
-\item{sigma_slope_rate}{Rate parameter for the exponential
-prior on the random-slope standard deviation.}
+\item{beta_time_sd}{Prior SD for the reference-arm time slope.}
 
-\item{sigma_rate}{Rate parameter for the exponential prior on
-the residual standard deviation.}
+\item{tau_common_rate}{Exponential rate for the common RW1 scale.}
 
-\item{nu_shape}{Shape parameter for the Gamma prior on Student-t
-degrees of freedom.}
+\item{beta_treatment_sd}{Prior SD for treatment slope differences.}
 
-\item{nu_rate}{Rate parameter for the Gamma prior on Student-t
-degrees of freedom.}
+\item{tau_treatment_rate}{Exponential rate for treatment RW1 scales.}
+
+\item{arm_baseline_sd_rate}{Exponential rate for baseline arm imbalance SD.}
+
+\item{gender_baseline_sd}{Prior SD for the gender baseline difference.}
+
+\item{beta_gender_sd}{Prior SD for the gender slope difference.}
+
+\item{tau_gender_rate}{Exponential rate for the gender RW1 scale.}
+
+\item{age_baseline_sd}{Prior SD for the age-group baseline difference.}
+
+\item{beta_age_sd}{Prior SD for the age-group slope difference.}
+
+\item{tau_age_rate}{Exponential rate for the age-group RW1 scale.}
+
+\item{sigma_intercept_rate}{Exponential rate for random-intercept SD.}
+
+\item{sigma_slope_rate}{Exponential rate for random-slope SD.}
+
+\item{sigma_rate}{Exponential rate for the residual scale (natural-scale SD
+for identity models; log-SD for the log-normal model).}
+
+\item{nu_shape}{Shape of the Gamma prior for Student-t degrees of freedom;
+inactive for Gaussian and log-normal models.}
+
+\item{nu_rate}{Rate of the Gamma prior for Student-t degrees of freedom;
+inactive for Gaussian and log-normal models.}
 }
 \value{
 An object of class \code{mira_prior}.
 }
 \description{
-Creates a prior specification for the MIRA longitudinal
-Student-t model.
+\code{outcome} and \code{informativeness} are independent choices. For example,
+BCVA can use weak, standard, informative, or custom priors, and the same is
+true for CMT. Prior locations and scales are expressed on the active link
+scale: identity for Gaussian/Student-t and log for log-normal. The returned
+object contains exactly the 19 prior fields used by Stan, plus R-side
+metadata. Student-t degrees-of-freedom priors are inactive for the other
+likelihoods.
+}
+\details{
+The BCVA and CMT centres are calibrated to DRCR.net Protocol T summaries.
+BCVA is expressed in ETDRS letters and CMT in micrometres. The CMT profile
+uses central subfield thickness as a practical proxy; OCT device and
+segmentation conventions can require different values.
 }

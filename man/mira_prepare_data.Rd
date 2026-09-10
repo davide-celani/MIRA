@@ -2,173 +2,102 @@
 % Please edit documentation in R/data_preparation.R
 \name{mira_prepare_data}
 \alias{mira_prepare_data}
-\title{Prepare Longitudinal Data for the MIRA Stan Model}
+\title{Prepare longitudinal data for the MIRA treatment model}
 \usage{
-mira_prepare_data(data, time_value = c(0, 6, 12), meaningful_change = 5)
+mira_prepare_data(
+  data,
+  time_value,
+  outcome = "auto",
+  likelihood = "auto",
+  outcome_bounds = NULL,
+  meaningful_change = NULL,
+  meaningful_change_sd,
+  direction = "auto",
+  meaningful_between_arm_difference = NULL,
+  arm_column = "arm",
+  reference_arm = NULL,
+  gender_column = "gender",
+  female_label = "Female",
+  male_label = "Male",
+  age_column = "age",
+  age_threshold = 60
+)
 }
 \arguments{
-\item{data}{A data frame containing one row per subject. The data frame
-must contain the following columns:
-\itemize{
-\item \code{patient} : A unique subject identifier. Missing and duplicated
-identifiers are not allowed.
-\item \code{t0} : Numeric outcome measurement at the baseline time point.
-\item \code{t1} : Numeric outcome measurement at the first follow-up time
-point.
-\item \code{t2} : Numeric outcome measurement at the second follow-up time
-point.
-}}
+\item{data}{A data frame with one row per subject. It must contain a
+\code{patient} identifier, a treatment-arm column, and at least two
+longitudinal measurement columns named \verb{<outcome>_t0}, ..., \verb{<outcome>_tK}.}
 
-\item{time_value}{A numeric vector of length three containing the
-actual time values corresponding to \code{t0}, \code{t1}, and \code{t2},
-respectively. Values must be finite, distinct, and strictly
-increasing. The default is \code{c(0, 6, 12)}.}
+\item{time_value}{Numeric vector of actual measurement times corresponding
+to t0, ..., tK. Values must be finite and strictly increasing.}
 
-\item{meaningful_change}{A single finite numeric value defining the
-minimum clinically important difference (MCID). This threshold is
-passed to the Stan model and is used to define clinically meaningful
-individual improvement. The default is \code{5}.}
+\item{outcome}{Outcome to select when the data contain one or more
+longitudinal series. \code{"auto"} is allowed only when there is one outcome
+prefix. Recognized aliases are BCVA/VA/ETDRS and CMT/CST/CSFT; any other
+value is treated as an exact column prefix and as a generic outcome.}
+
+\item{likelihood}{Observation model. \code{"auto"} selects Student-t for BCVA,
+log-normal for CMT, and a warned Student-t fallback for an unknown
+continuous outcome. Explicit options are \code{"student_t"}, \code{"gaussian"},
+and \code{"lognormal"}.}
+
+\item{outcome_bounds}{Optional numeric vector \code{c(lower, upper)} defining
+observable bounds. Use \code{NA} for an absent endpoint. BCVA defaults to
+\code{c(0, 100)} and is modeled as a censored continuous score. CMT defaults
+to the positive support of the log-normal distribution.}
+
+\item{meaningful_change}{Positive numeric value giving the prior mean of
+the minimum clinically important difference (MCID). Together with
+\code{meaningful_change_sd}, it defines a Gamma prior with exactly these
+moments. When omitted, BCVA defaults to 5 ETDRS letters. CMT and generic
+outcomes require an explicit value because no universal threshold exists.}
+
+\item{meaningful_change_sd}{Positive numeric value giving the prior SD of
+the uncertain MCID. This must be externally specified; the outcome data
+should not be used to identify MCID uncertainty.}
+
+\item{direction}{Direction of clinical improvement. \code{"auto"} selects
+higher-is-better for BCVA and lower-is-better for CMT. Otherwise use \code{1}
+or \code{"higher"}, or \code{-1} or \code{"lower"}.}
+
+\item{meaningful_between_arm_difference}{Non-negative threshold defining
+a clinically meaningful between-arm difference in change. By default it
+is set equal to \code{meaningful_change}.}
+
+\item{arm_column}{Name of the treatment-arm column in \code{data}.}
+
+\item{reference_arm}{Value identifying the reference arm. If NULL, the
+first observed arm is used and a warning is emitted.}
+
+\item{gender_column}{Name of the sex/gender column in \code{data}.}
+
+\item{female_label}{Value identifying the Female reference category.}
+
+\item{male_label}{Value identifying the Male category. The Stan model
+estimates the Male - Female difference at each measurement occasion.}
+
+\item{age_column}{Name of the age column in \code{data}.}
+
+\item{age_threshold}{Numeric age threshold used to define two groups.
+Subjects with age > \code{age_threshold} are coded as the older group;
+subjects with age <= \code{age_threshold} are the reference group.}
 }
 \value{
-A named list containing data formatted for direct use with
-the MIRA Stan model. The returned object contains:
-\describe{
-\item{N}{Total number of observations, equal to \code{3 * S}.}
-\item{S}{Number of subjects.}
-\item{y}{Numeric vector containing the outcome measurements in
-long format.}
-\item{subject}{Integer vector identifying the subject associated
-with each observation.}
-\item{time}{Integer vector identifying the measurement occasion
-(\code{1}, \code{2}, or \code{3}) associated with each observation.}
-\item{time_value}{Numeric vector containing the actual values of
-the three measurement times.}
-\item{mean_y}{Mean of all observed outcome measurements.}
-\item{sd_y}{Standard deviation of all observed outcome
-measurements.}
-\item{meaningful_change}{The MCID supplied through the
-\code{meaningful_change} argument.}
-}
+A named list containing the variables required by Stan plus
+outcome-family metadata and empirical diagnostics. All clinical changes
+and MCID values remain on the natural outcome scale even when the latent
+trajectory is modeled on the log scale.
 }
 \description{
-Prepares and validates longitudinal data for fitting the MIRA
-(Multilevel Individual Response Analysis) Bayesian model implemented
-in Stan.
+Prepares and validates longitudinal data for the outcome-adaptive MIRA
+Bayesian model. By default BCVA uses a censored robust Student-t model on
+its letter-score scale, whereas CMT uses a log-normal model with a log link.
+Gaussian identity and explicit family overrides are available for
+sensitivity analyses.
 }
 \details{
-The function expects the input data in wide format, with one row per
-subject and three repeated measurements (\code{t0}, \code{t1}, and \code{t2}). It
-validates the subject identifiers, outcome variables, time points,
-missing values, and clinical threshold, and then converts the data
-from wide to long format.
-
-The resulting long-format representation follows the ordering required
-by the MIRA Stan model:
-
-\itemize{
-\item observations at \code{t0} for subjects 1, ..., S;
-\item observations at \code{t1} for subjects 1, ..., S;
-\item observations at \code{t2} for subjects 1, ..., S.
-}
-
-Subject identifiers are internally represented using consecutive
-integer indices from 1 to \code{S}, while the actual measurement times are
-supplied separately through \code{time_value}.
-
-The function does not perform any imputation or transformation of the
-outcome variables. Missing values are therefore not currently
-supported and result in an error.
-
-The function performs several validation steps before constructing the
-Stan data object. These include:
-\itemize{
-\item verification that \code{data} is a data frame;
-\item verification that all required columns are present;
-\item verification that at least one subject is available;
-\item verification that subject identifiers are non-missing and
-unique;
-\item verification that exactly three valid measurement times are
-supplied;
-\item verification that measurement times are distinct and strictly
-increasing;
-\item verification that the MCID is a single finite numeric value;
-\item verification that all outcome variables are numeric;
-\item verification that no missing values are present;
-\item verification that the outcome standard deviation is positive
-and finite.
-}
-
-No statistical model is fitted by this function. Its purpose is
-restricted to data validation, restructuring, and construction of
-the data list required by the MIRA Stan model.
-}
-\section{Data ordering}{
-
-The returned observations are ordered by measurement occasion rather
-than by subject. For \code{S} subjects, the ordering is:
-
-\preformatted{
-t0: subject 1, subject 2, ..., subject S
-t1: subject 1, subject 2, ..., subject S
-t2: subject 1, subject 2, ..., subject S
-}
-
-This ordering is consistent with the construction of the \code{subject}
-and \code{time} index vectors and must be preserved when passing the
-resulting list to Stan.
-}
-
-\section{Missing data}{
-
-Missing outcome measurements are not currently supported. If any
-missing value is detected in \code{patient}, \code{t0}, \code{t1}, or \code{t2}, the
-function stops with an informative error.
-}
-
-\section{Clinical interpretation}{
-
-The \code{meaningful_change} argument represents the minimum clinically
-important difference used by the MIRA model to classify individual
-changes as clinically meaningful. The threshold is not used to modify
-or transform the observed outcome data.
-}
-
-\section{Validation}{
-
-The function stops with an error if any input fails the required
-validation criteria. This is intended to prevent invalid data from
-being passed to Stan and to ensure consistency between the R data
-preparation step and the Stan data block.
-}
-
-\examples{
-data <- data.frame(
-  patient = 1:3,
-  t0 = c(50, 55, 48),
-  t1 = c(54, 58, 51),
-  t2 = c(60, 63, 56)
-)
-
-stan_data <- mira_prepare_data(
-  data = data,
-  time_value = c(0, 6, 12),
-  meaningful_change = 5
-)
-
-str(stan_data)
-
-}
-\references{
-Stan Development Team. Stan Reference Manual.
-\url{https://mc-stan.org/docs/reference-manual/}
-
-Gelman, A., Hill, J., & Vehtari, A. (2020).
-Regression and Other Stories. Cambridge University Press.
-
-McElreath, R. (2020).
-Statistical Rethinking: A Bayesian Course with Examples in R and
-Stan (2nd ed.). CRC Press.
-}
-\seealso{
-\code{\link{mira_prepare_data}}
+Longitudinal measurement columns are detected automatically using
+the naming convention \verb{<outcome>_t0}, ..., \verb{<outcome>_tK}.
+The number of measurement occasions is therefore determined from
+the input data and may be any K >= 2.
 }

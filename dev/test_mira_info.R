@@ -1,10 +1,26 @@
 
 
+devtools::load_all()
 
 
 
+# Ready-to-use objects. Source this file and start from `bcva_data` or
+# `cmt_data`; `data` contains both outcomes for descriptive work.
+data <- mira_create_ophthalmology_data()
 
 
+outcome <- "BCVA"
+
+# Seleziona automaticamente le colonne dell'outcome scelto
+analysis_data <- mira_select_ophthalmology_outcome(
+  data = data,
+  outcome = outcome
+)
+
+# Impostazioni specifiche dell'outcome
+direction <- "higher" # "higher" else "lower"
+meaningful_change <- 5 # 5 else 50
+meaningful_change_sd <- 1.5 # 1.5 else 15
 
 
 

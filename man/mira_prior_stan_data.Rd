@@ -7,10 +7,10 @@
 mira_prior_stan_data(prior)
 }
 \arguments{
-\item{prior}{A \code{mira_prior} object.}
+\item{prior}{A \code{mira_prior} object or complete named list.}
 }
 \value{
-A named list suitable for CmdStan.
+A list containing exactly the 19 prior fields declared in Stan.
 }
 \description{
 Convert MIRA priors to Stan data

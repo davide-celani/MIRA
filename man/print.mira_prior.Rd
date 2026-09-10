@@ -9,7 +9,7 @@
 \arguments{
 \item{x}{A \code{mira_prior} object.}
 
-\item{...}{Additional arguments.}
+\item{...}{Additional arguments (unused).}
 }
 \description{
 Print a MIRA prior specification

@@ -70,7 +70,7 @@ meaningful_change_sd <- 1.5 # 1.5 else 15
 # ============================================================
 
 # Solo timepoint
-result <- mira_info(
+resul <- mira_info(
   data,
   time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
 )

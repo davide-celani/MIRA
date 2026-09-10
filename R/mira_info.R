@@ -56,10 +56,10 @@
 .mira_validate_name <- function(x, data, argument, allow_null = FALSE) {
   if (allow_null && is.null(x)) return(NULL)
   if (!is.character(x) || length(x) != 1L || is.na(x) || !nzchar(trimws(x))) {
-    stop(sprintf("%s deve essere il nome di una sola variabile.", argument), call. = FALSE)
+    stop(sprintf("%s must name exactly one variable.", argument), call. = FALSE)
   }
   if (!x %in% names(data)) {
-    stop(sprintf("La variabile '%s' indicata in %s non esiste nel dataset.", x, argument),
+    stop(sprintf("The variable '%s' specified by %s does not exist in the data set.", x, argument),
          call. = FALSE)
   }
   x
@@ -95,7 +95,7 @@
     if (is.data.frame(parsed)) parsed <- as.list(parsed[1L, , drop = FALSE])
     if (!is.list(parsed) || is.null(parsed$outcome)) {
       stop(
-        "La funzione variable_pattern deve restituire NULL oppure una lista con almeno 'outcome'.",
+        "The variable_pattern function must return NULL or a list containing at least 'outcome'.",
         call. = FALSE
       )
     }
@@ -113,7 +113,7 @@
 
   if (!is.character(variable_pattern) || length(variable_pattern) != 1L ||
       is.na(variable_pattern) || !nzchar(variable_pattern)) {
-    stop("variable_pattern deve essere 'auto', una regex o una funzione.", call. = FALSE)
+    stop("variable_pattern must be 'auto', a regular expression, or a function.", call. = FALSE)
   }
 
   if (!identical(variable_pattern, "auto")) {
@@ -161,19 +161,19 @@
                                           automatic = FALSE) {
   variables <- as.character(variables)
   if (length(variables) < 2L || anyNA(variables) || any(!nzchar(variables))) {
-    stop("Ogni gruppo time_vars deve contenere almeno due nomi non vuoti.", call. = FALSE)
+    stop("Each time_vars group must contain at least two non-empty names.", call. = FALSE)
   }
   if (anyDuplicated(variables)) {
-    stop("time_vars contiene nomi duplicati.", call. = FALSE)
+    stop("time_vars contains duplicate names.", call. = FALSE)
   }
   missing <- setdiff(variables, names(data))
   if (length(missing) > 0L) {
-    stop(sprintf("Variabili longitudinali non trovate: %s.", paste(missing, collapse = ", ")),
+    stop(sprintf("Longitudinal variables not found: %s.", paste(missing, collapse = ", ")),
          call. = FALSE)
   }
   non_numeric <- variables[!vapply(data[variables], is.numeric, logical(1L))]
   if (length(non_numeric) > 0L) {
-    stop(sprintf("Le variabili longitudinali devono essere numeriche: %s.",
+    stop(sprintf("Longitudinal variables must be numeric: %s.",
                  paste(non_numeric, collapse = ", ")), call. = FALSE)
   }
 
@@ -490,23 +490,23 @@
   reserved_present <- intersect(names(data), reserved)
   if (!is.null(covariates) && !(length(covariates) == 1L && identical(covariates, "auto"))) {
     if (!is.character(covariates) || anyNA(covariates) || any(!nzchar(covariates))) {
-      stop("covariates deve essere NULL, 'auto' o un vettore di nomi.", call. = FALSE)
+      stop("covariates must be NULL, 'auto', or a vector of names.", call. = FALSE)
     }
-    if (anyDuplicated(covariates)) stop("covariates contiene duplicati.", call. = FALSE)
+    if (anyDuplicated(covariates)) stop("covariates contains duplicate names.", call. = FALSE)
     missing <- setdiff(covariates, names(data))
     if (length(missing) > 0L) {
-      stop(sprintf("Covariate non trovate: %s.", paste(missing, collapse = ", ")),
+      stop(sprintf("Covariates not found: %s.", paste(missing, collapse = ", ")),
            call. = FALSE)
     }
     overlap <- intersect(covariates, exclude)
     if (length(overlap) > 0L) {
-      stop(sprintf("Queste covariate sono già usate come ID, arm o outcome: %s.",
+      stop(sprintf("These covariates are already used as the ID, treatment arm, or outcome: %s.",
                    paste(overlap, collapse = ", ")), call. = FALSE)
     }
     reserved_overlap <- intersect(covariates, reserved_present)
     if (length(reserved_overlap) > 0L) {
       stop(sprintf(
-        "Nomi di covariata riservati dalla rappresentazione long/model: %s.",
+        "Covariate names reserved for internal long-format and model data: %s.",
         paste(reserved_overlap, collapse = ", ")
       ), call. = FALSE)
     }
@@ -2463,29 +2463,29 @@
   # ----------------------------------------------------------
 
   if (!is.data.frame(data)) {
-    stop("data deve essere un data.frame.", call. = FALSE)
+    stop("data must be a data.frame.", call. = FALSE)
   }
 
   if (nrow(data) == 0L) {
-    stop("Il dataset non contiene osservazioni.", call. = FALSE)
+    stop("The data set contains no observations.", call. = FALSE)
   }
 
   if (!is.character(id) || length(id) != 1L || is.na(id) || !nzchar(id)) {
-    stop("id deve essere il nome di una sola variabile.", call. = FALSE)
+    stop("id must name exactly one variable.", call. = FALSE)
   }
 
   if (!id %in% names(data)) {
-    stop(sprintf("La variabile ID '%s' non esiste nel dataset.", id), call. = FALSE)
+    stop(sprintf("The ID variable '%s' does not exist in the data set.", id), call. = FALSE)
   }
 
   if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
       alpha <= 0 || alpha >= 1) {
-    stop("alpha deve essere un numero compreso tra 0 e 1.", call. = FALSE)
+    stop("alpha must be a number strictly between 0 and 1.", call. = FALSE)
   }
 
   scalar_flag <- function(x, name) {
     if (!is.logical(x) || length(x) != 1L || is.na(x)) {
-      stop(sprintf("%s deve essere TRUE o FALSE.", name), call. = FALSE)
+      stop(sprintf("%s must be TRUE or FALSE.", name), call. = FALSE)
     }
     invisible(TRUE)
   }
@@ -2502,14 +2502,14 @@
 
   if (!is.numeric(stable_threshold) || length(stable_threshold) != 1L ||
       !is.finite(stable_threshold) || stable_threshold < 0) {
-    stop("stable_threshold deve essere un numero finito >= 0.", call. = FALSE)
+    stop("stable_threshold must be a finite number >= 0.", call. = FALSE)
   }
 
   if (!is.character(p_adjust_method) || length(p_adjust_method) != 1L ||
       is.na(p_adjust_method) || !p_adjust_method %in% p.adjust.methods) {
     stop(
       sprintf(
-        "p_adjust_method deve essere uno tra: %s.",
+        "p_adjust_method must be one of: %s.",
         paste(p.adjust.methods, collapse = ", ")
       ),
       call. = FALSE
@@ -2523,7 +2523,7 @@
 
   if (strict_id && missing_id_n > 0L) {
     stop(
-      sprintf("La variabile ID contiene %d valori mancanti.", missing_id_n),
+      sprintf("The ID variable contains %d missing values.", missing_id_n),
       call. = FALSE
     )
   }
@@ -2532,9 +2532,9 @@
     stop(
       sprintf(
         paste0(
-          "La variabile ID contiene %d duplicati. ",
-          "mira_info() assume una riga per soggetto nel formato wide. ",
-          "Correggi i duplicati oppure usa strict_id = FALSE consapevolmente."
+          "The ID variable contains %d duplicate values. ",
+          "mira_info() assumes one row per subject in wide format. ",
+          "Correct the duplicates, or use strict_id = FALSE only if duplicate IDs are intentional."
         ),
         duplicated_id_n
       ),
@@ -2571,11 +2571,11 @@
   if (arm_available) {
 
     if (!is.character(arm) || length(arm) != 1L || is.na(arm) || !nzchar(arm)) {
-      stop("arm deve essere NULL oppure il nome di una sola variabile.", call. = FALSE)
+      stop("arm must be NULL or the name of exactly one variable.", call. = FALSE)
     }
 
     if (!arm %in% names(data)) {
-      stop(sprintf("La variabile di trattamento '%s' non esiste nel dataset.", arm), call. = FALSE)
+      stop(sprintf("The treatment-arm variable '%s' does not exist in the data set.", arm), call. = FALSE)
     }
 
     arm_raw <- data[[arm]]
@@ -2605,13 +2605,13 @@
       reference_arm <- as.character(reference_arm)
 
       if (length(reference_arm) != 1L || is.na(reference_arm) || !nzchar(reference_arm)) {
-        stop("reference_arm deve identificare un singolo gruppo non vuoto.", call. = FALSE)
+        stop("reference_arm must identify exactly one non-empty group.", call. = FALSE)
       }
 
       if (!reference_arm %in% observed_arms) {
         stop(
           sprintf(
-            "reference_arm='%s' non è presente nella variabile '%s'. Gruppi osservati: %s.",
+            "reference_arm='%s' is not present in the variable '%s'. Observed groups: %s.",
             reference_arm,
             arm,
             paste(observed_arms, collapse = ", ")
@@ -2654,8 +2654,8 @@
     if (length(detected) != 1L) {
       stop(
         paste0(
-          "L'analizzatore interno richiede un solo outcome. Usare mira_info() ",
-          "per la configurazione automatica multi-outcome."
+          "The internal analyzer requires exactly one outcome. Use mira_info() ",
+          "for automatic multi-outcome configuration."
         ),
         call. = FALSE
       )
@@ -2666,18 +2666,18 @@
     detected_time_labels <- detected_group$time_labels
   } else {
     if (!is.character(time_vars) || length(time_vars) < 2L || anyNA(time_vars)) {
-      stop("time_vars deve contenere almeno due nomi di variabili.", call. = FALSE)
+      stop("time_vars must contain at least two variable names.", call. = FALSE)
     }
 
     if (anyDuplicated(time_vars)) {
-      stop("time_vars contiene nomi duplicati.", call. = FALSE)
+      stop("time_vars contains duplicate names.", call. = FALSE)
     }
 
     missing_vars <- setdiff(time_vars, names(data))
     if (length(missing_vars) > 0L) {
       stop(
         sprintf(
-          "Le seguenti variabili non esistono nel dataset: %s",
+          "The following variables do not exist in the data set: %s",
           paste(missing_vars, collapse = ", ")
         ),
         call. = FALSE
@@ -2698,7 +2698,7 @@
     if (!is.null(.outcome_name)) {
       if (!is.character(.outcome_name) || length(.outcome_name) != 1L ||
           is.na(.outcome_name) || !nzchar(.outcome_name)) {
-        stop(".outcome_name deve essere una singola etichetta non vuota.", call. = FALSE)
+        stop(".outcome_name must be exactly one non-empty label.", call. = FALSE)
       }
       outcome_name <- .outcome_name
     } else {
@@ -2710,7 +2710,7 @@
     ord <- if (clear_order) order(parsed_order, time_vars) else seq_along(time_vars)
     if (!is.null(time_labels)) {
       if (length(time_labels) != length(time_vars)) {
-        stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
+        stop("time_labels must have the same length as time_vars.", call. = FALSE)
       }
       time_labels <- time_labels[ord]
     }
@@ -2721,17 +2721,17 @@
   outcome_display <- toupper(outcome_name)
 
   if (!is.character(.covariates) || anyNA(.covariates) || any(!nzchar(.covariates))) {
-    stop(".covariates deve essere un vettore di nomi valido.", call. = FALSE)
+    stop(".covariates must be a valid vector of names.", call. = FALSE)
   }
   missing_covariates <- setdiff(.covariates, names(data))
   if (length(missing_covariates) > 0L) {
-    stop(sprintf("Covariate non trovate: %s.", paste(missing_covariates, collapse = ", ")),
+    stop(sprintf("Covariates not found: %s.", paste(missing_covariates, collapse = ", ")),
          call. = FALSE)
   }
   if (!is.character(.categorical_covariates) || anyNA(.categorical_covariates) ||
       any(!nzchar(.categorical_covariates)) ||
       length(setdiff(.categorical_covariates, .covariates)) > 0L) {
-    stop(".categorical_covariates deve essere un sottoinsieme di .covariates.",
+    stop(".categorical_covariates must be a subset of .covariates.",
          call. = FALSE)
   }
 
@@ -2746,7 +2746,7 @@
   if (length(non_numeric) > 0L) {
     stop(
       sprintf(
-        "Le variabili longitudinali devono essere numeriche: %s",
+        "Longitudinal variables must be numeric: %s",
         paste(non_numeric, collapse = ", ")
       ),
       call. = FALSE
@@ -2761,17 +2761,17 @@
     time_labels <- detected_time_labels
   } else {
     if (length(time_labels) != length(time_vars)) {
-      stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
+      stop("time_labels must have the same length as time_vars.", call. = FALSE)
     }
     time_labels <- as.character(time_labels)
   }
 
   if (anyNA(time_labels) || any(!nzchar(trimws(time_labels)))) {
-    stop("time_labels non può contenere NA o etichette vuote.", call. = FALSE)
+    stop("time_labels cannot contain NA or empty labels.", call. = FALSE)
   }
 
   if (anyDuplicated(time_labels)) {
-    stop("time_labels deve contenere etichette univoche.", call. = FALSE)
+    stop("time_labels must contain unique labels.", call. = FALSE)
   }
 
   names(time_labels) <- time_vars
@@ -3701,7 +3701,7 @@
 
   if (model) {
     if (!requireNamespace("lme4", quietly = TRUE)) {
-      model_error <- "Il pacchetto 'lme4' non è installato."
+      model_error <- "Package 'lme4' is not installed."
     } else {
       model_data <- long_data[
         !is.na(long_data$patient) & is.finite(long_data$value),
@@ -3782,8 +3782,8 @@
           nlevels(model_data$time_factor) < 2L ||
           nrow(model_data) <= model_fixed_parameters + 1L) {
         model_error <- paste0(
-          "Dati insufficienti per stimare un mixed-effects model dopo aver applicato ",
-          "i requisiti di completezza di outcome, arm e covariate."
+          "Insufficient data to estimate a mixed-effects model after applying ",
+          "completeness requirements for the outcome, treatment arm, and covariates."
         )
       } else {
         fit_with_warnings <- function(expr) {
@@ -4177,7 +4177,7 @@
 
   if (plots) {
     if (!requireNamespace("ggplot2", quietly = TRUE)) {
-      plot_error <- "Il pacchetto 'ggplot2' non è installato."
+      plot_error <- "Package 'ggplot2' is not installed."
     } else {
       ci_text <- paste0(formatC(confidence_percent, format = "fg", digits = 4), "% CI")
 
@@ -4987,7 +4987,7 @@
   groups <- list()
 
   if (is.list(time_vars) && !is.data.frame(time_vars)) {
-    if (length(time_vars) == 0L) stop("time_vars non può essere una lista vuota.", call. = FALSE)
+    if (length(time_vars) == 0L) stop("time_vars cannot be an empty list.", call. = FALSE)
     supplied_names <- names(time_vars)
     has_names <- !is.null(supplied_names) && all(nzchar(supplied_names))
     outcome_hints <- outcomes
@@ -4996,7 +4996,7 @@
 
     if (!has_names && !is.null(outcome_hints) && length(outcome_hints) != length(time_vars)) {
       stop(
-        "Una lista time_vars senza nomi richiede un outcome per ogni elemento oppure nomi espliciti.",
+        "An unnamed time_vars list requires one outcome per element or explicit element names.",
         call. = FALSE
       )
     }
@@ -5017,12 +5017,12 @@
   }
 
   if (!is.character(time_vars) || length(time_vars) < 2L || anyNA(time_vars)) {
-    stop("time_vars deve essere un vettore di almeno due nomi o una lista per outcome.",
+    stop("time_vars must be a vector containing at least two names or a list by outcome.",
          call. = FALSE)
   }
   missing <- setdiff(time_vars, names(data))
   if (length(missing) > 0L) {
-    stop(sprintf("Variabili longitudinali non trovate: %s.", paste(missing, collapse = ", ")),
+    stop(sprintf("Longitudinal variables not found: %s.", paste(missing, collapse = ", ")),
          call. = FALSE)
   }
 
@@ -5065,7 +5065,7 @@
   if (is.list(time_labels) && !is.data.frame(time_labels)) {
     label_names <- names(time_labels)
     if (length(groups) > 1L && (is.null(label_names) || any(!nzchar(label_names)))) {
-      stop("Per più outcome, time_labels deve essere una lista nominata.", call. = FALSE)
+      stop("For multiple outcomes, time_labels must be a named list.", call. = FALSE)
     }
     for (i in seq_along(groups)) {
       labels <- if (length(groups) == 1L && (is.null(label_names) || !nzchar(label_names[[1L]]))) {
@@ -5073,13 +5073,13 @@
       } else {
         idx <- which(.mira_key(label_names) == .mira_key(names(groups)[[i]]))
         if (length(idx) != 1L) {
-          stop(sprintf("time_labels non contiene un elemento univoco per '%s'.",
+          stop(sprintf("time_labels does not contain exactly one element for '%s'.",
                        names(groups)[[i]]), call. = FALSE)
         }
         time_labels[[idx]]
       }
       if (length(labels) != length(groups[[i]]$variables)) {
-        stop(sprintf("time_labels per '%s' deve avere %d elementi.",
+        stop(sprintf("time_labels for '%s' must contain %d elements.",
                      names(groups)[[i]], length(groups[[i]]$variables)), call. = FALSE)
       }
       if (!is.null(names(labels)) && all(groups[[i]]$variables %in% names(labels))) {
@@ -5090,7 +5090,7 @@
       groups[[i]]$time_labels <- as.character(labels)
     }
   } else {
-    if (!is.atomic(time_labels)) stop("time_labels deve essere un vettore o una lista.", call. = FALSE)
+    if (!is.atomic(time_labels)) stop("time_labels must be a vector or a list.", call. = FALSE)
     labels <- as.character(time_labels)
     names(labels) <- names(time_labels)
     if (!is.null(names(time_labels)) &&
@@ -5101,12 +5101,12 @@
     } else {
       if (length(groups) != 1L) {
         stop(
-          "Con più outcome, fornire time_labels come lista nominata o vettore nominato per colonna.",
+          "For multiple outcomes, provide time_labels as a named list or a vector named by column.",
           call. = FALSE
         )
       }
       if (length(labels) != length(groups[[1L]]$variables)) {
-        stop("time_labels deve avere la stessa lunghezza di time_vars.", call. = FALSE)
+        stop("time_labels must have the same length as time_vars.", call. = FALSE)
       }
       if (!isTRUE(groups[[1L]]$automatic) && !is.null(groups[[1L]]$sort_index)) {
         labels <- labels[groups[[1L]]$sort_index]
@@ -5118,7 +5118,7 @@
   for (i in seq_along(groups)) {
     labels <- groups[[i]]$time_labels
     if (anyNA(labels) || any(!nzchar(trimws(labels))) || anyDuplicated(labels)) {
-      stop(sprintf("Le time_labels per '%s' devono essere non vuote e univoche.",
+      stop(sprintf("time_labels for '%s' must contain only non-empty, unique labels.",
                    names(groups)[[i]]), call. = FALSE)
     }
   }
@@ -5138,7 +5138,7 @@
 
   if (!outcomes_auto && (!is.character(outcomes) || anyNA(outcomes) ||
                          any(!nzchar(outcomes)) || anyDuplicated(.mira_key(outcomes)))) {
-    stop("outcomes deve essere NULL, 'auto' o un vettore di nomi univoci.", call. = FALSE)
+    stop("outcomes must be NULL, 'auto', or a vector of unique names.", call. = FALSE)
   }
 
   # Direct column specification is accepted through outcomes for convenience.
@@ -5168,8 +5168,8 @@
   if (length(groups) == 0L) {
     stop(
       paste0(
-        "Non è stato rilevato alcun outcome con almeno due colonne numeriche longitudinali. ",
-        "Specificare time_vars oppure variable_pattern."
+        "No outcome with at least two numeric longitudinal columns was detected. ",
+        "Specify time_vars or variable_pattern."
       ),
       call. = FALSE
     )
@@ -5189,7 +5189,7 @@
           ambiguous_idx <- .mira_match_group(requested, detected$ambiguous_groups)
           if (!is.na(ambiguous_idx)) {
             stop(sprintf(
-              "L'outcome '%s' ha timepoint ambigui: specificare time_vars/time_labels manualmente.",
+              "Outcome '%s' has ambiguous timepoints; specify time_vars/time_labels manually.",
               requested
             ), call. = FALSE)
           }
@@ -5201,7 +5201,7 @@
       }
       if (length(unavailable) > 0L) {
         stop(sprintf(
-          "Outcome non rilevati: %s. Outcome disponibili: %s.",
+          "Outcomes not detected: %s. Available outcomes: %s.",
           paste(unavailable, collapse = ", "), paste(names(groups), collapse = ", ")
         ), call. = FALSE)
       }
@@ -5230,27 +5230,27 @@
 .mira_resolve_direction <- function(value, outcome) {
   if (is.null(value)) value <- "auto"
   if (!is.character(value) || anyNA(value)) {
-    stop("improvement_direction deve essere 'auto', 'higher', 'lower', 'unknown' o un vettore nominato.",
+    stop("improvement_direction must be 'auto', 'higher', 'lower', 'unknown', or a named vector.",
          call. = FALSE)
   }
   selected <- value
   if (!is.null(names(value)) && any(nzchar(names(value)))) {
     if (any(!nzchar(names(value)))) {
-      stop("Con più valori, improvement_direction deve essere nominato per outcome.", call. = FALSE)
+      stop("When multiple values are supplied, improvement_direction must be named by outcome.", call. = FALSE)
     }
     idx <- which(.mira_key(names(value)) == .mira_key(outcome))
     if (length(idx) != 1L) {
-      stop(sprintf("improvement_direction non contiene un valore univoco per '%s'.", outcome),
+      stop(sprintf("improvement_direction does not contain exactly one value for '%s'.", outcome),
            call. = FALSE)
     }
     selected <- value[[idx]]
   } else if (length(value) > 1L) {
-    stop("Con più valori, improvement_direction deve essere nominato per outcome.", call. = FALSE)
+    stop("When multiple values are supplied, improvement_direction must be named by outcome.", call. = FALSE)
   } else {
     selected <- value[[1L]]
   }
   if (!selected %in% c("auto", "higher", "lower", "unknown")) {
-    stop("Valori ammessi per improvement_direction: auto, higher, lower, unknown.",
+    stop("Allowed values for improvement_direction: auto, higher, lower, unknown.",
          call. = FALSE)
   }
   if (selected != "auto") {
@@ -5275,30 +5275,30 @@
     return(list(value = 0, automatic = TRUE, reason = "safe_zero_fallback"))
   }
   if (!is.numeric(value) || anyNA(value) || any(!is.finite(value))) {
-    stop("stable_threshold deve essere NULL, 'auto' o un valore numerico >= 0.", call. = FALSE)
+    stop("stable_threshold must be NULL, 'auto', or a numeric value >= 0.", call. = FALSE)
   }
   selected <- value
   if (!is.null(names(value)) && any(nzchar(names(value)))) {
     if (any(!nzchar(names(value)))) {
-      stop("Con più valori, stable_threshold deve essere nominato per outcome.", call. = FALSE)
+      stop("When multiple values are supplied, stable_threshold must be named by outcome.", call. = FALSE)
     }
     idx <- which(.mira_key(names(value)) == .mira_key(outcome))
     if (length(idx) != 1L) {
-      stop(sprintf("stable_threshold non contiene un valore univoco per '%s'.", outcome),
+      stop(sprintf("stable_threshold does not contain exactly one value for '%s'.", outcome),
            call. = FALSE)
     }
     selected <- value[[idx]]
   } else if (length(value) > 1L) {
-    stop("Con più valori, stable_threshold deve essere nominato per outcome.", call. = FALSE)
+    stop("When multiple values are supplied, stable_threshold must be named by outcome.", call. = FALSE)
   } else selected <- value[[1L]]
-  if (selected < 0) stop("stable_threshold deve essere >= 0.", call. = FALSE)
+  if (selected < 0) stop("stable_threshold must be >= 0.", call. = FALSE)
   list(value = unname(selected), automatic = FALSE, reason = "user")
 }
 
 .mira_choose_reference_arm <- function(data, arm, reference_arm = NULL) {
   if (is.null(arm)) {
     if (!is.null(reference_arm)) {
-      stop("reference_arm richiede una variabile arm.", call. = FALSE)
+      stop("reference_arm requires an arm variable.", call. = FALSE)
     }
     return(list(value = NULL, automatic = is.null(reference_arm), warnings = character(0)))
   }
@@ -5314,10 +5314,10 @@
   if (!is.null(reference_arm)) {
     if (!is.character(reference_arm) || length(reference_arm) != 1L ||
         is.na(reference_arm) || !nzchar(reference_arm)) {
-      stop("reference_arm deve identificare un singolo gruppo non vuoto.", call. = FALSE)
+      stop("reference_arm must identify exactly one non-empty group.", call. = FALSE)
     }
     if (!reference_arm %in% observed) {
-      stop(sprintf("reference_arm='%s' non è presente in '%s'. Gruppi: %s.",
+      stop(sprintf("reference_arm='%s' is not present in '%s'. Observed groups: %s.",
                    reference_arm, arm, paste(observed, collapse = ", ")), call. = FALSE)
     }
     return(list(value = reference_arm, automatic = FALSE, warnings = character(0)))
@@ -5354,14 +5354,14 @@
                                         improvement_direction = "auto",
                                         stable_threshold = "auto",
                                         strict_id = TRUE) {
-  if (!is.data.frame(data)) stop("data deve essere un data.frame.", call. = FALSE)
-  if (nrow(data) == 0L) stop("Il dataset non contiene osservazioni.", call. = FALSE)
+  if (!is.data.frame(data)) stop("data must be a data.frame.", call. = FALSE)
+  if (nrow(data) == 0L) stop("The data set contains no observations.", call. = FALSE)
   if (anyDuplicated(names(data))) {
-    stop("Il dataset contiene nomi di colonna duplicati; rinominarli prima dell'analisi.",
+    stop("The data set contains duplicate column names; rename them before analysis.",
          call. = FALSE)
   }
   if (!is.logical(strict_id) || length(strict_id) != 1L || is.na(strict_id)) {
-    stop("strict_id deve essere TRUE o FALSE.", call. = FALSE)
+    stop("strict_id must be TRUE or FALSE.", call. = FALSE)
   }
 
   detected_longitudinal <- .mira_detect_longitudinal_variables(data, variable_pattern)
@@ -5397,13 +5397,13 @@
     missing_id_n <- sum(is.na(id_values))
     duplicated_id_n <- sum(duplicated(id_values[!is.na(id_values)]))
     if (strict_id && missing_id_n > 0L) {
-      stop(sprintf("La variabile ID '%s' contiene %d valori mancanti.",
+      stop(sprintf("The ID variable '%s' contains %d missing values.",
                    selected_id, missing_id_n), call. = FALSE)
     }
     if (strict_id && duplicated_id_n > 0L) {
       stop(sprintf(
-        paste0("La variabile ID '%s' contiene %d duplicati; il formato wide richiede ",
-               "una riga per soggetto. Usare strict_id=FALSE solo consapevolmente."),
+        paste0("The ID variable '%s' contains %d duplicate values; wide format requires ",
+               "one row per subject. Use strict_id=FALSE only if duplicate IDs are intentional."),
         selected_id, duplicated_id_n
       ), call. = FALSE)
     }
@@ -5553,7 +5553,7 @@ mira_detect <- function(data,
                         strict_id = TRUE,
                         verbose = TRUE) {
   if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
-    stop("verbose deve essere TRUE o FALSE.", call. = FALSE)
+    stop("verbose must be TRUE or FALSE.", call. = FALSE)
   }
   built <- .mira_build_analysis_config(
     data = data, id = id, outcomes = outcomes, time_vars = time_vars,
@@ -5603,7 +5603,7 @@ mira_info <- function(data,
                       inspect_only = FALSE) {
   scalar_flag <- function(x, name) {
     if (!is.logical(x) || length(x) != 1L || is.na(x)) {
-      stop(sprintf("%s deve essere TRUE o FALSE.", name), call. = FALSE)
+      stop(sprintf("%s must be TRUE or FALSE.", name), call. = FALSE)
     }
   }
   flags <- list(
@@ -5616,25 +5616,25 @@ mira_info <- function(data,
   }
   if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
       alpha <= 0 || alpha >= 1) {
-    stop("alpha deve essere un numero compreso tra 0 e 1.", call. = FALSE)
+    stop("alpha must be a number strictly between 0 and 1.", call. = FALSE)
   }
   if (!is.character(p_adjust_method) || length(p_adjust_method) != 1L ||
       is.na(p_adjust_method) || !p_adjust_method %in% p.adjust.methods) {
-    stop(sprintf("p_adjust_method deve essere uno tra: %s.",
+    stop(sprintf("p_adjust_method must be one of: %s.",
                  paste(p.adjust.methods, collapse = ", ")), call. = FALSE)
   }
 
   optional_analyses <- c("plots", "model", "outliers", "correlations", "arm_tests")
   if (!is.null(analyses)) {
     if (!is.character(analyses) || anyNA(analyses)) {
-      stop("analyses deve essere NULL o un vettore di nomi.", call. = FALSE)
+      stop("analyses must be NULL or a vector of names.", call. = FALSE)
     }
     analyses <- unique(tolower(analyses))
     if ("all" %in% analyses) analyses <- optional_analyses
     if ("none" %in% analyses) analyses <- character(0)
     invalid <- setdiff(analyses, optional_analyses)
     if (length(invalid) > 0L) {
-      stop(sprintf("Analisi opzionali non riconosciute: %s. Valori ammessi: %s.",
+      stop(sprintf("Unrecognized optional analyses: %s. Allowed values: %s.",
                    paste(invalid, collapse = ", "),
                    paste(optional_analyses, collapse = ", ")), call. = FALSE)
     }
@@ -5863,12 +5863,12 @@ print.mira_info_multi <- function(x, ...) {
     )
   })
   print(do.call(rbind, rows), row.names = FALSE)
-  cat("Accesso ai risultati: result$outcomes$NOME_OUTCOME\n")
+  cat("Access results with: result$outcomes$OUTCOME_NAME\n")
   invisible(x)
 }
 
 print.mira_info_error <- function(x, ...) {
-  cat(sprintf("Outcome %s: analisi non completata — %s\n", x$outcome, x$error))
+  cat(sprintf("Outcome %s: analysis not completed — %s\n", x$outcome, x$error))
   invisible(x)
 }
 
@@ -5889,12 +5889,12 @@ print.mira_info <- function(x,
                             ...) {
 
   if (!is.numeric(digits) || length(digits) != 1L || is.na(digits) || digits < 0) {
-    stop("digits deve essere un intero >= 0.", call. = FALSE)
+    stop("digits must be an integer >= 0.", call. = FALSE)
   }
   digits <- as.integer(digits)
 
   if (!is.numeric(max_rows) || length(max_rows) != 1L || is.na(max_rows) || max_rows <= 0) {
-    stop("max_rows deve essere > 0 oppure Inf.", call. = FALSE)
+    stop("max_rows must be > 0 or Inf.", call. = FALSE)
   }
 
   line <- function(char = "-", n = 84L) cat(strrep(char, n), "\n", sep = "")
@@ -6879,7 +6879,7 @@ plot.mira_info <- function(
   if (length(x$plots) == 0L || is.null(x$plots[[which]])) {
     stop(
       sprintf(
-        "Il grafico '%s' non è disponibile. Esegui mira_info(..., plots = TRUE) con ggplot2 installato.",
+        "Plot '%s' is not available. Run mira_info(..., plots = TRUE) with ggplot2 installed.",
         which
       ),
       call. = FALSE
@@ -6928,18 +6928,18 @@ plot.mira_info_multi <- function(x, outcome = NULL, which = "boxplot", ...) {
   available <- names(x$outcomes)[!vapply(x$outcomes, inherits, logical(1L),
                                          what = "mira_info_error")]
   if (length(available) == 0L) {
-    stop("Nessun outcome dispone di grafici.", call. = FALSE)
+    stop("No outcome has available plots.", call. = FALSE)
   }
   if (is.null(outcome)) {
     if (length(available) > 1L) {
-      stop(sprintf("Specificare outcome=. Valori disponibili: %s.",
+      stop(sprintf("Specify outcome=. Available values: %s.",
                    paste(available, collapse = ", ")), call. = FALSE)
     }
     outcome <- available[[1L]]
   }
   idx <- which(.mira_key(available) == .mira_key(outcome))
   if (length(idx) != 1L) {
-    stop(sprintf("Outcome '%s' non disponibile. Valori: %s.",
+    stop(sprintf("Outcome '%s' is not available. Available values: %s.",
                  outcome, paste(available, collapse = ", ")), call. = FALSE)
   }
   plot.mira_info(x$outcomes[[available[[idx]]]], which = which, ...)

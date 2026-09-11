@@ -4,655 +4,723 @@ devtools::load_all()
 
 
 
-# Ready-to-use objects. Source this file and start from `bcva_data` or
-# `cmt_data`; `data` contains both outcomes for descriptive work.
-data <- mira_create_ophthalmology_data()
-
-
-outcome <- "BCVA"
-
-# Seleziona automaticamente le colonne dell'outcome scelto
-analysis_data <- mira_select_ophthalmology_outcome(
-  data = data,
-  outcome = outcome
+# ------------------------------------------------------------------
+# Example 1: Minimal automatic workflow
+# ------------------------------------------------------------------
+# The input is wide: one row per subject and one numeric column per visit.
+# The names subject_id and score_t0, score_t1, score_t2 are deliberately
+# conventional, so ID, outcome family, and time order can all be inferred.
+set.seed(202601)
+n_wide <- 48L
+score_baseline <- rnorm(n_wide, mean = 50, sd = 7)
+wide <- data.frame(
+  subject_id = sprintf("S%03d", seq_len(n_wide)),
+  score_t0 = score_baseline,
+  score_t1 = score_baseline - 2 + rnorm(n_wide, sd = 1.8),
+  score_t2 = score_baseline - 5 + rnorm(n_wide, sd = 2.0)
 )
 
-# Impostazioni specifiche dell'outcome
-direction <- "higher" # "higher" else "lower"
-meaningful_change <- 5 # 5 else 50
-meaningful_change_sd <- 1.5 # 1.5 else 15
-
-
-
-
-
-
-
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
-)
-
-report <- mira_report_freq(
-  result,
-  author = "Davide Celani",
-  output_dir = "report_mira",
-  output_file = "analisi_longitudinale",
-  format = "pdf",
-  quiet = FALSE,
-  overwrite = TRUE
-)
-
-
-
-
-
-
-
-
-
-
-
-
-# ============================================================
-# 1. ANALISI DI BASE
-# ============================================================
-
-# Solo timepoint
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
-)
-
-# Timepoint + età
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  covariates = "age"
-)
-
-# Timepoint + genere
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  covariates = "gender"
-)
-
-# Timepoint + età + genere
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  covariates = c("age", "gender")
-)
-
-# ID specificato manualmente
-result <- mira_info(
-  data = data,
-  id = "patient",
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2")
-)
-
-# ID + covariate
-result <- mira_info(
-  data = data,
-  id = "patient",
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  covariates = c("age", "gender")
-)
-
-
-# ============================================================
-# 2. TRATTAMENTO E CONFRONTO TRA ARM
-# ============================================================
-
-# Timepoint + trattamento
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  arm = "treatment"
-)
-
-# Analisi completa con trattamento e covariate
-result <- mira_info(
-  data = data,
-  id = "patient",
-  time_vars = c(
-    "BCVA_t0", "BCVA_t1", "BCVA_t2",
-    "BCVA_t3", "BCVA_t4"
-  ),
-  arm = "treatment",
-  reference_arm = "Aflibercept",
-  covariates = c("age", "gender", "study_eye"),
+# analyses = "none" keeps this first workflow fast. It disables optional
+# modules, but not descriptives, changes, missingness, variability,
+# trajectories, or the base-R Friedman branch. Holm adjustment is applied
+# separately within each implemented comparison family.
+auto_fit <- mira_info(
+  wide,
+  analyses = "none",
   p_adjust_method = "holm",
-  verbose = TRUE
-)
-
-# Stampa il report completo dopo l'elaborazione
-print(result)
-
-# Versione compatta
-summary(result)
-
-
-# ============================================================
-# 3. OUTCOME AUTOMATICI E MULTI-OUTCOME
-# ============================================================
-
-# Un outcome con rilevamento automatico dei timepoint
-result <- mira_info(
-  data = data,
-  outcomes = "BCVA"
-)
-
-# Più outcome rilevati automaticamente
-result <- mira_info(
-  data = data,
-  outcomes = c("BCVA", "CMT", "IOP")
-)
-
-# Più outcome con colonne definite manualmente
-result <- mira_info(
-  data = data,
-  time_vars = list(
-    BCVA = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-    CMT  = c("CMT_t0",  "CMT_t1",  "CMT_t2"),
-    IOP  = c("IOP_t0",  "IOP_t1",  "IOP_t2")
-  )
-)
-
-# Multi-outcome con trattamento e covariate
-result <- mira_info(
-  data = data,
-  id = "patient",
-  outcomes = c("BCVA", "CMT"),
-  arm = "treatment",
-  reference_arm = "Aflibercept",
-  covariates = c("age", "gender")
-)
-
-
-# ============================================================
-# 4. TIME LABELS E NOMI NON STANDARD
-# ============================================================
-
-# Etichette temporali personalizzate
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  time_labels = c("Baseline", "Month 1", "Month 3")
-)
-
-# Nomi longitudinali non standard specificati manualmente
-result <- mira_info(
-  data = data,
-  outcomes = "BCVA",
-  time_vars = c(
-    "BCVA_baseline",
-    "BCVA_month1",
-    "BCVA_month3"
-  ),
-  time_labels = c("Baseline", "Month 1", "Month 3")
-)
-
-# Regex personalizzata:
-# gruppo 1 = nome outcome, gruppo 2 = timepoint
-result <- mira_info(
-  data = data,
-  variable_pattern = "^(.+)_visit_([0-9]+)$"
-)
-
-
-# ============================================================
-# 5. DIREZIONE CLINICA
-# ============================================================
-
-# BCVA: valori maggiori rappresentano miglioramento
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  improvement_direction = "higher",
-  stable_threshold = 5
-)
-
-# CMT: valori minori rappresentano miglioramento
-result <- mira_info(
-  data = data,
-  time_vars = c("CMT_t0", "CMT_t1", "CMT_t2"),
-  improvement_direction = "lower",
-  stable_threshold = 20
-)
-
-# Più outcome con direzioni e soglie differenti
-result <- mira_info(
-  data = data,
-  outcomes = c("BCVA", "CMT"),
-  improvement_direction = c(
-    BCVA = "higher",
-    CMT  = "lower"
-  ),
-  stable_threshold = c(
-    BCVA = 5,
-    CMT  = 20
-  )
-)
-
-
-# ============================================================
-# 6. SELEZIONE DELLE ANALISI
-# ============================================================
-
-# Modelli, correlazioni e outlier
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  analyses = c("model", "correlations", "outliers")
-)
-
-# Modelli longitudinali con trattamento
-# arm_tests deve essere incluso per TIME × ARM
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  arm = "treatment",
-  analyses = c("model", "arm_tests")
-)
-
-# Disabilita le analisi opzionali.
-# Descrittive, cambiamenti e Friedman restano disponibili.
-result <- mira_info(
-  data = data,
-  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
-  analyses = "none"
-)
-
-# Ispezione senza eseguire le analisi
-config <- mira_info(
-  data = data,
-  inspect_only = TRUE
-)
-
-# Configurazione completamente automatica
-result <- mira_info(data)
-
-
-
-
-
-result$descriptives
-result$change
-result$missing
-result$correlations
-result$variability
-result$trajectories
-result$model
-result$arm_analysis
-result$plots
-result$long_data
-
-# Modello mixed originale
-summary(result$model$fitted_model)
-result$model$global_time_test
-result$model$global_arm_test
-result$model$arm_time_interaction_test
-
-# Plot
-result$plots$boxplot
-result$plots$mean_ci
-result$plots$arm_boxplot
-result$plots$arm_change_ci
-
-plot(result, which = "boxplot")
-plot(result, which = "arm_boxplot")
-
-
-
-
-
-# Stato del modulo
-result$advanced_tests$emmeans$performed
-result$advanced_tests$emmeans$error
-result$advanced_tests$emmeans$reason_skipped
-
-# Estimated marginal means del tempo
-result$advanced_tests$emmeans$time$tidy
-summary(result$advanced_tests$emmeans$time$object)
-
-# Tutti i confronti tra timepoint
-result$advanced_tests$emmeans$time$pairwise_tidy
-summary(result$advanced_tests$emmeans$time$pairwise)
-
-# Confronti Tukey
-result$advanced_tests$emmeans$time$pairwise_tukey
-
-# Baseline contro ogni follow-up
-result$advanced_tests$emmeans$baseline_followup$tidy
-summary(result$advanced_tests$emmeans$baseline_followup$object)
-
-# Correzione Dunnett
-result$advanced_tests$emmeans$baseline_followup$dunnett
-
-# Baseline contro ultimo follow-up
-result$advanced_tests$emmeans$baseline_final$tidy
-summary(result$advanced_tests$emmeans$baseline_final$object)
-
-# Confronti consecutivi
-result$advanced_tests$emmeans$consecutive$tidy
-
-# Trend lineare, quadratico e cubico
-result$advanced_tests$emmeans$trends$tidy
-summary(result$advanced_tests$emmeans$trends$object)
-
-
-
-
-
-# Marginal means per arm
-result$advanced_tests$emmeans$arm$tidy
-summary(result$advanced_tests$emmeans$arm$object)
-
-# Confronti globali tra arm
-result$advanced_tests$emmeans$arm$pairwise_tidy
-
-# Marginal means ARM × TIME
-result$advanced_tests$emmeans$arm_time$tidy
-summary(result$advanced_tests$emmeans$arm_time$object)
-
-# Effetto dell'arm in ogni timepoint
-result$advanced_tests$emmeans$arm_time$simple_arm_tidy
-summary(result$advanced_tests$emmeans$arm_time$simple_arm)
-
-# Effetto del tempo separatamente in ogni arm
-result$advanced_tests$emmeans$arm_time$simple_time_tidy
-summary(result$advanced_tests$emmeans$arm_time$simple_time)
-
-# Contrasti dell'interazione TIME × ARM
-result$advanced_tests$emmeans$arm_time$interaction_tidy
-summary(result$advanced_tests$emmeans$arm_time$interaction)
-
-
-
-
-rm_anova <- result$advanced_tests$rm_anova
-
-rm_anova$performed
-rm_anova$error
-rm_anova$warnings
-
-# Tabella compatta:
-# F, df, p non corretto, GG, HF, eta squared
-rm_anova$tidy
-
-# Oggetto originale
-rm_anova$object
-summary(rm_anova$object)
-
-# Tabelle specifiche
-rm_anova$tables$uncorrected_partial_eta
-rm_anova$tables$uncorrected_generalized_eta
-rm_anova$tables$greenhouse_geisser
-rm_anova$tables$huynh_feldt
-
-# Mauchly e informazioni sulla sfericità
-rm_anova$sphericity$mauchly
-rm_anova$sphericity$corrections
-
-
-
-
-friedman <- result$advanced_tests$friedman
-
-# Test globale originale
-friedman$test
-
-# Statistica, p-value e Kendall's W
-friedman$tidy
-
-# Tutti i Wilcoxon paired post-hoc
-friedman$posthoc$tidy
-
-# Oggetti htest originali
-friedman$posthoc$tests
-
-# Un confronto specifico
-friedman$posthoc$tests$BCVA_t0_to_BCVA_t1
-
-
-
-gee <- result$advanced_models$gee
-
-# Stato dei tre modelli
-gee$independence$performed
-gee$exchangeable$performed
-gee$ar1$performed
-
-# Modello con correlazione exchangeable
-summary(gee$exchangeable$model)
-
-# Coefficienti, SE robusti e intervalli di confidenza
-gee$exchangeable$coefficients
-gee$exchangeable$robust_standard_errors
-
-# Test Wald globali di TIME, ARM e TIME × ARM
-gee$exchangeable$effect_tests
-
-# QIC e CIC
-gee$exchangeable$qic
-
-# Confronto tra strutture
-gee$independence$qic
-gee$exchangeable$qic
-gee$ar1$qic
-
-
-
-
-
-random_slope <- result$advanced_models$random_slope
-
-random_slope$performed
-random_slope$error
-random_slope$warnings
-
-# Oggetto originale
-random_slope$model
-summary(random_slope$model)
-
-# Risultati estratti
-random_slope$fixed_effects
-random_slope$fixed_effect_tests
-random_slope$variance_components
-random_slope$random_intercept_slope_correlation
-
-# AIC, BIC e log-likelihood
-random_slope$AIC
-random_slope$BIC
-random_slope$logLik
-
-# Convergenza
-random_slope$converged
-random_slope$singular
-
-# Random intercept contro random slope
-random_slope$random_effects_lrt
-
-# Test globali
-random_slope$global_time_test
-random_slope$global_arm_test
-random_slope$arm_time_interaction_test
-
-
-
-
-nlme_models <- result$advanced_models$nlme
-
-# Compound symmetry
-summary(nlme_models$compound_symmetry$model)
-nlme_models$compound_symmetry$coefficients
-nlme_models$compound_symmetry$correlation_parameter
-
-# AR(1)
-summary(nlme_models$ar1$model)
-nlme_models$ar1$coefficients
-nlme_models$ar1$correlation_parameter
-
-# Tabella comparativa CS vs AR(1)
-nlme_models$comparison
-
-
-
-
-
-
-robust <- result$robustness$club_sandwich
-
-robust$performed
-robust$error
-robust$warnings
-
-# Matrice di covarianza CR2
-robust$covariance
-
-# Test dei singoli coefficienti
-robust$coefficient_tests
-
-# Intervalli di confidenza robusti
-robust$confidence_intervals
-
-# Test globali robusti
-robust$effect_tests$TIME
-robust$effect_tests$ARM
-robust$effect_tests$TIME_X_ARM
-
-
-# Cohen's dz per confronti paired
-result$effect_sizes$paired_cohens_dz
-
-# Rank-biserial correlation dei Wilcoxon paired
-result$effect_sizes$paired_rank_biserial
-
-# Partial e generalized eta squared
-result$effect_sizes$rm_anova
-
-# Kendall's W
-result$effect_sizes$friedman$kendalls_w
-
-# R² marginale e condizionale del random-intercept model
-result$effect_sizes$mixed_models$random_intercept$tidy
-
-# R² marginale e condizionale del random-slope model
-result$effect_sizes$mixed_models$random_slope$tidy
-
-# ICC del mixed model
-result$effect_sizes$mixed_models$ICC
-
-
-
-
-# Il metodo scelto dall'utente resta quello primario
-result$multiplicity$primary_method
-
-# Confronti tra timepoint
-time_p <- result$multiplicity$time_pairwise$table
-
-time_p[, c(
-  "contrast",
-  "estimate",
-  "p_raw",
-  "p_primary",
-  "p_bonferroni",
-  "p_holm",
-  "p_bh",
-  "p_by"
-)]
-
-# Baseline contro follow-up
-result$multiplicity$baseline_vs_followup$table
-
-# Confronti consecutivi
-result$multiplicity$consecutive_time$table
-
-# Trend temporali
-result$multiplicity$ordinal_trends$table
-
-# Confronti tra arm
-result$multiplicity$arm_pairwise$table
-
-# Simple effects
-result$multiplicity$simple_effects$arm_within_time$table
-result$multiplicity$simple_effects$time_within_arm$table
-
-# Contrasti di interazione
-result$multiplicity$interaction_contrasts$table
-
-# Wilcoxon post-hoc
-result$multiplicity$friedman_posthoc$table
-
-
-
-
-
-# Confronto compatto di tutti i modelli longitudinali
-result$advanced_models$model_comparison
-
-# Tutte le inferenze confrontabili
-result$sensitivity
-
-# Solo effetto globale del tempo
-subset(result$sensitivity, question == "TIME")
-
-# Solo effetto globale dell'arm
-subset(result$sensitivity, question == "ARM")
-
-# Solo interazione TIME × ARM
-subset(result$sensitivity, question == "TIME_X_ARM")
-
-
-
-
-result <- mira_info(
-  data = data,
-  outcomes = c("BCVA", "CMT"),
-  arm = "treatment",
-  covariates = c("age", "gender"),
   verbose = FALSE
 )
 
-# Estrazione di un outcome
-bcva <- result$outcomes[["BCVA"]]
-cmt  <- result$outcomes[["CMT"]]
+# Start with sample size and completeness, then verify the ordered mapping
+# from source columns to display labels.
+auto_fit$overview[c(
+  "n_patients", "n_timepoints", "complete_profiles",
+  "complete_profiles_pct"
+)]
+data.frame(
+  order = seq_along(auto_fit$time_vars),
+  variable = auto_fit$time_vars,
+  label = unname(auto_fit$time_labels)
+)
+utils::head(auto_fit$long_data[, c(
+  "patient", "outcome", "time", "time_index", "time_label", "value"
+)])
 
-# Analisi avanzate per BCVA
-bcva$advanced_tests$rm_anova$tidy
-bcva$advanced_models$gee$exchangeable$effect_tests
-bcva$sensitivity
+# Per-timepoint availability and descriptive statistics.
+auto_fit$descriptives[, c(
+  "label", "n", "missing", "mean", "sd", "ci_lower", "ci_upper"
+)]
 
-# Analisi avanzate per CMT
-cmt$advanced_tests$friedman$tidy
-cmt$advanced_models$model_comparison
-cmt$sensitivity
+# Every ordered to-minus-from comparison is in $change. The adjusted columns
+# belong to the paired-t and paired-Wilcoxon families, respectively.
+auto_fit$change[, c(
+  "from_label", "to_label", "n", "mean_change", "cohens_dz",
+  "paired_t_p", "paired_t_p_adj", "wilcoxon_p_adj"
+)]
 
-# Sensitivity table per tutti gli outcome
-sensitivity_by_outcome <- lapply(
-  result$outcomes,
-  function(x) {
-    if (inherits(x, "mira_info_error")) {
-      return(data.frame(error = x$error))
-    }
-    x$sensitivity
+# Select the clinically common baseline-to-final row without relying on row
+# position. This remains reliable if more visits are added later.
+baseline_final <- auto_fit$change[
+  auto_fit$change$from == auto_fit$time_vars[[1L]] &
+    auto_fit$change$to == auto_fit$time_vars[[length(auto_fit$time_vars)]],
+  ,
+  drop = FALSE
+]
+baseline_final[, c(
+  "n", "mean_from", "mean_to", "mean_change", "ci_lower", "ci_upper"
+)]
+
+# Variability and the preferred available ICC are kept in a one-row table.
+auto_fit$variability[, c(
+  "between_subject_sd", "within_subject_sd",
+  "ICC_anova_complete_profiles", "ICC_model", "ICC"
+)]
+
+# $trajectories contains one baseline-to-final record per input row.
+utils::head(auto_fit$trajectories[, c(
+  "patient", "baseline", "final", "absolute_change", "direction"
+)])
+table(auto_fit$trajectories$direction, useNA = "ifany")
+
+# Friedman is attempted with base R even though model fitting was disabled.
+auto_fit$advanced_tests$friedman$tidy[, c(
+  "statistic", "df", "p_raw", "kendalls_w", "n", "n_timepoints"
+)]
+auto_fit$advanced_tests$friedman$posthoc$tidy[, c(
+  "from_label", "to_label", "n", "p_raw", "p_holm", "rank_biserial"
+)]
+
+# ------------------------------------------------------------------
+# Example 2: Audit what mira_info() detected before fitting anything
+# ------------------------------------------------------------------
+# This reusable trial has a genuine time-by-arm difference plus two
+# time-invariant covariates. Eighty subjects and four visits also provide a
+# stable basis for the model examples below.
+set.seed(202602)
+n_trial <- 80L
+trial_arm <- rep(c("Control", "Treatment"), each = n_trial / 2L)
+trial_site <- factor(rep(c("North", "South", "East", "West"), length.out = n_trial))
+trial_age <- rep(50:69, length.out = n_trial) +
+  sample(-1:1, n_trial, replace = TRUE)
+treatment_indicator <- as.numeric(trial_arm == "Treatment")
+subject_intercept <- rnorm(n_trial, sd = 5.5)
+subject_slope <- rnorm(n_trial, sd = 0.8)
+site_shift <- c(North = 0, South = 1.0, East = -0.8, West = 0.5)
+trial_baseline <- 55 + 0.12 * (trial_age - 60) +
+  unname(site_shift[as.character(trial_site)]) + subject_intercept +
+  rnorm(n_trial, sd = 1.4)
+trial <- data.frame(
+  subject_id = sprintf("T%03d", seq_len(n_trial)),
+  arm = factor(trial_arm, levels = c("Control", "Treatment")),
+  age = trial_age,
+  site = trial_site,
+  outcome_t0 = trial_baseline,
+  outcome_t1 = trial_baseline + subject_slope - 1 -
+    3 * treatment_indicator + rnorm(n_trial, sd = 1.5),
+  outcome_t2 = trial_baseline + 2 * subject_slope - 2 -
+    6 * treatment_indicator + rnorm(n_trial, sd = 1.5),
+  outcome_t3 = trial_baseline + 3 * subject_slope - 3 -
+    9 * treatment_indicator + rnorm(n_trial, sd = 1.5)
+)
+
+# inspect_only validates and resolves configuration but performs no outcome
+# analysis. The requested optional switches are still recorded in $config.
+detected <- mira_info(
+  trial,
+  analyses = c("model", "arm_tests"),
+  inspect_only = TRUE,
+  verbose = FALSE
+)
+
+# These are the principal resolved choices. Control is selected as the
+# reference because its label is recognized as control-like.
+detected$config[c(
+  "id", "id_generated", "outcomes", "arm", "reference_arm", "covariates"
+)]
+detected$config$time_vars[["outcome"]]
+detected$config$time_labels[["outcome"]]
+detected$config$analyses
+
+# These fields distinguish inferred choices from explicit overrides and
+# record why an ID, arm, direction, or threshold was chosen.
+detected$config$auto_detected
+detected$config$specified_manually
+detected$config$sources
+detected$config$alternatives
+
+# The parsed map is the compact audit trail for outcome grouping and time
+# ordering. Candidate tables and covariate classes explain the other choices.
+detected$detected_variables$longitudinal_map[, c(
+  "outcome", "variable", "time_label", "time_order", "pattern", "numeric"
+)]
+detected$detected_variables$id_candidates
+detected$detected_variables$arm_candidates
+detected$detected_variables$covariates_numeric
+detected$detected_variables$covariates_categorical
+
+# Empty vectors are informative: they mean that no unresolved alternatives or
+# diagnostic warnings remained. Non-empty entries explain what needs review.
+detected$config$alternatives
+detected$diagnostics$warnings
+
+# ------------------------------------------------------------------
+# Example 3: Take control when column names do not encode time
+# ------------------------------------------------------------------
+set.seed(202603)
+n_explicit <- 42L
+symptom_baseline <- rnorm(n_explicit, mean = 30, sd = 5)
+explicit_data <- data.frame(
+  case_id = sprintf("E%03d", seq_len(n_explicit)),
+  pre = symptom_baseline,
+  week4 = symptom_baseline - 2 + rnorm(n_explicit, sd = 1.2),
+  final = symptom_baseline - 4 + rnorm(n_explicit, sd = 1.4)
+)
+
+# None of pre, week4, and final contains an outcome stem separated from a
+# recognized suffix. Supply the ID, ordered columns, display labels, and
+# outcome name explicitly. The supplied order defines baseline and final;
+# stable_threshold = 1 treats changes within +/-1 symptom point as stable.
+explicit_fit <- mira_info(
+  explicit_data,
+  id = "case_id",
+  time_vars = c("pre", "week4", "final"),
+  time_labels = c("Baseline", "Week 4", "Week 12"),
+  outcomes = "symptom",
+  covariates = character(0),
+  analyses = "none",
+  improvement_direction = "lower",
+  stable_threshold = 1,
+  strict_id = TRUE,
+  verbose = FALSE
+)
+
+data.frame(
+  order = seq_along(explicit_fit$time_vars),
+  variable = explicit_fit$time_vars,
+  label = unname(explicit_fit$time_labels)
+)
+explicit_fit$config$outcomes
+explicit_fit$config$specified_manually[c(
+  "id", "outcomes", "time_vars", "time_labels"
+)]
+explicit_fit$change[
+  explicit_fit$change$from == "pre" & explicit_fit$change$to == "final",
+  c(
+    "from_label", "to_label", "n", "mean_change",
+    "improved_n", "stable_n", "worsened_n", "paired_t_p_adj"
+  ),
+  drop = FALSE
+]
+
+# Wide format means one row per subject. strict_id = TRUE is the protective
+# default; these quick checks should both be zero before analysis.
+c(
+  missing_ids = sum(is.na(explicit_data$case_id)),
+  duplicated_ids = sum(duplicated(explicit_data$case_id))
+)
+
+# ------------------------------------------------------------------
+# Example 4: Parse a non-standard naming convention with a regex
+# ------------------------------------------------------------------
+set.seed(202604)
+n_regex <- 45L
+pain_baseline <- rnorm(n_regex, mean = 7, sd = 1.3)
+regex_data <- data.frame(
+  record_id = sprintf("R%03d", seq_len(n_regex)),
+  pain__OBS_12 = pain_baseline - 3.0 + rnorm(n_regex, sd = 0.7),
+  pain__OBS_0 = pain_baseline,
+  pain__OBS_4 = pain_baseline - 1.4 + rnorm(n_regex, sd = 0.6)
+)
+
+# The first capture group is the outcome and the second is the time label.
+# Numeric order is derived from that second group. The input columns are
+# intentionally out of order so the resolved order is visible.
+obs_pattern <- "^(.+)__OBS_([0-9]+)$"
+regex_detected <- mira_info(
+  regex_data,
+  variable_pattern = obs_pattern,
+  analyses = "none",
+  inspect_only = TRUE,
+  verbose = FALSE
+)
+regex_detected$detected_variables$longitudinal_map[, c(
+  "outcome", "variable", "time_label", "time_order", "pattern"
+)]
+regex_detected$config$time_vars[["pain"]]
+regex_detected$config$time_labels[["pain"]]
+
+regex_fit <- mira_info(
+  regex_data,
+  variable_pattern = obs_pattern,
+  outcomes = "pain",
+  analyses = "none",
+  verbose = FALSE
+)
+data.frame(
+  order = seq_along(regex_fit$time_vars),
+  variable = regex_fit$time_vars,
+  label = unname(regex_fit$time_labels)
+)
+regex_fit$change[
+  regex_fit$change$from == regex_fit$time_vars[[1L]] &
+    regex_fit$change$to == regex_fit$time_vars[[length(regex_fit$time_vars)]],
+  c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj"),
+  drop = FALSE
+]
+
+# ------------------------------------------------------------------
+# Example 5: Treatment-arm comparisons without fitting a model
+# ------------------------------------------------------------------
+# Explicit arguments make the scientific comparison unambiguous. A change
+# within +/-2 outcome points is classified as stable for this illustration.
+arm_fit <- mira_info(
+  trial,
+  id = "subject_id",
+  outcomes = "outcome",
+  arm = "arm",
+  reference_arm = "Control",
+  covariates = character(0),
+  analyses = "arm_tests",
+  p_adjust_method = "holm",
+  improvement_direction = "lower",
+  stable_threshold = 2,
+  verbose = FALSE
+)
+arm_fit$arm_analysis[c("enabled", "arm_variable", "reference_arm", "levels")]
+
+# Values are compared between arms at every visit. The column name states the
+# direction exactly: mean_difference_b_minus_a is arm_b minus arm_a.
+arm_fit$arm_analysis$time_pairwise[, c(
+  "time_label", "arm_a", "arm_b", "n_a", "n_b",
+  "mean_difference_b_minus_a", "ci_lower", "ci_upper",
+  "welch_t_p", "welch_t_p_adj"
+)]
+
+# Baseline balance is the first-timepoint subset; omnibus p-values form their
+# own across-time families and therefore have their own adjusted columns.
+arm_fit$arm_analysis$baseline_balance[, c(
+  "arm_a", "arm_b", "mean_difference_b_minus_a", "welch_t_p_adj"
+)]
+arm_fit$arm_analysis$time_omnibus[, c(
+  "time_label", "n", "welch_anova_p", "welch_anova_p_adj",
+  "kruskal_p_adj"
+)]
+
+# Change comparisons are baseline-to-follow-up differences. Here a negative
+# difference_in_change_b_minus_a means a larger reduction in Treatment.
+arm_fit$arm_analysis$change_pairwise[, c(
+  "to_label", "arm_a", "arm_b", "n_a", "n_b",
+  "mean_change_a", "mean_change_b", "difference_in_change_b_minus_a",
+  "ci_lower", "ci_upper", "welch_t_p_adj"
+)]
+arm_fit$arm_analysis$change_descriptives[, c(
+  "arm", "to_label", "n", "mean_change",
+  "improved_n", "stable_n", "worsened_n"
+)]
+
+
+# ------------------------------------------------------------------
+# Example 6: Covariate-adjusted longitudinal model
+# ------------------------------------------------------------------
+# lme4 is the required engine for the primary mixed model. Other advanced
+# packages are optional and record a structured skip when unavailable.
+if (requireNamespace("lme4", quietly = TRUE)) {
+  adjusted_fit <- mira_info(
+    trial,
+    id = "subject_id",
+    outcomes = "outcome",
+    arm = "arm",
+    reference_arm = "Control",
+    covariates = c("age", "site"),
+    analyses = c("model", "arm_tests"),
+    p_adjust_method = "holm",
+    improvement_direction = "lower",
+    stable_threshold = 2,
+    verbose = FALSE
+  )
+
+  # Requested, retained, and skipped covariates are distinguished explicitly.
+  # Covariate adjustment changes model-based estimates; it does not make the
+  # treatment comparison causal.
+  adjusted_fit$model[c(
+    "covariates_requested", "covariates_used", "covariates_skipped",
+    "converged", "singular", "warnings", "error"
+  )]
+  if (!is.null(adjusted_fit$model$fitted_model)) {
+    stats::formula(adjusted_fit$model$fitted_model)
   }
+
+  # These likelihood-ratio tables answer different global questions. They are
+  # not combined into the contrast-level multiplicity families.
+  adjusted_fit$model$global_time_test
+  adjusted_fit$model$global_arm_test
+  adjusted_fit$model$arm_time_interaction_test
+  adjusted_fit$variability[, c("ICC_model", "ICC")]
+
+  # ----------------------------------------------------------------
+  # Example 7: Estimated marginal means and targeted contrasts
+  # ----------------------------------------------------------------
+  if (requireNamespace("emmeans", quietly = TRUE) &&
+      isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
+    emm <- adjusted_fit$advanced_tests$emmeans
+
+    # This named list is a compact path index. It shows where each estimand or
+    # contrast family lives without printing every table.
+    emm_tables <- list(
+      time_means = emm$time$tidy,
+      all_time_pairs = emm$time$pairwise_tidy,
+      baseline_vs_followup = emm$baseline_followup$tidy,
+      baseline_vs_final = emm$baseline_final$tidy,
+      consecutive_time = emm$consecutive$tidy,
+      arm_pairs = emm$arm$pairwise_tidy,
+      arm_within_time = emm$arm_time$simple_arm_tidy,
+      time_within_arm = emm$arm_time$simple_time_tidy,
+      interaction_contrasts = emm$arm_time$interaction_tidy,
+      ordinal_trends = emm$trends$tidy
+    )
+    vapply(
+      emm_tables,
+      function(table) if (is.null(table)) 0L else nrow(table),
+      integer(1L)
+    )
+
+    # Estimated marginal means are adjusted for age and site because those
+    # covariates were included in the fitted model.
+    emm$time$tidy
+
+    compact_contrasts <- function(table) {
+      if (is.null(table)) return(NULL)
+      keep <- intersect(
+        c("contrast", "estimate", "SE", "df", "p_raw", "p_holm"),
+        names(table)
+      )
+      table[, keep, drop = FALSE]
+    }
+
+    # Pairwise enumerates every pair of visits. Baseline-versus-final is one
+    # prespecified endpoint contrast, stored separately for direct retrieval.
+    compact_contrasts(emm$time$pairwise_tidy)
+    compact_contrasts(emm$baseline_final$tidy)
+
+    # Simple arm effects compare arms within each visit. The path index above
+    # also exposes time-within-arm and interaction contrasts.
+    compact_contrasts(emm$arm_time$simple_arm_tidy)
+
+    # With four ordered visits, linear, quadratic, and cubic trends can be
+    # returned. These use visit order, not assumed equal chronological spacing.
+    compact_contrasts(emm$trends$tidy)
+  }
+
+  # ----------------------------------------------------------------
+  # Example 8: Advanced modules and sensitivity analysis
+  # ----------------------------------------------------------------
+  # Check performed before attempting to read module-specific tables. This
+  # remains safe when some optional packages are not installed or a fit fails.
+  advanced_status <- c(
+    rm_anova = isTRUE(adjusted_fit$advanced_tests$rm_anova$performed),
+    friedman = isTRUE(adjusted_fit$advanced_tests$friedman$performed),
+    gee_independence = isTRUE(
+      adjusted_fit$advanced_models$gee$independence$performed
+    ),
+    gee_exchangeable = isTRUE(
+      adjusted_fit$advanced_models$gee$exchangeable$performed
+    ),
+    gee_ar1 = isTRUE(adjusted_fit$advanced_models$gee$ar1$performed),
+    random_slope = isTRUE(
+      adjusted_fit$advanced_models$random_slope$performed
+    ),
+    nlme_compound_symmetry = isTRUE(
+      adjusted_fit$advanced_models$nlme$compound_symmetry$performed
+    ),
+    nlme_ar1 = isTRUE(adjusted_fit$advanced_models$nlme$ar1$performed),
+    robust_cr2 = isTRUE(
+      adjusted_fit$robustness$club_sandwich$performed
+    )
+  )
+  advanced_status
+
+  if (advanced_status[["rm_anova"]]) {
+    adjusted_fit$advanced_tests$rm_anova$tidy
+  }
+  adjusted_fit$advanced_tests$friedman$tidy
+
+  if (advanced_status[["gee_exchangeable"]]) {
+    adjusted_fit$advanced_models$gee$exchangeable$effect_tests
+  }
+  if (advanced_status[["random_slope"]]) {
+    adjusted_fit$advanced_models$random_slope[c(
+      "formula", "converged", "singular",
+      "random_intercept_slope_correlation"
+    )]
+  }
+  if (advanced_status[["nlme_compound_symmetry"]] ||
+      advanced_status[["nlme_ar1"]]) {
+    adjusted_fit$advanced_models$nlme$comparison
+  }
+  if (advanced_status[["robust_cr2"]]) {
+    utils::head(adjusted_fit$robustness$club_sandwich$coefficient_tests)
+  }
+
+  # Likelihood criteria and GEE QIC/CIC are retained on different scales.
+  model_comparison <- adjusted_fit$advanced_models$model_comparison
+  if (is.data.frame(model_comparison) && nrow(model_comparison) > 0L) {
+    model_comparison[, c(
+      "model", "AIC", "BIC", "QIC", "CIC", "converged", "singular",
+      "object_path"
+    )]
+  }
+
+  # Effect-size and multiplicity objects point back to their source families.
+  paired_dz <- adjusted_fit$effect_sizes$paired_cohens_dz
+  if (!is.null(paired_dz)) {
+    paired_dz[, c("from_label", "to_label", "n", "cohens_dz")]
+  }
+  friedman_family <- adjusted_fit$multiplicity$friedman_posthoc$table
+  if (!is.null(friedman_family)) {
+    friedman_family[, c(
+      "from_label", "to_label", "p_raw", "p_holm", "p_bh"
+    )]
+  }
+  if (isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
+    time_family <- adjusted_fit$multiplicity$time_pairwise$table
+    if (!is.null(time_family)) {
+      time_family[, c("contrast", "p_raw", "p_holm", "p_bh")]
+    }
+  }
+
+  # Sensitivity rows align methods by scientific question and give the exact
+  # source path. They may use different samples or hypotheses, so this table
+  # must not be interpreted as a vote among p-values.
+  adjusted_fit$sensitivity[, c(
+    "question", "method", "statistic", "df", "p_raw", "effect_size",
+    "effect_size_type", "n", "object_path"
+  )]
+}
+
+
+# ------------------------------------------------------------------
+# Example 9: Multiple outcomes with different improvement directions
+# ------------------------------------------------------------------
+set.seed(202609)
+n_multi <- 54L
+response_group <- rep(c("Improved", "Stable", "Worsened"), each = 18L)
+symptom_baseline_multi <- rnorm(n_multi, mean = 40, sd = 5)
+function_baseline_multi <- rnorm(n_multi, mean = 55, sd = 7)
+symptom_delta <- unname(
+  c(Improved = -6, Stable = 0, Worsened = 4)[response_group]
+) + rnorm(n_multi, sd = 0.15)
+function_delta <- unname(
+  c(Improved = 8, Stable = 0, Worsened = -5)[response_group]
+) + rnorm(n_multi, sd = 0.20)
+multi_data <- data.frame(
+  subject_id = sprintf("M%03d", seq_len(n_multi)),
+  symptom_t0 = symptom_baseline_multi,
+  symptom_t1 = symptom_baseline_multi + 0.5 * symptom_delta +
+    rnorm(n_multi, sd = 0.15),
+  symptom_t2 = symptom_baseline_multi + symptom_delta,
+  function_t0 = function_baseline_multi,
+  function_t1 = function_baseline_multi + 0.5 * function_delta +
+    rnorm(n_multi, sd = 0.20),
+  function_t2 = function_baseline_multi + function_delta
+)
+
+# Symptom is better when lower; function is better when higher. The named
+# thresholds mean that changes within +/-1.5 symptom points or +/-2 function
+# points are treated as stable. These are user-supplied practical thresholds,
+# not values estimated or clinically validated by mira_info().
+directions <- stats::setNames(
+  c("lower", "higher"), c("symptom", "function")
+)
+practical_thresholds <- stats::setNames(
+  c(1.5, 2), c("symptom", "function")
+)
+multi_fit <- mira_info(
+  multi_data,
+  outcomes = c("symptom", "function"),
+  improvement_direction = directions,
+  stable_threshold = practical_thresholds,
+  analyses = "none",
+  verbose = FALSE
+)
+
+# A multi-outcome result is an outcome-indexed container. Each element is a
+# complete single-outcome mira_info object with the same internal paths.
+names(multi_fit$outcomes)
+multi_fit$config$improvement_direction
+multi_fit$config$stable_threshold
+multi_fit$outcomes[["symptom"]]$settings[c(
+  "improvement_direction", "stable_threshold"
+)]
+summary(multi_fit)
+
+# Extract the same result for every outcome instead of exploring nested lists.
+baseline_to_final <- function(result) {
+  result$change[
+    result$change$from == result$time_vars[[1L]] &
+      result$change$to == result$time_vars[[length(result$time_vars)]],
+    c(
+      "from_label", "to_label", "n", "mean_change",
+      "improved_n", "stable_n", "worsened_n"
+    ),
+    drop = FALSE
+  ]
+}
+lapply(
+  multi_fit$outcomes,
+  function(result) result$descriptives[, c("label", "n", "mean", "sd")]
+)
+lapply(multi_fit$outcomes, baseline_to_final)
+
+# Compare response labels under a zero threshold and the practical thresholds.
+# With a zero threshold, even negligible simulated deviations count as change.
+multi_zero <- mira_info(
+  multi_data,
+  outcomes = c("symptom", "function"),
+  improvement_direction = directions,
+  stable_threshold = stats::setNames(c(0, 0), c("symptom", "function")),
+  analyses = "none",
+  verbose = FALSE
+)
+response_counts <- function(result) {
+  lapply(
+    result$outcomes,
+    function(outcome_result) {
+      table(outcome_result$trajectories$clinical_direction, useNA = "ifany")
+    }
+  )
+}
+list(
+  zero_threshold = response_counts(multi_zero),
+  practical_threshold = response_counts(multi_fit)
 )
 
 
+# The multi-outcome plot method needs outcome = when several outcomes succeed.
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  multi_plot_fit <- mira_info(
+    multi_data,
+    outcomes = c("symptom", "function"),
+    improvement_direction = directions,
+    stable_threshold = practical_thresholds,
+    analyses = "plots",
+    verbose = FALSE
+  )
+  plot(multi_plot_fit, outcome = "symptom", which = "mean_ci")
+}
 
 
-result$advanced_tests$rm_anova[
-  c("performed", "package", "error", "reason_skipped", "warnings")
-]
+# ------------------------------------------------------------------
+# Example 10: Missing follow-up data and effective sample sizes
+# ------------------------------------------------------------------
+missing_data <- wide
+missing_data$score_t1[c(4, 9, 15, 22)] <- NA_real_
+missing_data$score_t2[c(2, 4, 11, 19, 28, 37)] <- NA_real_
+missing_fit <- mira_info(
+  missing_data,
+  analyses = "correlations",
+  verbose = FALSE
+)
 
-result$advanced_models$gee$exchangeable[
-  c("performed", "package", "error", "reason_skipped", "warnings")
-]
+# mira_info() does not impute. Descriptives use all finite observations at
+# each visit, while complete_profiles requires all selected visits.
+missing_fit$overview[c(
+  "n_patients", "complete_profiles", "complete_profiles_pct"
+)]
+missing_fit$descriptives[, c(
+  "label", "n", "missing", "non_finite", "unavailable"
+)]
+missing_fit$missing$by_time
 
-result$robustness$club_sandwich[
-  c("performed", "package", "error", "reason_skipped", "warnings")
-]
+# Identify affected subjects without printing all rows.
+affected <- missing_fit$missing$by_patient$unavailable_n > 0L
+missing_fit$missing$by_patient[affected, , drop = FALSE]
+
+# Each paired comparison has its own pairwise-complete N. Friedman instead
+# uses complete profiles across all visits, reported in its tidy row.
+missing_fit$change[, c(
+  "from_label", "to_label", "n", "mean_change", "paired_t_p_adj"
+)]
+missing_fit$advanced_tests$friedman$tidy[, c("n", "n_timepoints", "p_raw")]
+
+# Per-outcome adaptation records show usable counts and any requested module
+# disabled because of insufficient data.
+missing_fit$diagnostics$adaptation[["score"]]
+
+# ------------------------------------------------------------------
+# Example 11: Correlations, outlier diagnostics, and public plot methods
+# ------------------------------------------------------------------
+diagnostic_data <- wide
+diagnostic_data$score_t2[[1L]] <- diagnostic_data$score_t2[[1L]] + 35
+diagnostic_fit <- mira_info(
+  diagnostic_data,
+  analyses = c("correlations", "outliers", "plots"),
+  verbose = FALSE
+)
+
+diagnostic_fit$correlations$pearson
+diagnostic_fit$correlations$pairwise_n
+
+# Outliers are Tukey 1.5-IQR flags only; they are never removed automatically.
+vapply(diagnostic_fit$outliers$by_time, nrow, integer(1L))
+diagnostic_fit$outliers$by_time[["score_t2"]]
+change_flag_counts <- vapply(
+  diagnostic_fit$outliers$change, nrow, integer(1L)
+)
+change_flag_counts
+most_flagged_change <- names(change_flag_counts)[which.max(change_flag_counts)]
+diagnostic_fit$outliers$change[[most_flagged_change]]
+
+# Use plot() rather than reaching into $plots when displaying a stored plot.
+# If ggplot2 is absent, the analysis still succeeds and $plot_error explains
+# why no plot was stored.
+diagnostic_fit$plot_error
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  names(diagnostic_fit$plots)
+  plot(diagnostic_fit, which = "mean_ci")
+  plot(diagnostic_fit, which = "spaghetti")
+  plot(diagnostic_fit, which = "missingness")
+}
+
+# ------------------------------------------------------------------
+# Example 12: Select exactly which optional modules to request
+# ------------------------------------------------------------------
+# inspect_only makes this comparison cheap: no statistical module is run.
+cfg_none <- mira_info(
+  wide, analyses = "none", inspect_only = TRUE, verbose = FALSE
+)
+cfg_arm <- mira_info(
+  trial, analyses = "arm_tests", inspect_only = TRUE, verbose = FALSE
+)
+cfg_model_cor <- mira_info(
+  wide,
+  analyses = c("model", "correlations"),
+  inspect_only = TRUE,
+  verbose = FALSE
+)
+cfg_all <- mira_info(
+  trial, analyses = "all", inspect_only = TRUE, verbose = FALSE
+)
+
+module_switches <- function(configuration) {
+  unlist(
+    configuration$config$analyses[c(
+      "plots", "model", "outliers", "correlations", "arm_tests"
+    )],
+    use.names = TRUE
+  )
+}
+rbind(
+  none = module_switches(cfg_none),
+  arm_tests = module_switches(cfg_arm),
+  model_correlations = module_switches(cfg_model_cor),
+  all = module_switches(cfg_all)
+)
+
+# Core summaries remain enabled under analyses = "none". On a real analysis,
+# the base-R Friedman branch is also attempted independently of model =.
+cfg_none$config$analyses$core
+
+
+
+
+

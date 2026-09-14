@@ -1,2 +1,0 @@
-"question","method","statistic","df","p_raw","effect_size","effect_size_type","n","object_path","note"
-"TIME","Friedman test",78.875,"2",7.4560939201666e-18,0.821614583333333,"Kendall's W",48,"$advanced_tests$friedman$test","Rank-based complete-profile global test."

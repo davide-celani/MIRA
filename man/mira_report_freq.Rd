@@ -36,9 +36,8 @@ A data.frame is also accepted and is treated as \code{data}.}
 
 \item{...}{Arguments forwarded unchanged to \code{mira_info()} when \code{data} is used.}
 
-\item{output_dir}{Directory in which the Quarto source, RDS payload, runtime
-helper, and rendered reports are written. The default creates a timestamped
-directory under the current working directory.}
+\item{output_dir}{Directory for reports, reproducible sources, and CSV results.
+Defaults to \code{./mira_analyses/mira_report_flong}.}
 
 \item{output_file}{Base filename without extension.}
 

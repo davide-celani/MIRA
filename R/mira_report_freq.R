@@ -6,13 +6,13 @@
 #   source("mira_info(2).R")
 #   source("mira_report_freq.R")
 #
-#   fit <- mira_info(data = dati, outcomes = c("score_a", "score_b"),
+#   fit <- mira_info(data = study_data, outcomes = c("score_a", "score_b"),
 #                    analyses = "all", verbose = FALSE)
 #   mira_report_freq(fit, format = c("html", "pdf"))
 #
 # Or run mira_info() and build the report in one call:
 #   mira_report_freq(
-#     data = dati,
+#     data = study_data,
 #     outcomes = "score_a",
 #     arm = "treatment",
 #     covariates = c("age", "sex"),
@@ -30,7 +30,8 @@
 
 .mira_report_is_empty <- function(x) {
   if (is.null(x)) return(TRUE)
-  if (is.data.frame(x) || is.matrix(x) || is.table(x)) return(nrow(x) == 0L)
+  if (is.table(x)) return(length(x) == 0L)
+  if (is.data.frame(x) || is.matrix(x)) return(nrow(x) == 0L)
   if (is.atomic(x) || is.list(x)) return(length(x) == 0L)
   FALSE
 }
@@ -43,89 +44,89 @@
 
 .mira_report_human_name <- function(x) {
   labels <- c(
-    call = "Chiamata analitica",
-    version = "Versione MIRA",
-    settings = "Impostazioni",
-    overview = "Quadro generale",
-    config = "Configurazione risolta",
-    data_overview = "Struttura del dataset",
-    detected_variables = "Variabili rilevate",
-    diagnostics = "Diagnostica e adattamenti",
-    descriptives = "Statistiche descrittive",
-    missing = "Completezza e dati non disponibili",
-    by_time = "Disponibilità per visita",
-    by_patient = "Disponibilità per soggetto",
-    change = "Cambiamenti entro soggetto",
-    arm_analysis = "Analisi per braccio",
-    baseline_balance = "Bilanciamento al basale",
-    missingness = "Missingness per braccio",
-    time_omnibus = "Confronti omnibus tra bracci per visita",
-    time_pairwise = "Confronti a coppie tra bracci per visita",
-    change_descriptives = "Cambiamento per braccio",
-    change_omnibus = "Confronti omnibus del cambiamento",
-    change_pairwise = "Confronti a coppie del cambiamento",
-    correlations = "Correlazioni tra visite",
-    pearson = "Correlazione di Pearson",
-    spearman = "Correlazione di Spearman",
-    pairwise_n = "Numerosità disponibili a coppie",
-    variability = "Variabilità e ICC",
-    trajectories = "Traiettorie individuali",
-    model = "Modello misto principale",
-    fitted_model = "Oggetto del modello stimato",
-    summary = "Sintesi del modello",
-    anova = "Tabella ANOVA del modello",
-    global_time_test = "Test globale del tempo",
-    global_arm_test = "Test globale del braccio",
-    arm_time_interaction_test = "Test globale interazione braccio per tempo",
-    fixed_parameters = "Parametri a effetti fissi",
-    advanced_tests = "Test longitudinali avanzati",
-    advanced_models = "Modelli longitudinali avanzati",
-    robustness = "Inferenza robusta",
-    effect_sizes = "Dimensioni dell'effetto",
-    multiplicity = "Famiglie di molteplicità",
-    sensitivity = "Analisi di sensibilità",
-    outliers = "Valori anomali diagnostici",
-    plots = "Figure",
-    plot_error = "Diagnostica delle figure",
-    long_data = "Dataset longitudinale analitico",
-    outcomes = "Outcome",
-    warnings = "Avvertenze",
-    adaptation = "Adattamenti automatici",
-    failed_outcomes = "Outcome non completati",
-    emmeans = "Medie marginali stimate e contrasti",
-    rm_anova = "ANOVA per misure ripetute",
-    friedman = "Test di Friedman",
-    random_slope = "Modello misto con pendenza casuale",
-    nlme = "Modelli NLME",
-    gee = "Modelli GEE",
-    model_comparison = "Confronto descrittivo dei modelli",
-    club_sandwich = "Inferenza cluster-robust CR2",
-    compound_symmetry = "Correlazione compound symmetry",
-    ar1 = "Correlazione AR(1)",
-    independence = "Correlazione di lavoro indipendente",
-    exchangeable = "Correlazione di lavoro scambiabile",
-    data = "Dati analitici del modulo",
-    formula = "Formula del modello",
-    error = "Errore del modulo",
-    note = "Nota",
-    boxplot = "Distribuzione per visita",
-    mean_ci = "Profilo medio con intervalli di confidenza",
-    change_from_baseline = "Cambiamento rispetto al basale",
-    change_ci = "Cambiamento medio con intervalli di confidenza",
-    correlation_heatmap = "Matrice di correlazione",
-    arm_mean_ci = "Profilo medio per braccio con intervalli di confidenza",
-    arm_boxplot = "Distribuzione per braccio e visita",
-    arm_change = "Cambiamento per braccio",
-    arm_change_ci = "Cambiamento medio per braccio con intervalli di confidenza",
-    arm_difference_ci = "Differenze tra bracci con intervalli di confidenza",
-    arm_missingness = "Dati non disponibili per braccio",
-    response = "Risposta clinica individuale"
+    call = "Analysis call",
+    version = "MIRA version",
+    settings = "Analysis settings",
+    overview = "Overview",
+    config = "Resolved configuration",
+    data_overview = "Dataset overview",
+    detected_variables = "Detected variables",
+    diagnostics = "Diagnostics and adaptations",
+    descriptives = "Descriptive statistics",
+    missing = "Missing data",
+    by_time = "By time point",
+    by_patient = "By participant",
+    change = "Within-participant changes",
+    arm_analysis = "Arm-specific analyses",
+    baseline_balance = "Baseline balance",
+    missingness = "Missing data by arm",
+    time_omnibus = "Omnibus arm comparisons by time point",
+    time_pairwise = "Pairwise arm comparisons by time point",
+    change_descriptives = "Change by arm",
+    change_omnibus = "Omnibus change comparisons",
+    change_pairwise = "Pairwise change comparisons",
+    correlations = "Correlations across time points",
+    pearson = "Pearson correlation",
+    spearman = "Spearman correlation",
+    pairwise_n = "Pairwise sample sizes",
+    variability = "Variability and ICC",
+    trajectories = "Individual trajectories",
+    model = "Primary mixed-effects model",
+    fitted_model = "Fitted model object",
+    summary = "Model summary",
+    anova = "Model ANOVA table",
+    global_time_test = "Global time test",
+    global_arm_test = "Global arm test",
+    arm_time_interaction_test = "Global arm-by-time interaction test",
+    fixed_parameters = "Fixed-effect parameters",
+    advanced_tests = "Advanced longitudinal tests",
+    advanced_models = "Advanced longitudinal models",
+    robustness = "Robust inference",
+    effect_sizes = "Effect sizes",
+    multiplicity = "Multiplicity families",
+    sensitivity = "Sensitivity analyses",
+    outliers = "Diagnostic outliers",
+    plots = "Figures",
+    plot_error = "Figure diagnostics",
+    long_data = "Longitudinal analysis dataset",
+    outcomes = "Outcomes",
+    warnings = "Warnings",
+    adaptation = "Automatic adaptations",
+    failed_outcomes = "Failed outcomes",
+    emmeans = "Estimated marginal means and contrasts",
+    rm_anova = "Repeated-measures ANOVA",
+    friedman = "Friedman test",
+    random_slope = "Random-slope mixed-effects model",
+    nlme = "NLME models",
+    gee = "GEE models",
+    model_comparison = "Descriptive model comparison",
+    club_sandwich = "Cluster-robust CR2 inference",
+    compound_symmetry = "Compound-symmetry correlation",
+    ar1 = "AR(1) correlation",
+    independence = "Independent working correlation",
+    exchangeable = "Exchangeable working correlation",
+    data = "Module analysis data",
+    formula = "Model formula",
+    error = "Module error",
+    note = "Note",
+    boxplot = "Distribution by time point",
+    mean_ci = "Mean profile with confidence intervals",
+    change_from_baseline = "Change from baseline",
+    change_ci = "Mean change with confidence intervals",
+    correlation_heatmap = "Correlation matrix",
+    arm_mean_ci = "Mean profile by arm with confidence intervals",
+    arm_boxplot = "Distribution by arm and time point",
+    arm_change = "Change by arm",
+    arm_change_ci = "Mean change by arm with confidence intervals",
+    arm_difference_ci = "Arm differences with confidence intervals",
+    arm_missingness = "Missing data by arm",
+    response = "Individual clinical response"
   )
   key <- as.character(x)[1L]
   if (key %in% names(labels)) return(unname(labels[[key]]))
   text <- gsub("[._]+", " ", key)
   text <- trimws(text)
-  if (!nzchar(text)) return("Elemento senza nome")
+  if (!nzchar(text)) return("Unnamed item")
   paste0(toupper(substr(text, 1L, 1L)), substr(text, 2L, nchar(text)))
 }
 
@@ -144,14 +145,14 @@
 }
 
 .mira_report_format_number <- function(x, digits = 3L) {
-  if (length(x) == 0L || is.na(x[1L])) return("non stimabile")
+  if (length(x) == 0L || is.na(x[1L])) return("not estimable")
   value <- suppressWarnings(as.numeric(x[1L]))
   if (!is.finite(value)) return(as.character(value))
   formatC(value, format = "fg", digits = digits, flag = "#")
 }
 
 .mira_report_inline <- function(x) {
-  if (is.null(x) || length(x) == 0L) return("non disponibile")
+  if (is.null(x) || length(x) == 0L) return("not available")
   if (inherits(x, c("Date", "POSIXct", "POSIXlt"))) {
     return(paste(as.character(x), collapse = ", "))
   }
@@ -163,12 +164,18 @@
   paste(capture.output(str(x, give.attr = FALSE, vec.len = 8L)), collapse = " ")
 }
 
-.mira_report_prepare_table <- function(x, digits = 3L) {
+.mira_report_prepare_table <- function(x, digits = 3L, format_p = TRUE) {
   if (is.table(x)) x <- as.data.frame(x, stringsAsFactors = FALSE)
 
   if (is.matrix(x)) {
     row_labels <- rownames(x)
-    x <- as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+    # Some analytical matrices carry an S3 class such as "anova". Calling
+    # as.data.frame() would dispatch that class's method and may change the
+    # row count; convert by matrix structure instead.
+    matrix_value <- x
+    class(matrix_value) <- NULL
+    x <- as.data.frame.matrix(matrix_value, stringsAsFactors = FALSE,
+                              check.names = FALSE)
     if (!is.null(row_labels)) {
       x <- data.frame(.row = row_labels, x, check.names = FALSE,
                       stringsAsFactors = FALSE)
@@ -180,20 +187,20 @@
       nms <- names(x)
       if (is.null(nms)) nms <- paste0("item_", seq_along(x))
       x <- data.frame(
-        parametro = nms,
-        valore = vapply(x, .mira_report_inline, character(1L)),
+        parameter = nms,
+        value = vapply(x, .mira_report_inline, character(1L)),
         stringsAsFactors = FALSE
       )
     } else if (is.atomic(x)) {
       nms <- names(x)
       if (is.null(nms)) nms <- seq_along(x)
       x <- data.frame(
-        elemento = as.character(nms),
-        valore = as.character(x),
+        item = as.character(nms),
+        value = as.character(x),
         stringsAsFactors = FALSE
       )
     } else {
-      stop("L'oggetto non è convertibile in tabella.", call. = FALSE)
+      stop("The object cannot be converted to a table.", call. = FALSE)
     }
   }
 
@@ -247,13 +254,15 @@
     }
   }
 
-  p_columns <- grepl(
-    "(^p$|(^|[._])p([._]|$)|p.value|p_value|pvalue|^pr\\()",
-    names(x), ignore.case = TRUE, perl = TRUE
-  )
-  for (j in which(p_columns)) {
-    if (is.numeric(x[[j]]) || is.integer(x[[j]])) {
-      x[[j]] <- .mira_report_format_p(x[[j]], digits = digits)
+  if (format_p) {
+    p_columns <- grepl(
+      "(^p$|(^|[._])p([._]|$)|p.value|p_value|pvalue|^pr\\()",
+      names(x), ignore.case = TRUE, perl = TRUE
+    )
+    for (j in which(p_columns)) {
+      if (is.numeric(x[[j]]) || is.integer(x[[j]])) {
+        x[[j]] <- .mira_report_format_p(x[[j]], digits = digits)
+      }
     }
   }
   x
@@ -398,7 +407,7 @@
 
 .mira_report_table <- function(x, caption = NULL, cfg) {
   if (.mira_report_is_empty(x)) {
-    cat("*Nessuna riga disponibile o stimabile.*\n\n")
+    cat("*No rows are available for display.*\n\n")
     return(invisible(NULL))
   }
 
@@ -407,7 +416,7 @@
     error = function(e) NULL
   )
   if (is.null(table_data)) {
-    cat("*Oggetto non rappresentabile come tabella; viene riportato in forma testuale.*\n\n")
+    .mira_report_text_block(x)
     return(invisible(NULL))
   }
 
@@ -432,7 +441,7 @@
   for (i in seq_along(blocks)) {
     block_caption <- caption
     if (length(blocks) > 1L && !is.null(caption)) {
-      block_caption <- sprintf("%s (blocco %d di %d)", caption, i, length(blocks))
+      block_caption <- sprintf("%s (block %d of %d)", caption, i, length(blocks))
     }
     block <- table_data[, blocks[[i]], drop = FALSE]
     common <- list(
@@ -466,11 +475,11 @@
     if (is.null(rendered)) {
       .mira_report_callout(
         paste0(
-          "La tabella non è stata convertita dal formatter di knitr (`",
+          "The table could not be formatted by knitr (`",
           render_error,
-          "`). Il contenuto viene mantenuto in forma testuale per non interrompere il report."
+          "`). Its contents are shown as text so that the report can continue."
         ),
-        type = "warning", title = "Fallback tabellare"
+        type = "warning", title = "Table formatting fallback"
       )
       .mira_report_text_block(block)
     } else {
@@ -521,7 +530,7 @@
 
   if (is.finite(cfg$max_table_rows) && original_n > cfg$max_table_rows) {
     cat(sprintf(
-      "*Sono visualizzate %d di %d righe per il limite esplicito `max_table_rows`.*\n\n",
+      "*Showing %d of %d rows because of the explicit `max_table_rows` limit.*\n\n",
       nrow(table_data), original_n
     ))
   }
@@ -558,13 +567,13 @@
         capture.output(print(x))
       }
     },
-    error = function(e) paste("Impossibile stampare l'oggetto:", conditionMessage(e))
+    error = function(e) paste("The object could not be printed:", conditionMessage(e))
   )
   text <- gsub("```", "'''", enc2utf8(text), fixed = TRUE)
   cat("```text\n", paste(text, collapse = "\n"), "\n```\n\n", sep = "")
 }
 
-.mira_report_callout <- function(text, type = "note", title = "Nota") {
+.mira_report_callout <- function(text, type = "note", title = "Note") {
   allowed <- c("note", "tip", "warning", "important", "caution")
   if (!type %in% allowed) type <- "note"
   cat(sprintf("::: {.callout-%s appearance=\"simple\"}\n", type))
@@ -576,7 +585,7 @@
   inherits(x, c("ggplot", "ggplot2::ggplot", "recordedplot", "grob", "gTree"))
 }
 
-.mira_report_plot <- function(x, name = "Figura") {
+.mira_report_plot <- function(x, name = "Figure") {
   .mira_report_prepare_namespace(x)
   printed <- tryCatch({
     if (inherits(x, "recordedplot")) {
@@ -590,33 +599,33 @@
     TRUE
   }, error = function(e) {
     .mira_report_callout(conditionMessage(e), type = "warning",
-                         title = paste("Figura non renderizzata:", name))
+                         title = paste("Figure could not be rendered:", name))
     FALSE
   })
   if (printed) {
     caption_map <- c(
-      boxplot = "Distribuzione dei valori osservati per visita, con osservazioni individuali e intervalli di confidenza della media.",
-      trajectories = "Traiettorie individuali longitudinali.",
-      trajectory = "Traiettorie individuali longitudinali.",
-      spaghetti = "Traiettorie individuali longitudinali.",
-      mean = "Profilo medio longitudinale.",
-      mean_ci = "Profilo medio longitudinale con intervalli di confidenza.",
-      change = "Distribuzione dei cambiamenti entro soggetto.",
-      change_from_baseline = "Cambiamento rispetto al basale lungo il follow-up.",
-      change_ci = "Cambiamento medio longitudinale con intervalli di confidenza.",
-      missingness = "Percentuale di osservazioni non disponibili per visita.",
-      correlation = "Struttura di correlazione tra visite.",
-      arm = "Andamento longitudinale stratificato per braccio.",
-      arm_mean_ci = "Profilo medio longitudinale per braccio con intervalli di confidenza.",
-      arm_boxplot = "Distribuzione dei valori osservati per braccio e visita.",
-      arm_change = "Cambiamento longitudinale stratificato per braccio.",
-      arm_change_ci = "Cambiamento medio per braccio con intervalli di confidenza.",
-      arm_difference_ci = "Differenze stimate tra bracci con intervalli di confidenza.",
-      arm_missingness = "Percentuale di osservazioni non disponibili per braccio e visita.",
-      response = "Frequenza delle direzioni di risposta individuale."
+      boxplot = "Distribution of observed values by time point, with individual observations and confidence intervals for the mean.",
+      trajectories = "Individual longitudinal trajectories.",
+      trajectory = "Individual longitudinal trajectories.",
+      spaghetti = "Individual longitudinal trajectories.",
+      mean = "Longitudinal mean profile.",
+      mean_ci = "Longitudinal mean profile with confidence intervals.",
+      change = "Distribution of within-participant changes.",
+      change_from_baseline = "Change from baseline during follow-up.",
+      change_ci = "Mean longitudinal change with confidence intervals.",
+      missingness = "Percentage of missing observations by time point.",
+      correlation = "Correlation structure across time points.",
+      arm = "Longitudinal pattern stratified by arm.",
+      arm_mean_ci = "Longitudinal mean profile by arm with confidence intervals.",
+      arm_boxplot = "Distribution of observed values by arm and time point.",
+      arm_change = "Longitudinal change stratified by arm.",
+      arm_change_ci = "Mean change by arm with confidence intervals.",
+      arm_difference_ci = "Estimated arm differences with confidence intervals.",
+      arm_missingness = "Percentage of missing observations by arm and time point.",
+      response = "Frequency of individual response directions."
     )
     matching_keys <- names(caption_map)[vapply(names(caption_map), function(k) {
-      grepl(k, name, ignore.case = TRUE, fixed = TRUE)
+      grepl(tolower(k), tolower(name), fixed = TRUE)
     }, logical(1L))]
     if (length(matching_keys) > 1L) {
       matching_keys <- matching_keys[order(nchar(matching_keys), decreasing = TRUE)]
@@ -624,1008 +633,496 @@
     caption <- if (length(matching_keys) > 0L) {
       caption_map[[matching_keys[[1L]]]]
     } else {
-      paste0("Output grafico `", name, "` prodotto da MIRA.")
+      paste0("Plot `", name, "` produced by MIRA.")
     }
-    cat("**Figura.** ", caption, "\n\n", sep = "")
+    cat("**Figure.** ", caption, "\n\n", sep = "")
   }
   invisible(printed)
 }
 
 .mira_report_is_plain_list <- function(x) {
-  if (!is.list(x)) return(FALSE)
-  cls <- class(x)
-  is.null(cls) || identical(cls, "list") ||
-    inherits(x, c("mira_info", "mira_info_multi", "mira_info_error",
-                  "mira_detect", "summary.mira_info", "summary.mira_info_multi"))
+  is.list(x) && !is.data.frame(x) && !.mira_report_is_plot(x) &&
+    !.mira_report_is_model(x)
 }
 
-.mira_report_render_any <- function(x, name, level, cfg, depth = 0L) {
-  if (depth > cfg$max_depth) {
-    .mira_report_callout(
-      sprintf("Profondità massima di sicurezza raggiunta nel percorso `%s`.", name),
-      type = "warning", title = "Output annidato"
-    )
-    return(invisible(NULL))
-  }
-
-  if (.mira_report_is_empty(x)) {
-    cat("*Output non disponibile, non richiesto o non stimabile.*\n\n")
-    return(invisible(NULL))
-  }
-
-  if (.mira_report_is_plot(x)) {
-    .mira_report_plot(x, name)
-    return(invisible(NULL))
-  }
-
-  if (is.data.frame(x) || is.matrix(x) || is.table(x)) {
-    .mira_report_table(x, caption = .mira_report_human_name(name), cfg = cfg)
-    note <- attr(x, "note", exact = TRUE)
-    interpretation <- attr(x, "interpretation", exact = TRUE)
-    if (!is.null(note)) cat("*Nota:* ", .mira_report_inline(note), "\n\n", sep = "")
-    if (!is.null(interpretation)) {
-      cat("*Interpretazione:* ", .mira_report_inline(interpretation), "\n\n", sep = "")
-    }
-    return(invisible(NULL))
-  }
-
-  if (inherits(x, "formula") || is.call(x) || is.expression(x) || is.name(x)) {
-    .mira_report_text_block(x)
-    return(invisible(NULL))
-  }
-
-  if (is.atomic(x)) {
-    if (length(x) == 1L) {
-      cat("**Valore:** `", .mira_report_inline(x), "`\n\n", sep = "")
-    } else {
-      .mira_report_table(x, caption = .mira_report_human_name(name), cfg = cfg)
-    }
-    return(invisible(NULL))
-  }
-
-  if (.mira_report_is_plain_list(x)) {
-    if (inherits(x, "mira_info_error")) {
-      .mira_report_callout(
-        .mira_report_or(x$error, "Errore analitico non specificato."),
-        type = "warning", title = "Analisi non completata"
-      )
-      return(invisible(NULL))
-    }
-
-    nms <- names(x)
-    if (is.null(nms)) nms <- paste0("item_", seq_along(x))
-    for (i in seq_along(x)) {
-      item_name <- nms[[i]]
-      if (level <= 6L) {
-        .mira_report_heading(.mira_report_human_name(item_name), level)
-      } else {
-        cat("**", .mira_report_human_name(item_name), "**\n\n", sep = "")
-      }
-      .mira_report_render_any(
-        x[[i]], name = item_name, level = min(6L, level + 1L),
-        cfg = cfg, depth = depth + 1L
-      )
-    }
-    return(invisible(NULL))
-  }
-
-  .mira_report_text_block(x)
-  invisible(NULL)
+.mira_report_is_model <- function(x) {
+  inherits(x, c("lm", "glm", "merMod", "lme", "gls", "geeglm",
+                "emmGrid", "emm_list", "afex_aov", "htest"))
 }
 
 .mira_report_extract_outcomes <- function(result) {
   if (inherits(result, "mira_detect")) return(list())
-  if (!is.null(result$outcomes) && is.list(result$outcomes) &&
-      length(result$outcomes) > 0L) {
-    outcomes <- result$outcomes
+  if (is.list(result$outcomes) && length(result$outcomes)) {
+    out <- result$outcomes
   } else {
-    outcomes <- list(result)
+    out <- list(result)
   }
-  nms <- names(outcomes)
-  if (is.null(nms)) nms <- rep("", length(outcomes))
-  for (i in seq_along(outcomes)) {
-    if (!nzchar(nms[[i]])) {
-      nms[[i]] <- .mira_report_or(outcomes[[i]]$outcome, paste0("outcome_", i))
+  nms <- names(out)
+  if (is.null(nms)) nms <- rep("", length(out))
+  for (i in seq_along(out)) {
+    if (is.na(nms[i]) || !nzchar(nms[i])) {
+      candidate <- out[[i]]$outcome
+      nms[i] <- if (is.character(candidate) && length(candidate) == 1L &&
+                     !is.na(candidate) && nzchar(candidate)) candidate else paste0("outcome_", i)
     }
   }
-  names(outcomes) <- make.unique(nms)
-  outcomes
-}
-
-.mira_report_first_success <- function(outcomes) {
-  if (length(outcomes) == 0L) return(NULL)
-  ok <- !vapply(outcomes, inherits, logical(1L), what = "mira_info_error")
-  if (!any(ok)) return(NULL)
-  outcomes[[which(ok)[1L]]]
-}
-
-.mira_report_scalar_table <- function(x) {
-  if (is.null(x) || !is.list(x)) return(data.frame())
-  nms <- names(x)
-  if (is.null(nms)) nms <- paste0("item_", seq_along(x))
-  keep <- vapply(x, function(value) {
-    is.null(value) || is.atomic(value) || inherits(value, c("Date", "POSIXct", "POSIXlt"))
-  }, logical(1L))
-  data.frame(
-    parametro = vapply(nms[keep], .mira_report_human_name, character(1L)),
-    valore = vapply(x[keep], .mira_report_inline, character(1L)),
-    stringsAsFactors = FALSE
-  )
-}
-
-.mira_report_frequency <- function(x, label = "categoria") {
-  x <- as.character(x)
-  x[is.na(x) | !nzchar(x)] <- "Non disponibile"
-  counts <- sort(table(x, useNA = "no"), decreasing = TRUE)
-  total <- sum(counts)
-  out <- data.frame(
-    categoria = names(counts),
-    n = as.integer(counts),
-    percentuale = if (total > 0L) as.numeric(counts) / total * 100 else numeric(length(counts)),
-    stringsAsFactors = FALSE,
-    check.names = FALSE
-  )
-  stats::setNames(out, c(label, "n", "percentuale"))
-}
-
-.mira_report_object_index <- function(x, root = "result", max_depth = 50L) {
-  rows <- list()
-  counter <- 0L
-
-  walk <- function(object, path, depth) {
-    counter <<- counter + 1L
-    dimensions <- tryCatch({
-      if (!is.null(dim(object))) paste(dim(object), collapse = " x ")
-      else as.character(length(object))
-    }, error = function(e) "non disponibile")
-    status <- NA_character_
-    object_status <- if (is.list(object)) object[["status", exact = TRUE]] else NULL
-    if (!is.null(object_status) && length(object_status) == 1L) {
-      status <- as.character(object_status)
-    } else if (.mira_report_is_empty(object)) {
-      status <- "vuoto/non disponibile"
-    }
-    size <- tryCatch(
-      format(utils::object.size(object), units = "auto", standard = "SI"),
-      error = function(e) NA_character_
-    )
-    rows[[counter]] <<- data.frame(
-      percorso = path,
-      classe = paste(class(object), collapse = "/"),
-      dimensione = dimensions,
-      memoria = size,
-      stato = status,
-      stringsAsFactors = FALSE
-    )
-
-    if (depth >= max_depth || !.mira_report_is_plain_list(object) ||
-        .mira_report_is_empty(object)) return(invisible(NULL))
-    nms <- names(object)
-    if (is.null(nms)) nms <- paste0("[[", seq_along(object), "]]" )
-    for (i in seq_along(object)) {
-      separator <- if (grepl("^\\[\\[", nms[[i]])) "" else "$"
-      walk(object[[i]], paste0(path, separator, nms[[i]]), depth + 1L)
-    }
-    invisible(NULL)
-  }
-
-  walk(x, root, 0L)
-  out <- do.call(rbind, rows)
-  rownames(out) <- NULL
+  names(out) <- make.unique(nms)
   out
 }
 
-.mira_report_has_section <- function(cfg, section) {
+.mira_report_section <- function(key) {
+  known <- c(settings = "methods", time_vars = "methods",
+             time_labels = "methods", overview = "overview", descriptives = "descriptives",
+             missing = "missingness", change = "change", arm_analysis = "arms",
+             correlations = "correlations", variability = "variability",
+             model = "models", advanced_tests = "models", advanced_models = "models",
+             robustness = "robustness", effect_sizes = "robustness",
+             multiplicity = "robustness", sensitivity = "robustness",
+             outliers = "outliers", trajectories = "trajectories",
+             plots = "figures", diagnostics = "diagnostics")
+  if (key %in% names(known)) unname(known[[key]]) else key
+}
+
+.mira_report_selected <- function(cfg, section) {
   "all" %in% cfg$sections || section %in% cfg$sections
 }
 
-.mira_report_longitudinal_map <- function(config) {
-  if (is.null(config$time_vars)) return(data.frame())
-  vars <- config$time_vars
-  labs <- config$time_labels
-  if (!is.list(vars)) {
-    outcome_name <- .mira_report_or(config$outcomes, "outcome")
-    vars <- stats::setNames(list(vars), as.character(outcome_name)[1L])
+.mira_report_node_has_result <- function(node) {
+  if (is.null(node)) return(FALSE)
+  if (node$kind %in% c("table", "plot", "model")) return(TRUE)
+  if (node$kind == "group") {
+    return(any(vapply(node$children, .mira_report_node_has_result, logical(1L))))
   }
-  if (!is.list(labs)) labs <- list(labs)
-
-  rows <- list()
-  counter <- 0L
-  outcome_names <- names(vars)
-  if (is.null(outcome_names)) outcome_names <- paste0("outcome_", seq_along(vars))
-  for (i in seq_along(vars)) {
-    outcome <- outcome_names[[i]]
-    variables <- as.character(vars[[i]])
-    labels <- labs[[outcome]]
-    if (is.null(labels) && length(labs) >= i) labels <- labs[[i]]
-    if (is.null(labels)) labels <- variables
-    labels <- as.character(labels)
-    if (length(labels) != length(variables)) labels <- rep_len(labels, length(variables))
-    for (j in seq_along(variables)) {
-      counter <- counter + 1L
-      rows[[counter]] <- data.frame(
-        outcome = outcome,
-        ordine = j,
-        variabile = variables[[j]],
-        etichetta_visita = labels[[j]],
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-  if (length(rows) == 0L) return(data.frame())
-  do.call(rbind, rows)
+  FALSE
 }
 
-.mira_report_abstract_rows <- function(outcomes) {
-  rows <- list()
-  counter <- 0L
-  for (name in names(outcomes)) {
-    outcome <- outcomes[[name]]
-    counter <- counter + 1L
-    if (inherits(outcome, "mira_info_error")) {
-      rows[[counter]] <- data.frame(
-        outcome = name, stato = "non completato", soggetti = NA_integer_,
-        visite = NA_integer_, profili_completi_pct = NA_real_,
-        media_basale = NA_real_, media_finale = NA_real_,
-        cambiamento_basale_finale = NA_real_, p_aggiustato = NA_real_,
-        stringsAsFactors = FALSE
-      )
-      next
+.mira_report_prune <- function(x, key, path, cfg, depth = 0L,
+                               parent_performed = FALSE) {
+  if (depth > cfg$max_depth || is.null(x) || is.function(x) ||
+      is.environment(x) || inherits(x, "mira_info_error")) return(NULL)
+  # These fields describe the machinery or source data, not analytical output.
+  if (key %in% c("call", "outcomes", "long_data", "reason_skipped",
+                 "performed", "enabled", "package", "status", "object_path",
+                 "plot_error", "disabled", "failed_outcomes")) return(NULL)
+  if (identical(key, "data") &&
+      grepl("(^|\\$)(model|advanced_tests|advanced_models|robustness)(\\$|$)",
+            path)) return(NULL)
+  if (grepl("(^|\\$)(config|settings)(\\$|$)", path) &&
+      key %in% c("analyses", "plots", "model", "outliers", "correlations",
+                 "arm_tests")) return(NULL)
+  if (grepl("(^|\\$)overview(\\$|$)", path) &&
+      identical(key, "arm_analysis")) return(NULL)
+  if (.mira_report_is_plot(x)) {
+    return(list(kind = "plot", key = key, path = path, value = x))
+  }
+  if (is.data.frame(x) || is.matrix(x) || is.table(x)) {
+    tab <- x
+    if (key %in% c("pearson", "spearman") && all(is.na(tab))) return(NULL)
+    # MIRA's comparison table also contains rows for theoretical models.
+    if (identical(key, "model_comparison") && is.data.frame(tab) &&
+        "object_path" %in% names(tab)) {
+      tab <- tab[!is.na(tab$object_path) & nzchar(tab$object_path), , drop = FALSE]
     }
-
-    desc <- outcome$descriptives
-    change <- outcome$change
-    baseline_mean <- final_mean <- change_mean <- p_adjusted <- NA_real_
-    if (is.data.frame(desc) && nrow(desc) > 0L && "mean" %in% names(desc)) {
-      baseline_mean <- desc$mean[[1L]]
-      final_mean <- desc$mean[[nrow(desc)]]
-    }
-    if (is.data.frame(change) && nrow(change) > 0L) {
-      index <- seq_len(nrow(change))
-      if (all(c("from", "to") %in% names(change)) &&
-          length(outcome$time_vars) >= 2L) {
-        target <- which(
-          change$from == outcome$time_vars[[1L]] &
-            change$to == outcome$time_vars[[length(outcome$time_vars)]]
-        )
-        if (length(target) > 0L) index <- target[[1L]]
+    dimensions <- if (is.table(tab)) dim(as.data.frame(tab)) else dim(tab)
+    if (length(dimensions) < 2L || dimensions[2L] == 0L) return(NULL)
+    if (dimensions[1L] == 0L && !parent_performed &&
+        !grepl("(^|\\$)outliers(\\$|$)", path)) return(NULL)
+    return(list(kind = "table", key = key, path = path, value = tab,
+                original_class = paste(class(x), collapse = "/")))
+  }
+  if (.mira_report_is_model(x)) {
+    return(list(kind = "model", key = key, path = path, value = x))
+  }
+  if (is.list(x)) {
+    if (!length(x)) return(NULL)
+    if (grepl("(^|\\$)multiplicity(\\$|$)", path) &&
+        "table" %in% names(x) && is.null(x$table)) return(NULL)
+    if (identical(key, "nlme") && "performed" %in% names(x) &&
+        !isTRUE(x$performed)) return(NULL)
+    if (identical(key, "arm_analysis") && !isTRUE(x$enabled)) return(NULL)
+    if (identical(key, "model") && "fitted_model" %in% names(x) &&
+        is.null(x$fitted_model)) return(NULL)
+    performed <- isTRUE(x$performed)
+    failed <- identical(x$performed, FALSE)
+    active <- if (failed) FALSE else performed || parent_performed
+    nms <- names(x)
+    if (is.null(nms)) nms <- rep("", length(x))
+    children <- list()
+    for (i in seq_along(x)) {
+      child_key <- if (is.na(nms[i]) || !nzchar(nms[i])) paste0("item_", i) else nms[i]
+      if (child_key %in% c("model", "object") && "model" %in% nms &&
+          "object" %in% nms && !is.null(x$model) &&
+          identical(x$model, x$object) && identical(child_key, "object")) next
+      child_value <- x[[i]]
+      if (identical(child_key, "summary") &&
+          inherits(child_value, "summary.merMod") &&
+          (inherits(x$fitted_model, "merMod") || inherits(x$model, "merMod"))) next
+      if (identical(key, "nlme") && identical(child_key, "comparison") &&
+          is.data.frame(child_value) && "model" %in% names(child_value)) {
+        fitted <- nms[vapply(x, function(item) {
+          is.list(item) && isTRUE(item$performed)
+        }, logical(1L))]
+        child_value <- child_value[child_value$model %in% fitted, , drop = FALSE]
       }
-      index <- index[[1L]]
-      if ("mean_change" %in% names(change)) change_mean <- change$mean_change[[index]]
-      p_candidates <- c("paired_t_p_adj", "wilcoxon_p_adj", "paired_t_p", "wilcoxon_p")
-      p_name <- p_candidates[p_candidates %in% names(change)]
-      if (length(p_name) > 0L) p_adjusted <- change[[p_name[[1L]]]][[index]]
+      child <- .mira_report_prune(child_value, child_key, paste0(path, "$", child_key),
+                                  cfg, depth + 1L, active)
+      aliases <- c("summary", "tidy", "fixed_effects", "coefficient_tests")
+      if (!is.null(child) && child$key %in% aliases &&
+          any(vapply(children, function(previous) {
+            previous$key %in% aliases && previous$kind == child$kind &&
+              previous$kind == "table" && identical(previous$value, child$value)
+          }, logical(1L)))) next
+      if (!is.null(child)) children[[child_key]] <- child
     }
-
-    overview <- outcome$overview
-    rows[[counter]] <- data.frame(
-      outcome = .mira_report_or(outcome$outcome_display, name),
-      stato = "completato",
-      soggetti = .mira_report_or(overview$n_patients, NA_integer_),
-      visite = .mira_report_or(overview$n_timepoints, length(outcome$time_vars)),
-      profili_completi_pct = .mira_report_or(overview$complete_profiles_pct, NA_real_),
-      media_basale = baseline_mean,
-      media_finale = final_mean,
-      cambiamento_basale_finale = change_mean,
-      p_aggiustato = p_adjusted,
-      stringsAsFactors = FALSE
-    )
+    if (!length(children)) return(NULL)
+    if ((failed || key %in% c("outliers", "plots", "multiplicity")) &&
+        !any(vapply(children, .mira_report_node_has_result, logical(1L)))) return(NULL)
+    return(list(kind = "group", key = key, path = path, children = children))
   }
-  if (length(rows) == 0L) return(data.frame())
-  do.call(rbind, rows)
+  if (inherits(x, "formula") || is.call(x) || is.expression(x) || is.name(x)) {
+    return(list(kind = "formula", key = key, path = path, value = x))
+  }
+  if (is.atomic(x) && length(x) > 0L && !all(is.na(x))) {
+    return(list(kind = "value", key = key, path = path, value = x))
+  }
+  NULL
 }
 
-.mira_report_key_narrative <- function(outcome, name, cfg) {
-  if (inherits(outcome, "mira_info_error")) {
-    .mira_report_callout(
-      .mira_report_or(outcome$error, "Analisi non completata."),
-      type = "warning", title = paste("Outcome", name)
-    )
-    return(invisible(NULL))
-  }
+.mira_report_order <- function(keys) {
+  scientific <- c("settings", "time_vars", "time_labels", "overview",
+                  "descriptives", "missing", "change", "arm_analysis",
+                  "correlations", "variability", "trajectories", "model",
+                  "advanced_tests", "advanced_models", "robustness", "effect_sizes",
+                  "multiplicity", "sensitivity", "outliers", "plots", "diagnostics")
+  c(scientific[scientific %in% keys], keys[!keys %in% scientific])
+}
 
-  desc <- outcome$descriptives
-  if (!is.data.frame(desc) || nrow(desc) == 0L) return(invisible(NULL))
-  display <- .mira_report_or(outcome$outcome_display, name)
-  first_label <- if ("label" %in% names(desc)) desc$label[[1L]] else "prima visita"
-  last_label <- if ("label" %in% names(desc)) desc$label[[nrow(desc)]] else "ultima visita"
-  first_mean <- if ("mean" %in% names(desc)) desc$mean[[1L]] else NA_real_
-  last_mean <- if ("mean" %in% names(desc)) desc$mean[[nrow(desc)]] else NA_real_
-  cat(sprintf(
-    "Per **%s**, la media osservata e **%s** alla visita %s e **%s** alla visita finale %s. ",
-    display,
-    .mira_report_format_number(first_mean, cfg$digits), first_label,
-    .mira_report_format_number(last_mean, cfg$digits), last_label
-  ))
-
-  change <- outcome$change
-  if (is.data.frame(change) && nrow(change) > 0L &&
-      "mean_change" %in% names(change)) {
-    index <- nrow(change)
-    if (all(c("from", "to") %in% names(change)) && length(outcome$time_vars) >= 2L) {
-      target <- which(
-        change$from == outcome$time_vars[[1L]] &
-          change$to == outcome$time_vars[[length(outcome$time_vars)]]
-      )
-      if (length(target) > 0L) index <- target[[1L]]
-    }
-    p_candidates <- c("paired_t_p_adj", "wilcoxon_p_adj", "paired_t_p", "wilcoxon_p")
-    p_name <- p_candidates[p_candidates %in% names(change)]
-    p_text <- if (length(p_name) > 0L) {
-      p_value <- change[[p_name[[1L]]]][[index]]
-      p_label <- if (is.na(p_value)) "non stimabile" else {
-        .mira_report_format_p(p_value, cfg$digits)
+.mira_report_outcome_tree <- function(outcome, cfg) {
+  if (inherits(outcome, "mira_info_error") || !is.list(outcome)) return(list())
+  skip <- c("call", "version", "config", "data_overview",
+            "detected_variables", "outcome", "outcome_display",
+            "outcomes", "long_data", "plot_error")
+  keys <- .mira_report_order(setdiff(names(outcome), skip))
+  nodes <- list()
+  for (key in keys) {
+    if (!.mira_report_selected(cfg, .mira_report_section(key))) next
+    component <- outcome[[key]]
+    if (identical(key, "outliers") && is.list(component)) {
+      desc <- outcome$descriptives
+      if (is.list(component$by_time) && is.data.frame(desc) &&
+          all(c("time", "n") %in% names(desc))) {
+        for (name in names(component$by_time)) {
+          tab <- component$by_time[[name]]
+          count <- desc$n[match(name, desc$time)]
+          if (is.data.frame(tab) && nrow(tab) == 0L &&
+              length(count) == 1L && !is.na(count) && count < 4L) {
+            component$by_time[[name]] <- NULL
+          }
+        }
       }
-      paste0("; `", p_name[[1L]], "` = ", p_label)
-    } else ""
-    cat(sprintf(
-      "Il cambiamento medio appaiato basale-finale e **%s**%s. ",
-      .mira_report_format_number(change$mean_change[[index]], cfg$digits), p_text
-    ))
+      changes <- outcome$change
+      if (is.list(component$change) && is.data.frame(changes) &&
+          all(c("from", "to", "n") %in% names(changes))) {
+        comparison <- paste(changes$from, changes$to, sep = "_to_")
+        for (name in names(component$change)) {
+          tab <- component$change[[name]]
+          count <- changes$n[match(name, comparison)]
+          if (is.data.frame(tab) && nrow(tab) == 0L &&
+              length(count) == 1L && !is.na(count) && count < 4L) {
+            component$change[[name]] <- NULL
+          }
+        }
+      }
+    }
+    node <- .mira_report_prune(component, key, paste0("outcome$", key), cfg)
+    if (!is.null(node)) nodes[[key]] <- node
   }
-  cat("Le stime sono descrittive salvo dove il test e indicato esplicitamente; l'interpretazione clinica dipende dalla scala e dal protocollo.\n\n")
-  invisible(NULL)
+  if (.mira_report_selected(cfg, "diagnostics")) {
+    diagnostic <- nodes$diagnostics
+    if (is.null(diagnostic)) diagnostic <- list(kind = "group", key = "diagnostics",
+                                               path = "outcome$diagnostics", children = list())
+    model <- outcome$model
+    if (is.list(model) && is.null(model$fitted_model)) {
+      for (key in c("error", "warnings")) {
+        node <- .mira_report_prune(model[[key]], paste0("model_", key),
+                                   paste0("outcome$model$", key), cfg)
+        if (!is.null(node)) diagnostic$children[[paste0("model_", key)]] <- node
+      }
+    }
+    plot_error <- .mira_report_prune(outcome$plot_error, "figure_error",
+                                     "outcome$plot_error", cfg)
+    if (!is.null(plot_error)) diagnostic$children$figure_error <- plot_error
+    if (length(diagnostic$children)) nodes$diagnostics <- diagnostic
+  }
+  nodes
 }
 
-.mira_report_render_abstract <- function(result, outcomes, cfg) {
-  .mira_report_heading("Sintesi", 1L)
-  if (inherits(result, "mira_detect")) {
-    cat("L'esecuzione ricevuta e di tipo `mira_detect`: il documento descrive la configurazione individuata, senza risultati inferenziali.\n\n")
+.mira_report_context_tree <- function(result, cfg) {
+  keys <- c(config = "methods", data_overview = "data_quality",
+            detected_variables = "data_quality", diagnostics = "diagnostics")
+  nodes <- list()
+  for (key in names(keys)) {
+    if (!.mira_report_selected(cfg, keys[[key]])) next
+    # Outcome diagnostics are already shown inside each outcome for single output.
+    if (key == "diagnostics" && !inherits(result, "mira_info_multi") &&
+        !inherits(result, "mira_detect")) next
+    if (is.null(result[[key]])) next
+    node <- .mira_report_prune(result[[key]], key, paste0("result$", key), cfg)
+    if (!is.null(node)) nodes[[key]] <- node
+  }
+  if (inherits(result, "mira_info_multi") &&
+      .mira_report_selected(cfg, "diagnostics")) {
+    errors <- list()
+    for (name in names(result$outcomes)) {
+      item <- result$outcomes[[name]]
+      if (!inherits(item, "mira_info_error")) next
+      node <- .mira_report_prune(item$error, name,
+                                 paste0("result$outcomes$", name, "$error"), cfg)
+      if (!is.null(node)) errors[[name]] <- node
+    }
+    if (length(errors)) {
+      diagnostic <- nodes$diagnostics
+      if (is.null(diagnostic)) diagnostic <- list(kind = "group", key = "diagnostics",
+                                                 path = "result$diagnostics", children = list())
+      diagnostic$children$outcome_errors <- list(kind = "group", key = "outcome_errors",
+                                                  path = "result$outcomes", children = errors)
+      nodes$diagnostics <- diagnostic
+    }
+  }
+  nodes
+}
+
+.mira_report_render_node <- function(node, level, cfg) {
+  label <- .mira_report_human_name(node$key)
+  if (node$kind == "value") {
+    cat("**", label, ":** ", .mira_report_inline(node$value), "\n\n", sep = "")
     return(invisible(NULL))
   }
-
-  completed <- sum(!vapply(outcomes, inherits, logical(1L), what = "mira_info_error"))
-  failed <- length(outcomes) - completed
-  cat(sprintf(
-    paste0("Il report sintetizza in modo dinamico **%d outcome**, dei quali **%d** completati",
-           "%s. Le sezioni e le tabelle sono generate esclusivamente dagli output presenti ",
-           "nell'oggetto `mira_info`; i moduli non richiesti o non stimabili sono dichiarati come tali.\n\n"),
-    length(outcomes), completed,
-    if (failed > 0L) paste0(" e **", failed, "** non completati") else ""
-  ))
-  .mira_report_table(
-    .mira_report_abstract_rows(outcomes),
-    caption = "Sintesi descrittiva degli outcome", cfg = cfg
-  )
-  for (name in names(outcomes)) {
-    .mira_report_key_narrative(outcomes[[name]], name, cfg)
-  }
-  .mira_report_callout(
-    paste0(
-      "Le frasi automatiche sono un ausilio alla lettura, non sostituiscono il piano statistico, ",
-      "la verifica delle assunzioni, la rilevanza clinica o la revisione di un analista. ",
-      "Un valore p non misura la dimensione ne l'importanza dell'effetto."
-    ),
-    type = "important", title = "Interpretazione responsabile"
-  )
-  invisible(NULL)
-}
-
-.mira_report_render_methods <- function(result, outcomes, cfg) {
-  .mira_report_heading("Metodi e configurazione analitica", 1L)
-  config <- result$config
-  first <- .mira_report_first_success(outcomes)
-  settings <- if (!is.null(first)) first$settings else NULL
-
-  cat(
-    paste0(
-      "MIRA analizza dati longitudinali in formato wide, costruisce internamente la forma long ",
-      "e conserva nell'output la provenienza delle scelte automatiche e manuali. Questo documento ",
-      "non ricalcola i risultati quando riceve un oggetto `mira_info`: li presenta e li indicizza ",
-      "in modo riproducibile. Se viene fornito `data`, `mira_report_freq()` esegue prima `mira_info()` ",
-      "con gli argomenti ricevuti in `...`.\n\n"
-    )
-  )
-
-  method_rows <- data.frame(
-    elemento = c(
-      "Versione MIRA", "ID", "Outcome", "Braccio", "Braccio di riferimento",
-      "Covariate", "Alpha", "Livello di confidenza", "Correzione primaria",
-      "Direzione del miglioramento", "Soglia di stabilita",
-      "Gestione Inf/-Inf"
-    ),
-    valore = c(
-      .mira_report_or(result$version, "non disponibile"),
-      .mira_report_or(config$id, "non disponibile"),
-      .mira_report_inline(config$outcomes),
-      .mira_report_or(config$arm, "nessuno"),
-      .mira_report_or(config$reference_arm, "nessuno"),
-      .mira_report_inline(config$covariates),
-      .mira_report_inline(settings$alpha),
-      .mira_report_inline(settings$confidence_level),
-      .mira_report_or(settings$p_adjust_method, "non disponibile"),
-      .mira_report_inline(config$improvement_direction),
-      .mira_report_inline(config$stable_threshold),
-      .mira_report_or(settings$non_finite_handling, "documentata nell'output")
-    ),
-    stringsAsFactors = FALSE
-  )
-  .mira_report_table(method_rows, caption = "Parametri principali dell'analisi", cfg = cfg)
-  .mira_report_callout(
-    paste0(
-      "Con `include_complete_output = TRUE` il documento può contenere identificativi ",
-      "individuali e dati analitici a livello di soggetto. Applicare le regole di ",
-      "riservatezza, minimizzazione e condivisione previste dal proprio contesto."
-    ),
-    type = "caution", title = "Riservatezza"
-  )
-
-  longitudinal_map <- .mira_report_longitudinal_map(config)
-  if (nrow(longitudinal_map) > 0L) {
-    .mira_report_heading("Mappa outcome-visite", 2L)
-    .mira_report_table(
-      longitudinal_map,
-      caption = "Variabili longitudinali effettivamente utilizzate", cfg = cfg
-    )
-  }
-
-  if (!is.null(config$analyses)) {
-    .mira_report_heading("Moduli richiesti e attivati", 2L)
-    .mira_report_table(
-      .mira_report_scalar_table(config$analyses),
-      caption = "Configurazione dei moduli analitici", cfg = cfg
-    )
-  }
-
-  if (!is.null(result$call)) {
-    .mira_report_heading("Chiamata riproducibile", 2L)
-    .mira_report_text_block(result$call)
-  }
-
-  .mira_report_heading("Criteri di lettura", 2L)
-  glossary <- data.frame(
-    indicatore = c(
-      "CI", "p_raw", "p_adj", "Cohen's dz", "Hedges g", "ICC",
-      "Kendall's W", "CR2/HTZ", "AIC/BIC", "QIC/CIC"
-    ),
-    interpretazione = c(
-      "Intervallo di confidenza al livello impostato nell'analisi.",
-      "Valore p non corretto; va letto nella famiglia di test pertinente.",
-      "Valore p corretto con il metodo configurato, Holm per impostazione predefinita.",
-      "Cambiamento medio standardizzato entro soggetto.",
-      "Differenza standardizzata tra gruppi con correzione per piccoli campioni.",
-      "Quota della variabilità attribuibile alle differenze tra soggetti nel modello indicato.",
-      "Dimensione dell'effetto basata sui ranghi per il test di Friedman.",
-      "Inferenza cluster-robust con correzione per piccoli campioni.",
-      "Criteri descrittivi per modelli likelihood-based; valori inferiori favoriscono il compromesso adattamento-complessita.",
-      "Criteri analoghi per modelli GEE; non sono direttamente intercambiabili con AIC/BIC."
-    ),
-    stringsAsFactors = FALSE
-  )
-  .mira_report_table(glossary, caption = "Glossario statistico essenziale", cfg = cfg)
-  invisible(NULL)
-}
-
-.mira_report_render_data_quality <- function(result, cfg) {
-  .mira_report_heading("Qualità, struttura e selezione dei dati", 1L)
-
-  overview <- result$data_overview
-  if (!is.null(overview)) {
-    scalar <- .mira_report_scalar_table(overview)
-    if (nrow(scalar) > 0L) {
-      .mira_report_table(scalar, caption = "Dimensioni del dataset", cfg = cfg)
-    }
-    if (is.data.frame(overview$column_profile)) {
-      .mira_report_heading("Profilo delle colonne", 2L)
-      .mira_report_table(
-        overview$column_profile,
-        caption = "Tipo, cardinalita e missingness delle variabili", cfg = cfg
-      )
-    }
-  }
-
-  if (!is.null(result$config$auto_detected)) {
-    .mira_report_heading("Scelte automatiche", 2L)
-    .mira_report_table(
-      .mira_report_scalar_table(result$config$auto_detected),
-      caption = "Elementi determinati automaticamente", cfg = cfg
-    )
-  }
-  if (!is.null(result$config$specified_manually)) {
-    .mira_report_heading("Scelte specificate dall'utente", 2L)
-    .mira_report_table(
-      .mira_report_scalar_table(result$config$specified_manually),
-      caption = "Elementi specificati manualmente", cfg = cfg
-    )
-  }
-
-  detected <- result$detected_variables
-  if (!is.null(detected)) {
-    .mira_report_heading("Dettaglio del rilevamento", 2L)
-    .mira_report_render_any(detected, "detected_variables", 3L, cfg)
-  }
-
-  warnings <- result$diagnostics$warnings
-  if (!is.null(warnings) && length(warnings) > 0L) {
-    warning_text <- paste0("- ", as.character(warnings), collapse = "\n")
-    .mira_report_callout(warning_text, type = "warning", title = "Avvertenze MIRA")
-  } else {
-    .mira_report_callout(
-      "L'oggetto non contiene avvertenze globali registrate.",
-      type = "tip", title = "Controlli automatici"
-    )
-  }
-
-  if (!is.null(result$diagnostics$adaptation)) {
-    .mira_report_heading("Adattamenti per disponibilità dei dati", 2L)
-    .mira_report_render_any(result$diagnostics$adaptation, "adaptation", 3L, cfg)
-  }
-  invisible(NULL)
-}
-
-.mira_report_render_frequencies <- function(outcome, cfg) {
-  rendered <- FALSE
-  if (is.data.frame(outcome$trajectories) && nrow(outcome$trajectories) > 0L) {
-    if ("direction" %in% names(outcome$trajectories)) {
-      .mira_report_heading("Direzione osservata", 3L)
-      .mira_report_table(
-        .mira_report_frequency(outcome$trajectories$direction, "direzione"),
-        caption = "Frequenze del cambiamento basale-finale", cfg = cfg
-      )
-      rendered <- TRUE
-    }
-    if ("clinical_direction" %in% names(outcome$trajectories) &&
-        any(!is.na(outcome$trajectories$clinical_direction))) {
-      .mira_report_heading("Direzione clinica", 3L)
-      .mira_report_table(
-        .mira_report_frequency(outcome$trajectories$clinical_direction,
-                               "classificazione_clinica"),
-        caption = "Frequenze secondo la direzione clinica configurata", cfg = cfg
-      )
-      rendered <- TRUE
-    }
-  }
-
-  missing_patient <- outcome$missing$by_patient
-  if (is.data.frame(missing_patient) && nrow(missing_patient) > 0L &&
-      "unavailable_n" %in% names(missing_patient)) {
-    .mira_report_heading("Numero di visite non disponibili per soggetto", 3L)
-    .mira_report_table(
-      .mira_report_frequency(missing_patient$unavailable_n, "visite_non_disponibili"),
-      caption = "Distribuzione della completezza individuale", cfg = cfg
-    )
-    rendered <- TRUE
-  }
-
-  counts <- outcome$arm_analysis$counts
-  if (!is.null(counts) && length(counts) > 0L) {
-    count_table <- data.frame(
-      braccio = names(counts), n = as.integer(counts),
-      percentuale = as.numeric(counts) / sum(counts) * 100,
-      stringsAsFactors = FALSE
-    )
-    .mira_report_heading("Composizione dei bracci", 3L)
-    .mira_report_table(count_table, caption = "Frequenze per braccio", cfg = cfg)
-    rendered <- TRUE
-  }
-  if (!rendered) cat("*Nessuna tabella di frequenza derivabile dagli output disponibili.*\n\n")
-  invisible(rendered)
-}
-
-.mira_report_render_figures <- function(outcome, cfg) {
-  plots <- outcome$plots
-  if (is.null(plots) || length(plots) == 0L) {
-    reason <- .mira_report_or(
-      outcome$plot_error,
-      "Le figure non sono state richieste oppure non erano stimabili per questo outcome."
-    )
-    .mira_report_callout(reason, type = "note", title = "Figure non disponibili")
-    return(invisible(NULL))
-  }
-  plot_names <- names(plots)
-  if (is.null(plot_names)) plot_names <- paste0("figura_", seq_along(plots))
-  for (i in seq_along(plots)) {
-    .mira_report_heading(.mira_report_human_name(plot_names[[i]]), 3L)
-    .mira_report_plot(plots[[i]], plot_names[[i]])
-  }
-  if (!is.null(outcome$plot_error)) {
-    .mira_report_callout(outcome$plot_error, type = "warning",
-                         title = "Diagnostica delle figure")
-  }
-  invisible(NULL)
-}
-
-.mira_report_render_models <- function(outcome, cfg) {
-  model <- outcome$model
-  if (is.null(model)) {
-    cat("*Il modulo dei modelli non è presente nell'output.*\n\n")
-  } else {
-    .mira_report_heading("Modello principale", 3L)
-    model_order <- c(
-      "fixed_parameters", "anova", "global_time_test", "global_arm_test",
-      "arm_time_interaction_test", "singular", "converged", "warnings", "error",
-      "covariates_requested", "covariates_used", "covariates_skipped", "summary",
-      "fitted_model"
-    )
-    remaining <- setdiff(names(model), model_order)
-    ordered_names <- c(model_order[model_order %in% names(model)], remaining)
-    for (name in ordered_names) {
-      .mira_report_heading(.mira_report_human_name(name), 4L)
-      .mira_report_render_any(model[[name]], name, 5L, cfg)
-    }
-  }
-
-  if (!is.null(outcome$advanced_tests)) {
-    .mira_report_heading("Test avanzati", 3L)
-    .mira_report_render_any(outcome$advanced_tests, "advanced_tests", 4L, cfg)
-  }
-  if (!is.null(outcome$advanced_models)) {
-    .mira_report_heading("Modelli avanzati", 3L)
-    .mira_report_render_any(outcome$advanced_models, "advanced_models", 4L, cfg)
-  }
-  invisible(NULL)
-}
-
-.mira_report_render_outcome <- function(outcome, outcome_name, index, cfg) {
-  cat("\n\\newpage\n\n")
-  display <- if (inherits(outcome, "mira_info_error")) outcome_name else {
-    .mira_report_or(outcome$outcome_display, outcome_name)
-  }
-  .mira_report_heading(sprintf("Outcome %d: %s", index, display), 1L)
-
-  if (inherits(outcome, "mira_info_error")) {
-    .mira_report_callout(
-      .mira_report_or(outcome$error, "Analisi non completata."),
-      type = "warning", title = "Outcome non analizzato"
-    )
-    return(invisible(NULL))
-  }
-
-  .mira_report_key_narrative(outcome, outcome_name, cfg)
-
-  if (.mira_report_has_section(cfg, "overview")) {
-    .mira_report_heading("Popolazione analitica", 2L)
-    .mira_report_table(
-      .mira_report_scalar_table(outcome$overview),
-      caption = "Quadro generale dell'outcome", cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "descriptives")) {
-    .mira_report_heading("Statistiche descrittive", 2L)
-    cat(
-      "Le statistiche sono calcolate sui valori finiti disponibili a ogni visita. Gli intervalli di confidenza riguardano la media osservata.\n\n"
-    )
-    .mira_report_table(
-      outcome$descriptives,
-      caption = paste("Statistiche descrittive complete per", display), cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "frequencies")) {
-    .mira_report_heading("Frequenze e classificazioni", 2L)
-    .mira_report_render_frequencies(outcome, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "missingness")) {
-    .mira_report_heading("Completezza e dati non disponibili", 2L)
-    cat(
-      "MIRA distingue i valori originariamente mancanti dai valori non finiti; entrambi risultano non disponibili per l'analisi.\n\n"
-    )
-    .mira_report_heading("Per visita", 3L)
-    .mira_report_table(
-      outcome$missing$by_time,
-      caption = "Missingness e disponibilità per visita", cfg = cfg
-    )
-    .mira_report_heading("Per soggetto", 3L)
-    .mira_report_table(
-      outcome$missing$by_patient,
-      caption = "Completezza del profilo longitudinale per soggetto", cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "change")) {
-    .mira_report_heading("Cambiamenti entro soggetto", 2L)
-    cat(
-      paste0(
-        "Ogni riga usa soltanto i soggetti con entrambe le visite disponibili. ",
-        "Il segno è calcolato come valore successivo meno valore precedente; `cohens_dz` ",
-        "standardizza il cambiamento mediante la deviazione standard delle differenze.\n\n"
-      )
-    )
-    .mira_report_table(
-      outcome$change,
-      caption = "Tutti i confronti longitudinali a coppie", cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "arms")) {
-    .mira_report_heading("Analisi per braccio", 2L)
-    arm <- outcome$arm_analysis
-    if (is.null(arm) || !isTRUE(arm$enabled)) {
-      cat("*Analisi per braccio non attiva o non stimabile.*\n\n")
-      if (!is.null(arm)) {
-        .mira_report_table(
-          .mira_report_scalar_table(arm),
-          caption = "Stato del modulo per braccio", cfg = cfg
-        )
+  .mira_report_heading(label, level)
+  if (node$kind == "group") {
+    for (child in node$children) .mira_report_render_node(child, min(6L, level + 1L), cfg)
+  } else if (node$kind == "table") {
+    rows <- if (is.table(node$value)) nrow(as.data.frame(node$value)) else nrow(node$value)
+    if (rows == 0L) {
+      if (grepl("(^|\\$)outliers(\\$|$)", node$path)) {
+        cat("**Outliers detected:** 0.\n\n")
+      } else {
+        cat("**Observed results:** 0 rows.\n\n")
       }
     } else {
-      cat(
-        paste0(
-          "Le differenze sono presentate con la codifica documentata nelle colonne ",
-          "(`arm_b - arm_a`). I confronti al basale descrivono l'equilibrio osservato; ",
-          "non devono essere usati per ridefinire post hoc il modello primario.\n\n"
-        )
-      )
-      arm_order <- c(
-        "counts", "descriptives", "baseline_balance", "missingness",
-        "time_omnibus", "time_pairwise", "change_descriptives",
-        "change_omnibus", "change_pairwise"
-      )
-      for (name in arm_order[arm_order %in% names(arm)]) {
-        .mira_report_heading(.mira_report_human_name(name), 3L)
-        .mira_report_render_any(arm[[name]], name, 4L, cfg)
+      .mira_report_table(node$value, caption = label, cfg = cfg)
+    }
+    for (attribute in c("note", "interpretation")) {
+      value <- attr(node$value, attribute, exact = TRUE)
+      if (!is.null(value) && length(value)) {
+        cat("*", .mira_report_human_name(attribute), ":* ",
+            .mira_report_inline(value), "\n\n", sep = "")
       }
     }
+  } else if (node$kind == "plot") {
+    .mira_report_plot(node$value, node$key)
+  } else if (node$kind %in% c("model", "formula")) {
+    .mira_report_text_block(node$value)
   }
+  invisible(NULL)
+}
 
-  if (.mira_report_has_section(cfg, "correlations")) {
-    .mira_report_heading("Correlazioni tra visite", 2L)
-    cat(
-      paste0(
-        "Le matrici usano osservazioni complete a coppie. La matrice delle numerosità ",
-        "deve essere letta insieme ai coefficienti perché il campione può variare tra celle.\n\n"
-      )
-    )
-    .mira_report_render_any(outcome$correlations, "correlations", 3L, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "variability")) {
-    .mira_report_heading("Variabilità e affidabilità", 2L)
-    .mira_report_table(
-      outcome$variability,
-      caption = "Componenti di variabilità e coefficienti ICC", cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "models")) {
-    .mira_report_heading("Inferenza longitudinale e modelli", 2L)
-    .mira_report_callout(
-      paste0(
-        "Convergenza, singolarità, struttura di correlazione, numerosità effettiva e ",
-        "assunzioni devono essere valutate prima di interpretare i coefficienti. I criteri ",
-        "di confronto fra famiglie di modelli non sono sempre direttamente comparabili."
-      ),
-      type = "note", title = "Controllo del modello"
-    )
-    .mira_report_render_models(outcome, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "robustness")) {
-    .mira_report_heading("Robustezza, effect size e molteplicità", 2L)
-    for (name in c("robustness", "effect_sizes", "multiplicity", "sensitivity")) {
-      .mira_report_heading(.mira_report_human_name(name), 3L)
-      .mira_report_render_any(outcome[[name]], name, 4L, cfg)
-    }
-  }
-
-  if (.mira_report_has_section(cfg, "outliers")) {
-    .mira_report_heading("Valori anomali diagnostici", 2L)
-    cat(
-      "I flag IQR sono indicatori diagnostici. Coerentemente con `mira_info`, non comportano esclusioni automatiche.\n\n"
-    )
-    .mira_report_render_any(outcome$outliers, "outliers", 3L, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "trajectories")) {
-    .mira_report_heading("Traiettorie individuali", 2L)
-    .mira_report_table(
-      outcome$trajectories,
-      caption = "Risultati individuali basale-finale", cfg = cfg
-    )
-  }
-
-  if (.mira_report_has_section(cfg, "figures")) {
-    .mira_report_heading("Figure", 2L)
-    .mira_report_render_figures(outcome, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "diagnostics")) {
-    .mira_report_heading("Diagnostica specifica dell'outcome", 2L)
-    .mira_report_render_any(outcome$diagnostics, "diagnostics", 3L, cfg)
-  }
+.mira_report_render_abstract <- function(outcomes, cfg) {
+  if (!.mira_report_selected(cfg, "abstract")) return(invisible(NULL))
+  available <- names(outcomes)[vapply(outcomes, function(x) {
+    length(.mira_report_outcome_tree(x, cfg)) > 0L
+  }, logical(1L))]
+  if (!length(available)) return(invisible(NULL))
+  .mira_report_heading("Abstract", 1L)
+  cat("This report presents the observed analytical results for ",
+      paste(available, collapse = ", "), ".\n\n", sep = "")
   invisible(NULL)
 }
 
 .mira_report_render_conclusions <- function(outcomes, cfg) {
-  cat("\n\\clearpage\n\n")
-  .mira_report_heading("Conclusioni e limiti interpretativi", 1L)
-  completed <- outcomes[!vapply(outcomes, inherits, logical(1L),
-                                what = "mira_info_error")]
-  if (length(completed) == 0L) {
-    .mira_report_callout(
-      "Nessun outcome è stato completato; non è possibile produrre una sintesi conclusiva.",
-      type = "warning", title = "Conclusioni non disponibili"
-    )
-    return(invisible(NULL))
+  if (!.mira_report_selected(cfg, "conclusions")) return(invisible(NULL))
+  rows <- list()
+  for (name in names(outcomes)) {
+    desc <- outcomes[[name]]$descriptives
+    if (!is.data.frame(desc) || nrow(desc) < 2L || !"mean" %in% names(desc)) next
+    first <- suppressWarnings(as.numeric(desc$mean[1L]))
+    last <- suppressWarnings(as.numeric(desc$mean[nrow(desc)]))
+    if (!is.finite(first) || !is.finite(last)) next
+    rows[[length(rows) + 1L]] <- data.frame(outcome = name,
+      mean_first_visit = first, mean_last_visit = last,
+      descriptive_difference = last - first, stringsAsFactors = FALSE)
   }
-
-  conclusion_rows <- lapply(names(completed), function(name) {
-    outcome <- completed[[name]]
-    desc <- outcome$descriptives
-    baseline <- final <- delta <- NA_real_
-    direction <- "non stimabile"
-    if (is.data.frame(desc) && nrow(desc) > 0L && "mean" %in% names(desc)) {
-      baseline <- desc$mean[[1L]]
-      final <- desc$mean[[nrow(desc)]]
-      delta <- final - baseline
-      threshold <- .mira_report_or(outcome$settings$stable_threshold, 0)
-      direction <- if (!is.finite(delta)) "non stimabile" else if (delta > threshold) {
-        "aumento"
-      } else if (delta < -threshold) {
-        "diminuzione"
-      } else {
-        "stabile entro soglia"
-      }
-    }
-    data.frame(
-      outcome = .mira_report_or(outcome$outcome_display, name),
-      media_basale = baseline,
-      media_finale = final,
-      differenza_descrittiva = delta,
-      direzione = direction,
-      direzione_clinica_configurata = .mira_report_or(
-        outcome$settings$improvement_direction, "unknown"
-      ),
-      stringsAsFactors = FALSE
-    )
-  })
-  conclusion_table <- do.call(rbind, conclusion_rows)
-  rownames(conclusion_table) <- NULL
-  .mira_report_table(
-    conclusion_table,
-    caption = "Sintesi descrittiva finale degli outcome", cfg = cfg
-  )
-  cat(
-    paste0(
-      "La direzione riportata in tabella descrive la variazione delle medie osservate e non, ",
-      "da sola, evidenza di efficacia. Le conclusioni sostantive devono integrare intervalli di ",
-      "confidenza, dimensioni dell'effetto, analisi di sensibilità, pattern di missingness, ",
-      "qualità dell'adattamento e rilevanza clinica definita a priori.\n\n"
-    )
-  )
-  limitations <- c(
-    "Il report riflette le analisi presenti nell'oggetto: un modulo assente non equivale a un risultato nullo.",
-    "Le analisi automatiche non sostituiscono un estimand e un piano statistico prespecificati.",
-    "Missingness informativa, misure non comparabili tra visite e violazioni delle assunzioni possono modificare l'interpretazione.",
-    "I confronti molteplici vanno letti nelle famiglie documentate; non selezionare post hoc il solo metodo più favorevole.",
-    "Associazioni e differenze osservate non autorizzano automaticamente conclusioni causali."
-  )
-  cat(paste0("- ", limitations, collapse = "\n"), "\n\n", sep = "")
+  if (!length(rows)) return(invisible(NULL))
+  .mira_report_heading("Descriptive summary", 1L)
+  .mira_report_table(do.call(rbind, rows),
+                     caption = "Differences between observed means", cfg = cfg)
   invisible(NULL)
-}
-
-.mira_report_render_appendix <- function(result, extra_objects, cfg) {
-  cat("\n\\clearpage\n\n")
-  .mira_report_heading("Appendici di audit e riproducibilità", 1L)
-
-  .mira_report_heading("Indice completo dell'oggetto", 2L)
-  cat(
-    paste0(
-      "L'indice seguente elenca ogni componente attraversabile dell'oggetto ricevuto, ",
-      "con classe, dimensione e stato. Gli oggetti di modello complessi sono trattati come ",
-      "unità atomiche e stampati tramite il rispettivo metodo.\n\n"
-    )
-  )
-  index <- .mira_report_object_index(result, root = "result", max_depth = cfg$max_depth)
-  .mira_report_table(index, caption = "Inventario completo degli output MIRA", cfg = cfg)
-
-  if (length(extra_objects) > 0L) {
-    .mira_report_heading("Indice degli oggetti supplementari", 2L)
-    extra_index <- do.call(rbind, lapply(names(extra_objects), function(name) {
-      .mira_report_object_index(
-        extra_objects[[name]], root = paste0("extra_objects$", name),
-        max_depth = cfg$max_depth
-      )
-    }))
-    rownames(extra_index) <- NULL
-    .mira_report_table(extra_index, caption = "Inventario degli oggetti supplementari", cfg = cfg)
-  }
-
-  if (isTRUE(cfg$include_complete_output)) {
-    .mira_report_heading("Output integrale", 2L)
-    .mira_report_callout(
-      paste0(
-        "Questa appendice è deliberatamente estesa: mantiene tabelle, vettori, diagnostica, ",
-        "oggetti di modello e componenti non ancora conosciuti da versioni future di MIRA. ",
-        "La duplicazione di alcuni elementi già discussi nel testo principale serve all'audit."
-      ),
-      type = "note", title = "Completezza dell'appendice"
-    )
-    .mira_report_render_any(result, "result", 3L, cfg)
-
-    if (length(extra_objects) > 0L) {
-      .mira_report_heading("Oggetti supplementari integrali", 2L)
-      for (name in names(extra_objects)) {
-        .mira_report_heading(.mira_report_human_name(name), 3L)
-        .mira_report_render_any(extra_objects[[name]], name, 4L, cfg)
-      }
-    }
-  }
-
-  .mira_report_heading("Ambiente di calcolo", 2L)
-  .mira_report_text_block(utils::sessionInfo())
-  invisible(NULL)
-}
-
-.mira_report_html_style <- function() {
-  cat(
-    paste0(
-      "```{=html}\n",
-      "<style>\n",
-      ":root { --mira-ink:#14213d; --mira-accent:#1f6f8b; --mira-soft:#eef5f7; }\n",
-      "body { color:var(--mira-ink); line-height:1.58; }\n",
-      "h1,h2,h3 { color:var(--mira-ink); letter-spacing:-0.015em; }\n",
-      "h1 { border-bottom:2px solid var(--mira-accent); padding-bottom:.32rem; }\n",
-      ".mira-table { width:100%; font-size:.88rem; margin:1rem 0 1.6rem 0; }\n",
-      ".mira-table-wrap { width:100%; overflow-x:auto; margin:1rem 0 1.6rem 0; }\n",
-      ".mira-table-wrap .mira-table { margin:0; }\n",
-      ".mira-table thead { background:var(--mira-ink); color:white; }\n",
-      ".mira-table tbody tr:nth-child(even) { background:#f7f9fb; }\n",
-      ".mira-table td,.mira-table th { padding:.42rem .55rem; vertical-align:top; }\n",
-      ".callout { border-radius:4px; }\n",
-      "code { color:#7b2d26; }\n",
-      "@media print { .sidebar, #TOC { display:none!important; } body { font-size:10.5pt; } }\n",
-      "</style>\n",
-      "```\n\n"
-    )
-  )
 }
 
 .mira_report_knit <- function(payload) {
   result <- payload$result
   cfg <- payload$report
-  extra_objects <- .mira_report_or(payload$extra_objects, list())
-
-  old_options <- options(
-    width = max(120L, getOption("width", 80L)),
-    max.print = max(1000000L, getOption("max.print", 99999L)),
-    scipen = 4
-  )
-  on.exit(options(old_options), add = TRUE)
-
   if (knitr::is_html_output()) .mira_report_html_style()
   outcomes <- .mira_report_extract_outcomes(result)
-
-  if (.mira_report_has_section(cfg, "abstract")) {
-    .mira_report_render_abstract(result, outcomes, cfg)
+  context <- .mira_report_context_tree(result, cfg)
+  .mira_report_render_abstract(outcomes, cfg)
+  if (length(context)) {
+    .mira_report_heading("Analysis context", 1L)
+    for (node in context) .mira_report_render_node(node, 2L, cfg)
   }
-  if (.mira_report_has_section(cfg, "methods")) {
-    .mira_report_render_methods(result, outcomes, cfg)
+  for (i in seq_along(outcomes)) {
+    nodes <- .mira_report_outcome_tree(outcomes[[i]], cfg)
+    if (!length(nodes)) next
+    name <- names(outcomes)[i]
+    display <- outcomes[[i]]$outcome_display
+    if (is.null(display) || !length(display) || is.na(display[1L])) display <- name
+    .mira_report_heading(paste0("Outcome: ", display[1L]), 1L)
+    for (node in nodes) .mira_report_render_node(node, 2L, cfg)
   }
-  if (.mira_report_has_section(cfg, "data_quality")) {
-    .mira_report_render_data_quality(result, cfg)
-  }
-
-  outcome_sections <- c(
-    "overview", "descriptives", "frequencies", "missingness", "change",
-    "arms", "correlations", "variability", "models", "robustness",
-    "outliers", "trajectories", "figures", "diagnostics"
-  )
-  render_outcomes <- "all" %in% cfg$sections ||
-    any(outcome_sections %in% cfg$sections)
-  if (render_outcomes && length(outcomes) > 0L) {
-    for (i in seq_along(outcomes)) {
-      .mira_report_render_outcome(
-        outcomes[[i]], names(outcomes)[[i]], index = i, cfg = cfg
-      )
+  .mira_report_render_conclusions(outcomes, cfg)
+  extra <- payload$extra_objects
+  if (.mira_report_selected(cfg, "appendix") && length(extra)) {
+    extra_nodes <- lapply(names(extra), function(key) {
+      .mira_report_prune(extra[[key]], key, paste0("extra_objects$", key), cfg)
+    })
+    extra_nodes <- Filter(Negate(is.null), extra_nodes)
+    if (length(extra_nodes)) {
+      .mira_report_heading("Supplementary objects", 1L)
+      for (node in extra_nodes) .mira_report_render_node(node, 2L, cfg)
     }
-  }
-
-  if (.mira_report_has_section(cfg, "conclusions") && length(outcomes) > 0L) {
-    .mira_report_render_conclusions(outcomes, cfg)
-  }
-
-  if (.mira_report_has_section(cfg, "appendix")) {
-    .mira_report_render_appendix(result, extra_objects, cfg)
   }
   invisible(NULL)
 }
 
+.mira_report_collect_tables <- function(result, cfg) {
+  # Display filtering never changes the analytical archive on disk.
+  cfg$sections <- "all"
+  entries <- list()
+  add <- function(node, outcome = "") {
+    if (node$kind == "table") {
+      entries[[length(entries) + 1L]] <<- list(outcome = outcome,
+        path = node$path, value = node$value,
+        original_class = node$original_class)
+    } else if (node$kind == "group") {
+      for (child in node$children) add(child, outcome)
+    }
+  }
+  for (node in .mira_report_context_tree(result, cfg)) add(node)
+  outcomes <- .mira_report_extract_outcomes(result)
+  for (name in names(outcomes)) {
+    for (node in .mira_report_outcome_tree(outcomes[[name]], cfg)) add(node, name)
+  }
+  entries
+}
+
+.mira_report_file_slug <- function(x) {
+  x <- iconv(enc2utf8(as.character(x)[1L]), to = "ASCII//TRANSLIT", sub = "")
+  x <- tolower(gsub("[^A-Za-z0-9]+", "_", x))
+  x <- gsub("(^_+|_+$)", "", x)
+  if (is.na(x) || !nzchar(x)) x <- "item"
+  x <- substr(x, 1L, 90L)
+  if (grepl("^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", x)) x <- paste0("item_", x)
+  x
+}
+
+.mira_report_csv_data <- function(x) {
+  # A data frame can contain matrix-valued columns. write.csv() eventually
+  # calls as.matrix.data.frame() on those columns, which can fail when their
+  # expanded column names do not match the matrix width. Expand each matrix
+  # column explicitly, retaining its values and keeping numeric p-values raw.
+  if (is.table(x) || is.matrix(x)) {
+    out <- .mira_report_prepare_table(x, format_p = FALSE)
+    if (is.matrix(x) && ".row" %in% names(out)) {
+      names(out)[names(out) == ".row"] <- "row"
+    }
+  } else {
+    input <- as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+    pieces <- list()
+    for (i in seq_along(input)) {
+      key <- names(input)[i]
+      if (is.na(key) || !nzchar(key)) key <- paste0("column_", i)
+      column <- input[[i]]
+      dimensions <- dim(column)
+      if (length(dimensions) == 2L && dimensions[1L] == nrow(input) &&
+          dimensions[2L] > 0L) {
+        labels <- colnames(column)
+        if (is.null(labels)) labels <- paste0("column_", seq_len(dimensions[2L]))
+        for (j in seq_len(dimensions[2L])) {
+          name <- paste0(key, "_", labels[j])
+          value <- column[, j, drop = TRUE]
+          if (inherits(value, "AsIs")) class(value) <- NULL
+          if (!is.atomic(value) || !is.null(dim(value))) {
+            value <- vapply(seq_len(nrow(input)), function(row) {
+              .mira_report_inline(column[row, j, drop = TRUE])
+            }, character(1L))
+          }
+          pieces[[length(pieces) + 1L]] <- value
+          names(pieces)[length(pieces)] <- name
+        }
+      } else if (is.list(column) || !is.null(dimensions)) {
+        normalized <- .mira_report_prepare_table(input[i], format_p = FALSE)
+        pieces[[length(pieces) + 1L]] <- normalized[[1L]]
+        names(pieces)[length(pieces)] <- key
+      } else {
+        pieces[[length(pieces) + 1L]] <- column
+        names(pieces)[length(pieces)] <- key
+      }
+    }
+    names(pieces) <- make.unique(names(pieces), sep = "_")
+    out <- as.data.frame(pieces, stringsAsFactors = FALSE, check.names = FALSE)
+  }
+  valid <- vapply(out, function(column) {
+    is.atomic(column) && is.null(dim(column)) && length(column) == nrow(out)
+  }, logical(1L))
+  if (!all(valid)) stop("A result table contains columns that cannot be written to CSV.",
+                        call. = FALSE)
+  out
+}
+
+.mira_report_export_plan <- function(result, cfg, output_dir) {
+  tables <- .mira_report_collect_tables(result, cfg)
+  used <- character(0)
+  for (i in seq_along(tables)) {
+    path_keys <- strsplit(sub("^([^$]+)\\$", "", tables[[i]]$path),
+                          "$", fixed = TRUE)[[1L]]
+    base <- paste(vapply(path_keys, .mira_report_file_slug, character(1L)), collapse = "_")
+    if (!nzchar(base)) base <- "result"
+    base <- sub("_+$", "", substr(base, 1L, 90L))
+    dir_part <- if (nzchar(tables[[i]]$outcome) &&
+                    length(.mira_report_extract_outcomes(result)) > 1L) {
+      substr(.mira_report_file_slug(tables[[i]]$outcome), 1L, 60L)
+    } else ""
+    relative <- file.path("results", dir_part, paste0(base, ".csv"))
+    candidate <- relative
+    serial <- 2L
+    while (tolower(candidate) %in% used) {
+      candidate <- file.path("results", dir_part, paste0(base, "_", serial, ".csv"))
+      serial <- serial + 1L
+    }
+    used <- c(used, tolower(candidate))
+    tables[[i]]$file <- gsub("\\\\", "/", candidate)
+    tables[[i]]$absolute <- file.path(output_dir, candidate)
+    tables[[i]]$csv <- .mira_report_csv_data(tables[[i]]$value)
+  }
+  tables
+}
+
+.mira_report_manifest <- function(plan) {
+  if (!length(plan)) return(data.frame(outcome = character(), path = character(),
+    file = character(), original_class = character(), rows = integer(),
+    columns = integer(), stringsAsFactors = FALSE))
+  do.call(rbind, lapply(plan, function(entry) data.frame(
+    outcome = entry$outcome, path = entry$path, file = entry$file,
+    original_class = entry$original_class, rows = nrow(entry$csv),
+    columns = ncol(entry$csv), stringsAsFactors = FALSE)))
+}
+
+.mira_report_html_style <- function() {
+  cat("```{=html}\n<style>\nbody{line-height:1.58;color:#14213d} h1,h2,h3{color:#14213d} .mira-table-wrap{overflow-x:auto} .mira-table{width:100%;font-size:.88rem}\n</style>\n```\n\n")
+}
+
 .mira_report_runtime_names <- function() {
-  c(
-    ".mira_report_or", ".mira_report_is_empty", ".mira_report_heading",
+  c(".mira_report_or", ".mira_report_is_empty", ".mira_report_heading",
     ".mira_report_human_name", ".mira_report_format_p",
     ".mira_report_format_number", ".mira_report_inline",
     ".mira_report_prepare_table", ".mira_report_numeric_column",
@@ -1633,28 +1130,21 @@
     ".mira_report_latex_alignment", ".mira_report_latex_breaks",
     ".mira_report_repeat_longtable_header", ".mira_report_table",
     ".mira_report_prepare_namespace", ".mira_report_text_block",
-    ".mira_report_callout",
-    ".mira_report_is_plot", ".mira_report_plot",
-    ".mira_report_is_plain_list", ".mira_report_render_any",
-    ".mira_report_extract_outcomes", ".mira_report_first_success",
-    ".mira_report_scalar_table", ".mira_report_frequency",
-    ".mira_report_object_index", ".mira_report_has_section",
-    ".mira_report_longitudinal_map", ".mira_report_abstract_rows",
-    ".mira_report_key_narrative", ".mira_report_render_abstract",
-    ".mira_report_render_methods", ".mira_report_render_data_quality",
-    ".mira_report_render_frequencies", ".mira_report_render_figures",
-    ".mira_report_render_models", ".mira_report_render_outcome",
-    ".mira_report_render_conclusions",
-    ".mira_report_render_appendix", ".mira_report_html_style",
-    ".mira_report_knit"
-  )
+    ".mira_report_callout", ".mira_report_is_plot", ".mira_report_plot",
+    ".mira_report_is_plain_list", ".mira_report_is_model",
+    ".mira_report_extract_outcomes", ".mira_report_section",
+    ".mira_report_selected", ".mira_report_node_has_result",
+    ".mira_report_prune", ".mira_report_order",
+    ".mira_report_outcome_tree", ".mira_report_context_tree",
+    ".mira_report_render_node", ".mira_report_render_abstract",
+    ".mira_report_render_conclusions", ".mira_report_knit",
+    ".mira_report_html_style")
 }
-
 .mira_report_slug <- function(x) {
   x <- iconv(as.character(x)[1L], to = "ASCII//TRANSLIT", sub = "")
-  x <- tolower(gsub("[^A-Za-z0-9]+", "-", x))
-  x <- gsub("(^-+|-+$)", "", x)
-  if (is.na(x) || !nzchar(x)) x <- "mira-report"
+  x <- tolower(gsub("[^A-Za-z0-9]+", "_", x))
+  x <- gsub("(^_+|_+$)", "", x)
+  if (is.na(x) || !nzchar(x)) x <- "mira_report"
   x
 }
 
@@ -1734,7 +1224,7 @@
   yaml <- c(
     yaml,
     paste0("date: ", .mira_report_yaml_quote(as.character(date))),
-    "lang: it",
+    "lang: en",
     .mira_report_format_lines(formats),
     "execute:",
     "  echo: false",
@@ -1768,7 +1258,7 @@
 
 .mira_report_validate_scalar_flag <- function(x, name) {
   if (!is.logical(x) || length(x) != 1L || is.na(x)) {
-    stop(sprintf("%s deve essere TRUE o FALSE.", name), call. = FALSE)
+    stop(sprintf("%s must be TRUE or FALSE.", name), call. = FALSE)
   }
   invisible(TRUE)
 }
@@ -1779,15 +1269,14 @@
 #'   A data.frame is also accepted and is treated as `data`.
 #' @param data Optional data.frame. If supplied, `mira_info(data, ...)` is run first.
 #' @param ... Arguments forwarded unchanged to `mira_info()` when `data` is used.
-#' @param output_dir Directory in which the Quarto source, RDS payload, runtime
-#'   helper, and rendered reports are written. The default creates a timestamped
-#'   directory under the current working directory.
+#' @param output_dir Directory for reports, reproducible sources, and CSV results.
+#'   Defaults to `./mira_analyses/mira_report_flong`.
 #' @param output_file Base filename without extension.
 #' @param format One or more of `"html"`, `"pdf"`, `"docx"`, or `"all"`.
 #' @param title,subtitle,author,date Report metadata.
 #' @param sections `"all"` or any subset of the documented report sections.
-#' @param include_complete_output If TRUE, append a recursive rendering of the
-#'   complete result object. This is TRUE by default to avoid silent omissions.
+#' @param include_complete_output Retained for API compatibility. The main report
+#'   already traverses all meaningful results without duplicating them in an appendix.
 #' @param extra_objects Optional named list of additional fitted objects (for
 #'   example `list(mira_fit = fit)`) to inventory and include in the appendix.
 #' @param max_table_rows Maximum rows printed per table. Defaults to Inf: there is
@@ -1811,8 +1300,8 @@ mira_report_freq <- function(
     output_dir = NULL,
     output_file = "mira_report",
     format = c("html", "pdf"),
-    title = "MIRA: analisi longitudinale",
-    subtitle = "Report statistico dinamico e riproducibile",
+    title = "MIRA: Longitudinal Analysis",
+    subtitle = "Dynamic and reproducible statistical report",
     author = NULL,
     date = Sys.Date(),
     sections = "all",
@@ -1835,20 +1324,20 @@ mira_report_freq <- function(
     value <- get(metadata_name, inherits = FALSE)
     if (!is.character(value) || length(value) != 1L || is.na(value) ||
         !nzchar(trimws(value))) {
-      stop(sprintf("%s deve essere una stringa non vuota.", metadata_name),
+      stop(sprintf("%s must be a non-empty string.", metadata_name),
            call. = FALSE)
     }
   }
   if (!is.null(subtitle) &&
       (!is.character(subtitle) || length(subtitle) != 1L || is.na(subtitle))) {
-    stop("subtitle deve essere NULL o una sola stringa.", call. = FALSE)
+    stop("subtitle must be NULL or a single string.", call. = FALSE)
   }
   if (!is.null(author) &&
       (!is.character(author) || anyNA(author) || any(!nzchar(trimws(author))))) {
-    stop("author deve essere NULL o un vettore di stringhe non vuote.", call. = FALSE)
+    stop("author must be NULL or a vector of non-empty strings.", call. = FALSE)
   }
   if (length(date) != 1L || is.na(date)) {
-    stop("date deve avere lunghezza uno e non essere mancante.", call. = FALSE)
+    stop("date must have length one and must not be missing.", call. = FALSE)
   }
 
   allowed_sections <- c(
@@ -1858,13 +1347,13 @@ mira_report_freq <- function(
     "trajectories", "figures", "diagnostics", "conclusions", "appendix"
   )
   if (!is.character(sections) || length(sections) == 0L || anyNA(sections)) {
-    stop("sections deve essere 'all' o un vettore di nomi di sezione.", call. = FALSE)
+    stop("sections must be 'all' or a vector of section names.", call. = FALSE)
   }
   sections <- unique(tolower(sections))
   invalid_sections <- setdiff(sections, allowed_sections)
   if (length(invalid_sections) > 0L) {
     stop(sprintf(
-      "Sezioni non riconosciute: %s. Valori ammessi: %s.",
+      "Unrecognized sections: %s. Allowed values: %s.",
       paste(invalid_sections, collapse = ", "),
       paste(allowed_sections, collapse = ", ")
     ), call. = FALSE)
@@ -1872,35 +1361,35 @@ mira_report_freq <- function(
 
   allowed_formats <- c("html", "pdf", "docx")
   if (!is.character(format) || length(format) == 0L || anyNA(format)) {
-    stop("format deve contenere html, pdf, docx oppure all.", call. = FALSE)
+    stop("format must contain html, pdf, docx, or all.", call. = FALSE)
   }
   formats <- unique(tolower(format))
   if ("all" %in% formats) formats <- allowed_formats
   invalid_formats <- setdiff(formats, allowed_formats)
   if (length(invalid_formats) > 0L) {
-    stop(sprintf("Formati non riconosciuti: %s.",
+    stop(sprintf("Unrecognized formats: %s.",
                  paste(invalid_formats, collapse = ", ")), call. = FALSE)
   }
 
   if (!is.numeric(max_table_rows) || length(max_table_rows) != 1L ||
       is.na(max_table_rows) || max_table_rows <= 0) {
-    stop("max_table_rows deve essere un numero positivo oppure Inf.", call. = FALSE)
+    stop("max_table_rows must be a positive number or Inf.", call. = FALSE)
   }
   if (!is.numeric(max_table_columns) || length(max_table_columns) != 1L ||
       is.na(max_table_columns) || !is.finite(max_table_columns) ||
       max_table_columns < 2) {
-    stop("max_table_columns deve essere un intero finito >= 2.", call. = FALSE)
+    stop("max_table_columns must be a finite integer >= 2.", call. = FALSE)
   }
   if (!is.numeric(digits) || length(digits) != 1L || is.na(digits) ||
       !is.finite(digits) || digits < 1 || digits > 10) {
-    stop("digits deve essere un intero tra 1 e 10.", call. = FALSE)
+    stop("digits must be an integer between 1 and 10.", call. = FALSE)
   }
   if (!is.numeric(max_depth) || length(max_depth) != 1L || is.na(max_depth) ||
       !is.finite(max_depth) || max_depth < 1) {
-    stop("max_depth deve essere un intero finito >= 1.", call. = FALSE)
+    stop("max_depth must be a finite integer >= 1.", call. = FALSE)
   }
   if (!is.list(extra_objects)) {
-    stop("extra_objects deve essere una lista, preferibilmente nominata.", call. = FALSE)
+    stop("extra_objects must be a list, preferably named.", call. = FALSE)
   }
   if (length(extra_objects) > 0L) {
     extra_names <- names(extra_objects)
@@ -1913,7 +1402,7 @@ mira_report_freq <- function(
   dots <- list(...)
   if (is.data.frame(x)) {
     if (!is.null(data)) {
-      stop("Fornire i dati una sola volta: in x oppure in data.", call. = FALSE)
+      stop("Supply data only once, through x or data.", call. = FALSE)
     }
     data <- x
     x <- NULL
@@ -1921,48 +1410,47 @@ mira_report_freq <- function(
 
   if (!is.null(data)) {
     if (!is.null(x)) {
-      stop("Fornire un oggetto MIRA in x oppure un data.frame in data, non entrambi.",
+      stop("Supply a MIRA object in x or a data frame in data, but not both.",
            call. = FALSE)
     }
-    if (!is.data.frame(data)) stop("data deve essere un data.frame.", call. = FALSE)
+    if (!is.data.frame(data)) stop("data must be a data frame.", call. = FALSE)
     mira_fun <- get0("mira_info", mode = "function", inherits = TRUE)
     if (is.null(mira_fun)) {
-      stop("mira_info() non è disponibile: caricare prima il file che la definisce.",
+      stop("mira_info() is not available; load the file that defines it first.",
            call. = FALSE)
     }
     if ("data" %in% names(dots)) {
-      stop("Non ripetere data dentro ...; usare l'argomento data.", call. = FALSE)
+      stop("Do not repeat data in ...; use the data argument.", call. = FALSE)
     }
     if (!"verbose" %in% names(dots)) dots$verbose <- FALSE
     x <- do.call(mira_fun, c(list(data = data), dots))
   } else if (length(dots) > 0L) {
-    stop("Gli argomenti in ... sono ammessi solo quando viene fornito data.", call. = FALSE)
+    stop("Arguments in ... are allowed only when data is supplied.", call. = FALSE)
   }
 
   if (is.null(x)) {
-    stop("Fornire x (output di mira_info) oppure data.", call. = FALSE)
+    stop("Supply x (the output of mira_info) or data.", call. = FALSE)
   }
   accepted <- inherits(x, c("mira_info", "mira_info_multi", "mira_detect"))
   if (!accepted) {
     stop(
-      "x deve ereditare da mira_info, mira_info_multi o mira_detect.",
+      "x must inherit from mira_info, mira_info_multi, or mira_detect.",
       call. = FALSE
     )
   }
 
   output_file <- .mira_report_slug(output_file)
   if (is.null(output_dir)) {
-    timestamp <- base::format(Sys.time(), "%Y%m%d-%H%M%S")
-    output_dir <- file.path(getwd(), paste0(output_file, "-", timestamp))
+    output_dir <- file.path(getwd(), "mira_analyses", "mira_report_flong")
   }
   if (!is.character(output_dir) || length(output_dir) != 1L ||
       is.na(output_dir) || !nzchar(output_dir)) {
-    stop("output_dir deve essere un percorso non vuoto.", call. = FALSE)
+    stop("output_dir must be a non-empty path.", call. = FALSE)
   }
   if (!dir.exists(output_dir)) {
     created <- dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
     if (!created && !dir.exists(output_dir)) {
-      stop(sprintf("Impossibile creare la directory: %s", output_dir), call. = FALSE)
+      stop(sprintf("Cannot create directory: %s", output_dir), call. = FALSE)
     }
   }
   output_dir <- normalizePath(output_dir, winslash = "/", mustWork = TRUE)
@@ -1979,15 +1467,6 @@ mira_report_freq <- function(
     file.path(output_dir, paste0(stem, unname(extensions[formats]))), formats
   )
 
-  protected_paths <- c(qmd_path, payload_path, runtime_path, unname(output_paths))
-  existing <- protected_paths[file.exists(protected_paths)]
-  if (length(existing) > 0L && !overwrite) {
-    stop(sprintf(
-      "Esistono già file di destinazione. Usare overwrite=TRUE o un'altra directory: %s",
-      paste(basename(existing), collapse = ", ")
-    ), call. = FALSE)
-  }
-
   report_config <- list(
     sections = sections,
     include_complete_output = include_complete_output,
@@ -2003,13 +1482,38 @@ mira_report_freq <- function(
     report = report_config
   )
 
+  export_plan <- .mira_report_export_plan(x, report_config, output_dir)
+  manifest <- .mira_report_manifest(export_plan)
+  manifest_path <- file.path(output_dir, "results_manifest.csv")
+  planned_csv <- vapply(export_plan, function(entry) entry$absolute, character(1L))
+  protected_paths <- c(qmd_path, payload_path, runtime_path,
+                       unname(output_paths), manifest_path, planned_csv)
+  existing <- protected_paths[file.exists(protected_paths)]
+  if (length(existing) > 0L && !overwrite) {
+    stop(sprintf(
+      "Output files already exist. Use overwrite=TRUE or a different directory: %s",
+      paste(basename(existing), collapse = ", ")
+    ), call. = FALSE)
+  }
+
+  previous_csv <- character()
+  if (overwrite && file.exists(manifest_path)) {
+    previous <- tryCatch(utils::read.csv(manifest_path, stringsAsFactors = FALSE),
+                         error = function(e) NULL)
+    if (!is.null(previous) && "file" %in% names(previous)) {
+      safe <- grepl("^results/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.csv$",
+                    previous$file)
+      previous_csv <- file.path(output_dir, previous$file[safe])
+    }
+  }
+
   saveRDS(payload, payload_path, compress = "xz")
   runtime_names <- .mira_report_runtime_names()
   runtime_env <- environment(mira_report_freq)
   missing_runtime <- runtime_names[!vapply(runtime_names, exists, logical(1L),
                                            envir = runtime_env, inherits = TRUE)]
   if (length(missing_runtime) > 0L) {
-    stop(sprintf("Helper interni mancanti: %s.",
+    stop(sprintf("Missing internal helpers: %s.",
                  paste(missing_runtime, collapse = ", ")), call. = FALSE)
   }
   dump(runtime_names, file = runtime_path, envir = runtime_env)
@@ -2020,19 +1524,37 @@ mira_report_freq <- function(
   )
   writeLines(qmd_lines, qmd_path, useBytes = TRUE)
 
+  for (entry in export_plan) {
+    if (!dir.exists(dirname(entry$absolute))) {
+      dir.create(dirname(entry$absolute), recursive = TRUE, showWarnings = FALSE)
+    }
+    tryCatch(
+      utils::write.csv(entry$csv, entry$absolute, row.names = FALSE,
+                       fileEncoding = "UTF-8", na = ""),
+      error = function(e) stop(sprintf(
+        "Could not export table at %s to %s: %s",
+        entry$path, entry$file, conditionMessage(e)
+      ), call. = FALSE)
+    )
+  }
+  utils::write.csv(manifest, manifest_path, row.names = FALSE,
+                   fileEncoding = "UTF-8", na = "")
+  stale <- setdiff(previous_csv, planned_csv)
+  if (length(stale)) unlink(stale[file.exists(stale)])
+
   rendered <- stats::setNames(rep(FALSE, length(formats)), formats)
   render_errors <- stats::setNames(rep(NA_character_, length(formats)), formats)
   if (render) {
     if (!requireNamespace("knitr", quietly = TRUE)) {
       stop(
-        paste0("Il pacchetto R 'knitr' e necessario. I file sorgente sono stati creati in: ",
+        paste0("The R package 'knitr' is required. Source files were created in: ",
                output_dir),
         call. = FALSE
       )
     }
     if (!requireNamespace("quarto", quietly = TRUE)) {
       stop(
-        paste0("Il pacchetto R 'quarto' e necessario. I file sorgente sono stati creati in: ",
+        paste0("The R package 'quarto' is required. Source files were created in: ",
                output_dir),
         call. = FALSE
       )
@@ -2062,7 +1584,7 @@ mira_report_freq <- function(
         collapse = " | "
       )
       warning(sprintf(
-        "Rendering non completato per %s. Sorgenti conservati. %s",
+        "Rendering did not complete for %s. Source files were retained. %s",
         paste(failed, collapse = ", "), details
       ), call. = FALSE)
     }
@@ -2080,6 +1602,8 @@ mira_report_freq <- function(
       source = qmd_path,
       payload = payload_path,
       runtime = runtime_path,
+      results_manifest = manifest_path,
+      result_files = planned_csv,
       output_dir = output_dir,
       report_config = report_config
     ),

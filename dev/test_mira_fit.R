@@ -82,6 +82,14 @@ result <- mira_info(
   covariates = "age"
 )
 
+rep <- mira_report_freq(
+  x = resul,
+  format = "pdf",
+  overwrite = TRUE
+)
+
+
+
 # Timepoint + gender
 result <- mira_info(
   data,

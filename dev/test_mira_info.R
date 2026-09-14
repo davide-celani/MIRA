@@ -31,6 +31,19 @@ auto_fit <- mira_info(
   verbose = FALSE
 )
 
+
+report <- mira_report_freq(
+  x = auto_fit,
+  format = "pdf",
+  overwrite = TRUE
+)
+
+
+
+
+
+
+
 # Start with sample size and completeness, then verify the ordered mapping
 # from source columns to display labels.
 auto_fit$overview[c(

@@ -1,0 +1,5 @@
+"variable","class","numeric","unique_n","missing_n","missing_pct"
+"subject_id","character",FALSE,48,0,0
+"score_t0","numeric",TRUE,48,0,0
+"score_t1","numeric",TRUE,48,0,0
+"score_t2","numeric",TRUE,48,0,0

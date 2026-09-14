@@ -11,8 +11,8 @@ mira_report_freq(
   output_dir = NULL,
   output_file = "mira_report",
   format = c("html", "pdf"),
-  title = "MIRA: analisi longitudinale",
-  subtitle = "Report statistico dinamico e riproducibile",
+  title = "MIRA: Longitudinal Analysis",
+  subtitle = "Dynamic and reproducible statistical report",
   author = NULL,
   date = Sys.Date(),
   sections = "all",
@@ -47,8 +47,11 @@ Defaults to \code{./mira_analyses/mira_report_flong}.}
 
 \item{sections}{\code{"all"} or any subset of the documented report sections.}
 
-\item{include_complete_output}{If TRUE, append a recursive rendering of the
-complete result object. This is TRUE by default to avoid silent omissions.}
+\item{include_complete_output}{Retained for API compatibility. The main report
+already traverses all meaningful results without duplicating them in an appendix.
+Analyses and model structures without results are omitted from the visible
+report. The complete \code{mira_info()} result, including skipped-module reasons,
+source data, and fitted objects, is preserved in the payload RDS file.}
 
 \item{extra_objects}{Optional named list of additional fitted objects (for
 example \code{list(mira_fit = fit)}) to inventory and include in the appendix.}

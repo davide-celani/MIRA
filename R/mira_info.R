@@ -677,11 +677,14 @@
   for (variable in covariates) {
     value <- out[[variable]]
     if (is.numeric(value)) value[!is.finite(value)] <- NA_real_
-    if (variable %in% categorical_covariates && !is.factor(value)) value <- factor(value)
     if (is.character(value)) {
       value[!is.na(value) & !nzchar(trimws(value))] <- NA_character_
       value <- factor(value)
     }
+    if (is.factor(value)) {
+      value[!is.na(value) & !nzchar(trimws(as.character(value)))] <- NA
+    }
+    if (variable %in% categorical_covariates && !is.factor(value)) value <- factor(value)
     if (is.logical(value)) value <- factor(value)
     if (is.factor(value)) value <- droplevels(value)
     out[[variable]] <- value
@@ -1346,6 +1349,8 @@
   structures <- c(independence = "independence", exchangeable = "exchangeable", ar1 = "ar1")
   output <- list()
   all_warnings <- character(0)
+  patient_factor <- data$patient_factor
+  time_index <- data$time_index
 
   for (name in names(structures)) {
     correlation <- structures[[name]]
@@ -1354,8 +1359,8 @@
         formula = fixed_formula,
         family = stats::gaussian(),
         data = data,
-        id = data$patient_factor,
-        waves = data$time_index,
+        id = patient_factor,
+        waves = time_index,
         corstr = correlation,
         std.err = "san.se"
       )
@@ -3685,11 +3690,14 @@
       for (variable in .covariates) {
         x <- model_data[[variable]]
         if (is.numeric(x)) x[!is.finite(x)] <- NA_real_
-        if (variable %in% .categorical_covariates && !is.factor(x)) x <- factor(x)
         if (is.character(x)) {
           x[!is.na(x) & !nzchar(trimws(x))] <- NA_character_
           x <- factor(x)
         }
+        if (is.factor(x)) {
+          x[!is.na(x) & !nzchar(trimws(as.character(x)))] <- NA
+        }
+        if (variable %in% .categorical_covariates && !is.factor(x)) x <- factor(x)
         if (is.factor(x)) x <- droplevels(x)
         model_data[[variable]] <- x
         observed <- x[!is.na(x)]
@@ -5933,10 +5941,10 @@ mira_detect <- function(data,
 #' covariates. The same resolved covariates are used, when possible, by the
 #' primary mixed model, marginal means, random-slope model, GEE, and `nlme` fits.
 #' Character and logical values are converted to factors; non-finite numeric
-#' covariate values and blank character values become missing, and covariates
-#' with fewer than two usable
-#' values are omitted from the primary mixed model and recorded in
-#' `model$covariates_skipped`. Adjustment is statistical and does not imply that
+#' covariate values and blank character or factor values become missing.
+#' Covariates with fewer than two usable values are omitted from the primary
+#' mixed model and recorded in `model$covariates_skipped`. Adjustment is
+#' statistical and does not imply that
 #' the selected variables suffice for causal control.
 #'
 #' @section Missing data:

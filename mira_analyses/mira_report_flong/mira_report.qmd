@@ -1,0 +1,42 @@
+---
+title: 'MIRA: Longitudinal Analysis'
+subtitle: 'Dynamic and reproducible statistical report'
+date: '2026-09-14'
+lang: en
+format:
+  pdf:
+    documentclass: article
+    papersize: a4
+    geometry: margin=25mm
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    number-depth: 3
+    colorlinks: true
+    fig-cap-location: bottom
+    tbl-cap-location: top
+execute:
+  echo: false
+  warning: false
+  message: false
+  error: false
+  freeze: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+source("mira_report-runtime.R", local = knitr::knit_global())
+payload <- readRDS("mira_report-payload.rds")
+mira_plot_device <- if (knitr::is_latex_output() && capabilities('cairo')) 'cairo_pdf' else 'png'
+knitr::opts_chunk$set(fig.width = 7.0, fig.height = 4.6, dpi = 320,
+                      dev = mira_plot_device, fig.align = 'center',
+                      out.width = '100%')
+```
+
+```{r}
+#| label: mira-report
+#| results: asis
+.mira_report_knit(payload)
+```
+

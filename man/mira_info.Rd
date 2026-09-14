@@ -526,10 +526,10 @@ covariates are between-subject factors and numeric covariates are supplied as
 covariates. The same resolved covariates are used, when possible, by the
 primary mixed model, marginal means, random-slope model, GEE, and \code{nlme} fits.
 Character and logical values are converted to factors; non-finite numeric
-covariate values and blank character values become missing, and covariates
-with fewer than two usable
-values are omitted from the primary mixed model and recorded in
-\code{model$covariates_skipped}. Adjustment is statistical and does not imply that
+covariate values and blank character or factor values become missing.
+Covariates with fewer than two usable values are omitted from the primary
+mixed model and recorded in \code{model$covariates_skipped}. Adjustment is
+statistical and does not imply that
 the selected variables suffice for causal control.
 }
 

@@ -1,0 +1,4 @@
+"outcome","outcome_key","variable","time_label","time_order","position","pattern","numeric"
+"score","score","score_t0","t0",0,2,"t",TRUE
+"score","score","score_t1","t1",1,3,"t",TRUE
+"score","score","score_t2","t2",2,4,"t",TRUE

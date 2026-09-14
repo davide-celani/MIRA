@@ -1,0 +1,16 @@
+"outcome","path","file","original_class","rows","columns"
+"","result$data_overview$column_profile","results//data_overview_column_profile.csv","data.frame",4,6
+"","result$detected_variables$id_candidates","results//detected_variables_id_candidates.csv","data.frame",1,8
+"","result$detected_variables$longitudinal_map","results//detected_variables_longitudinal_map.csv","data.frame",3,8
+"score","outcome$descriptives","results//descriptives.csv","data.frame",3,27
+"score","outcome$missing$by_time","results//missing_by_time.csv","data.frame",3,8
+"score","outcome$missing$by_patient","results//missing_by_patient.csv","data.frame",48,5
+"score","outcome$change","results//change.csv","data.frame",3,30
+"score","outcome$variability","results//variability.csv","data.frame",1,14
+"score","outcome$trajectories","results//trajectories.csv","data.frame",48,13
+"score","outcome$advanced_tests$friedman$summary","results//advanced_tests_friedman_summary.csv","data.frame",1,6
+"score","outcome$advanced_tests$friedman$posthoc$tidy","results//advanced_tests_friedman_posthoc_tidy.csv","data.frame",3,14
+"score","outcome$effect_sizes$paired_cohens_dz","results//effect_sizes_paired_cohens_dz.csv","data.frame",3,6
+"score","outcome$effect_sizes$paired_rank_biserial","results//effect_sizes_paired_rank_biserial.csv","data.frame",3,6
+"score","outcome$multiplicity$friedman_posthoc$table","results//multiplicity_friedman_posthoc_table.csv","data.frame",3,14
+"score","outcome$sensitivity","results//sensitivity.csv","data.frame",1,10

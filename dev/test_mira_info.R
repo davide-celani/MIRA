@@ -44,6 +44,7 @@ report <- mira_report_freq(
 
 
 
+
 # Start with sample size and completeness, then verify the ordered mapping
 # from source columns to display labels.
 auto_fit$overview[c(

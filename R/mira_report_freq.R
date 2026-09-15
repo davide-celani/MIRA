@@ -136,7 +136,7 @@
     if (is.na(value)) return(NA_character_)
     if (!is.finite(value)) return(as.character(value))
     threshold <- 10^(-digits)
-    if (value < threshold) {
+    if (value >= 0 && value < threshold) {
       paste0("<", formatC(threshold, format = "f", digits = digits))
     } else {
       formatC(value, format = "f", digits = digits)
@@ -161,7 +161,8 @@
     values[is.na(values)] <- "NA"
     return(paste(values, collapse = ", "))
   }
-  paste(capture.output(str(x, give.attr = FALSE, vec.len = 8L)), collapse = " ")
+  paste(utils::capture.output(utils::str(x, give.attr = FALSE, vec.len = 8L)),
+        collapse = " ")
 }
 
 .mira_report_prepare_table <- function(x, digits = 3L, format_p = TRUE) {
@@ -256,7 +257,7 @@
 
   if (format_p) {
     p_columns <- grepl(
-      "(^p$|(^|[._])p([._]|$)|p.value|p_value|pvalue|^pr\\()",
+      "((^|[._])p([._]|$)|(^|[._])p[._]?value([._]|$)|^pr\\()",
       names(x), ignore.case = TRUE, perl = TRUE
     )
     for (j in which(p_columns)) {
@@ -271,7 +272,10 @@
 .mira_report_numeric_column <- function(x, name = "") {
   if (is.numeric(x) || is.integer(x)) return(TRUE)
   if (grepl(
-    "(^n$|count|percent|pct|mean|median|sd|se|ci|estimate|statistic|df|(^|[._])p([._]|$)|p.value|p_value|pvalue)",
+    paste0(
+      "(^|[._])(n|count|percent|pct|mean|median|sd|se|ci|estimate|",
+      "statistic|df|p|pvalue)([._]|$)|(^|[._])p[._]?value([._]|$)|^pr\\("
+    ),
     name, ignore.case = TRUE, perl = TRUE
   )) return(TRUE)
   values <- trimws(as.character(x))
@@ -421,8 +425,14 @@
   }
 
   original_n <- nrow(table_data)
-  if (is.finite(cfg$max_table_rows) && original_n > cfg$max_table_rows) {
-    table_data <- table_data[seq_len(cfg$max_table_rows), , drop = FALSE]
+  row_limit <- if (is.finite(cfg$max_table_rows) &&
+                   cfg$max_table_rows < .Machine$integer.max) {
+    max(1L, as.integer(cfg$max_table_rows))
+  } else {
+    Inf
+  }
+  if (is.finite(row_limit) && original_n > row_limit) {
+    table_data <- table_data[seq_len(row_limit), , drop = FALSE]
   }
 
   is_latex <- knitr::is_latex_output()
@@ -528,7 +538,7 @@
     }
   }
 
-  if (is.finite(cfg$max_table_rows) && original_n > cfg$max_table_rows) {
+  if (is.finite(row_limit) && original_n > row_limit) {
     cat(sprintf(
       "*Showing %d of %d rows because of the explicit `max_table_rows` limit.*\n\n",
       nrow(table_data), original_n
@@ -541,6 +551,7 @@
   package_map <- list(
     ggplot2 = c("ggplot", "ggplot2::ggplot"),
     lme4 = c("merMod", "lmerMod", "glmerMod", "summary.merMod"),
+    lmerTest = c("lmerModLmerTest", "summary.lmerModLmerTest"),
     nlme = c("lme", "gls"),
     geepack = c("geeglm", "gee", "summary.geeglm"),
     emmeans = c("emmGrid", "emm_list", "summary_emm"),
@@ -562,9 +573,9 @@
   text <- tryCatch(
     {
       if (inherits(x, c("lm", "glm", "merMod", "lmerMod", "glmerMod"))) {
-        capture.output(print(summary(x)))
+        utils::capture.output(print(summary(x)))
       } else {
-        capture.output(print(x))
+        utils::capture.output(print(x))
       }
     },
     error = function(e) paste("The object could not be printed:", conditionMessage(e))
@@ -652,6 +663,10 @@
 
 .mira_report_extract_outcomes <- function(result) {
   if (inherits(result, "mira_detect")) return(list())
+  if (inherits(result, "mira_info_multi") &&
+      (!is.list(result$outcomes) || !length(result$outcomes))) {
+    return(list())
+  }
   if (is.list(result$outcomes) && length(result$outcomes)) {
     out <- result$outcomes
   } else {
@@ -718,7 +733,10 @@
     # Show only models with a fitted object in the comparison table.
     if (identical(key, "model_comparison") && is.data.frame(tab) &&
         "object_path" %in% names(tab)) {
-      tab <- tab[!is.na(tab$object_path) & nzchar(tab$object_path), , drop = FALSE]
+      tab <- tab[
+        !is.na(tab$object_path) & nzchar(trimws(as.character(tab$object_path))),
+        , drop = FALSE
+      ]
     }
     dimensions <- if (is.table(tab)) dim(as.data.frame(tab)) else dim(tab)
     if (length(dimensions) < 2L || dimensions[2L] == 0L) return(NULL)
@@ -732,6 +750,7 @@
   }
   if (is.list(x)) {
     if (!length(x)) return(NULL)
+    if ("performed" %in% names(x) && identical(x$performed, FALSE)) return(NULL)
     if (grepl("(^|\\$)multiplicity(\\$|$)", path) &&
         "table" %in% names(x) && is.null(x$table)) return(NULL)
     if (identical(key, "nlme") && "performed" %in% names(x) &&
@@ -757,7 +776,8 @@
       if (identical(key, "nlme") && identical(child_key, "comparison") &&
           is.data.frame(child_value) && "model" %in% names(child_value)) {
         fitted <- nms[vapply(x, function(item) {
-          is.list(item) && isTRUE(item$performed)
+          is.list(item) && isTRUE(item$performed) &&
+            (!is.null(item$model) || !is.null(item$object))
         }, logical(1L))]
         child_value <- child_value[child_value$model %in% fitted, , drop = FALSE]
       }
@@ -926,8 +946,10 @@
 
 .mira_report_render_abstract <- function(outcomes, cfg) {
   if (!.mira_report_selected(cfg, "abstract")) return(invisible(NULL))
+  availability_cfg <- cfg
+  availability_cfg$sections <- "all"
   available <- names(outcomes)[vapply(outcomes, function(x) {
-    length(.mira_report_outcome_tree(x, cfg)) > 0L
+    length(.mira_report_outcome_tree(x, availability_cfg)) > 0L
   }, logical(1L))]
   if (!length(available)) return(invisible(NULL))
   .mira_report_heading("Abstract", 1L)
@@ -1068,6 +1090,7 @@
     names(pieces) <- make.unique(names(pieces), sep = "_")
     out <- as.data.frame(pieces, stringsAsFactors = FALSE, check.names = FALSE)
   }
+  names(out) <- make.unique(names(out), sep = "_")
   valid <- vapply(out, function(column) {
     is.atomic(column) && is.null(dim(column)) && length(column) == nrow(out)
   }, logical(1L))
@@ -1089,7 +1112,11 @@
                     length(.mira_report_extract_outcomes(result)) > 1L) {
       substr(.mira_report_file_slug(tables[[i]]$outcome), 1L, 60L)
     } else ""
-    relative <- file.path("results", dir_part, paste0(base, ".csv"))
+    relative <- if (nzchar(dir_part)) {
+      file.path("results", dir_part, paste0(base, ".csv"))
+    } else {
+      file.path("results", paste0(base, ".csv"))
+    }
     candidate <- relative
     serial <- 2L
     while (tolower(candidate) %in% used) {
@@ -1138,11 +1165,37 @@
     ".mira_report_html_style")
 }
 .mira_report_slug <- function(x) {
-  x <- iconv(as.character(x)[1L], to = "ASCII//TRANSLIT", sub = "")
+  x <- iconv(enc2utf8(as.character(x)[1L]), to = "ASCII//TRANSLIT", sub = "")
   x <- tolower(gsub("[^A-Za-z0-9]+", "_", x))
   x <- gsub("(^_+|_+$)", "", x)
   if (is.na(x) || !nzchar(x)) x <- "mira_report"
+  x <- substr(x, 1L, 90L)
+  if (grepl("^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", x)) {
+    x <- paste0("mira_", x)
+  }
   x
+}
+
+.mira_report_path_is_within <- function(path, root) {
+  if (!is.character(path) || length(path) != 1L || is.na(path) ||
+      !file.exists(path) || !dir.exists(root)) return(FALSE)
+  normalized_path <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  normalized_root <- normalizePath(root, winslash = "/", mustWork = TRUE)
+  if (.Platform$OS.type == "windows") {
+    normalized_path <- tolower(normalized_path)
+    normalized_root <- tolower(normalized_root)
+  }
+  identical(normalized_path, normalized_root) ||
+    startsWith(normalized_path, paste0(sub("/+$", "", normalized_root), "/"))
+}
+
+.mira_report_safe_stale_files <- function(paths, output_dir) {
+  paths <- paths[file.exists(paths)]
+  if (!length(paths)) return(character())
+  results_dir <- file.path(output_dir, "results")
+  if (!.mira_report_path_is_within(results_dir, output_dir)) return(character())
+  paths[vapply(paths, .mira_report_path_is_within, logical(1L),
+               root = results_dir)]
 }
 
 .mira_report_yaml_quote <- function(x) {
@@ -1151,9 +1204,7 @@
 }
 
 .mira_report_r_quote <- function(x) {
-  x <- gsub("\\\\", "\\\\\\\\", as.character(x)[1L])
-  x <- gsub("\"", "\\\\\"", x, fixed = TRUE)
-  paste0("\"", x, "\"")
+  encodeString(as.character(x)[1L], quote = "\"")
 }
 
 .mira_report_format_lines <- function(formats) {
@@ -1260,39 +1311,523 @@
   invisible(TRUE)
 }
 
-#' Create a dynamic, exhaustive Quarto report from mira_info()
+#' Build a reproducible Quarto report from MIRA frequentist results
 #'
-#' @param x An existing `mira_info`, `mira_info_multi`, or `mira_detect` object.
-#'   A data.frame is also accepted and is treated as `data`.
-#' @param data Optional data.frame. If supplied, `mira_info(data, ...)` is run first.
-#' @param ... Arguments forwarded unchanged to `mira_info()` when `data` is used.
-#' @param output_dir Directory for reports, reproducible sources, and CSV results.
-#'   Defaults to `./mira_analyses/mira_report_flong`.
-#' @param output_file Base filename without extension.
-#' @param format One or more of `"html"`, `"pdf"`, `"docx"`, or `"all"`.
-#' @param title,subtitle,author,date Report metadata.
-#' @param sections `"all"` or any subset of the documented report sections.
-#' @param include_complete_output Retained for API compatibility. The main report
-#'   already traverses all meaningful results without duplicating them in an appendix.
-#'   Analyses and model structures without results are omitted from the visible
-#'   report. The complete `mira_info()` result, including skipped-module reasons,
-#'   source data, and fitted objects, is preserved in the payload RDS file.
-#' @param extra_objects Optional named list of additional fitted objects (for
-#'   example `list(mira_fit = fit)`) to inventory and include in the appendix.
-#' @param max_table_rows Maximum rows printed per table. Defaults to Inf: there is
-#'   no arbitrary row or page limit. A finite value must be explicitly requested.
-#' @param max_table_columns Maximum columns per displayed block. Wide tables are
-#'   split into blocks; columns are never dropped.
-#' @param digits Number of display digits.
-#' @param max_depth Safety depth for recursive object traversal.
-#' @param render If TRUE, render with Quarto; if FALSE, only create reproducible
-#'   `.qmd`, `.R`, and `.rds` source files.
-#' @param open Open the first rendered report in an interactive session.
-#' @param overwrite Allow existing source or output files to be replaced.
-#' @param quiet Passed to `quarto::quarto_render()`.
+#' Creates a publication-oriented report from an existing \code{mira_info},
+#' \code{mira_info_multi}, or \code{mira_detect} object, or first runs
+#' [mira_info()] on supplied wide-format data. In every mode the function writes
+#' a reproducibility bundle containing Quarto source, a serialized payload with
+#' the original MIRA object, the report runtime, a machine-readable table
+#' archive, and a manifest. It can then render any combination of HTML, PDF,
+#' and DOCX output.
 #'
-#' @return Invisibly, an object of class `mira_report_freq` containing the MIRA
-#'   result and all generated paths.
+#' @param x \code{NULL}; an object inheriting from \code{mira_info},
+#'   \code{mira_info_multi}, or \code{mira_detect}; or a data frame. A data frame
+#'   supplied through \code{x} is treated exactly as if it had been supplied
+#'   through \code{data}. Do not supply both \code{x} and \code{data}. A
+#'   standalone \code{mira_info_error} object is not a valid input, although
+#'   failed outcomes nested inside a valid multi-outcome result are supported.
+#' @param data An optional data frame to analyse before building the report.
+#'   When supplied, the function evaluates
+#'   \code{mira_info(data = data, ...)} and reports the returned object. See
+#'   [mira_info()] for the required wide longitudinal structure and the complete
+#'   analysis interface.
+#' @param ... Arguments passed to [mira_info()] only when \code{data} is used.
+#'   Typical arguments include \code{id}, \code{outcomes}, \code{time_vars},
+#'   \code{time_labels}, \code{arm}, \code{covariates}, \code{analyses}, and
+#'   \code{p_adjust_method}. If \code{verbose} is not supplied, it is set to
+#'   \code{FALSE}. Supplying \code{...} with a precomputed \code{x}, or
+#'   repeating \code{data} inside \code{...}, is an error.
+#' @param output_dir A non-empty, length-one path to the bundle directory.
+#'   Missing directories are created recursively. The default is
+#'   \code{file.path(getwd(), "mira_analyses", "mira_report_flong")}. The
+#'   normalized absolute path is available in the returned
+#'   \code{output_dir} component.
+#' @param output_file A non-empty character scalar used as a filename stem; do
+#'   not include an output-format extension. For portability, the value is
+#'   transliterated to ASCII, converted to lower case, reduced to letters,
+#'   numbers, and underscores, and limited to 90 characters. Empty normalized
+#'   stems fall back to \code{"mira_report"}; Windows-reserved stems receive a
+#'   \code{"mira_"} prefix. For example, \code{"Primary Report.html"} produces
+#'   the stem \code{"primary_report_html"}.
+#' @param format A non-empty character vector containing one or more of
+#'   \code{"html"}, \code{"pdf"}, \code{"docx"}, or \code{"all"}. Matching is
+#'   case-insensitive and duplicates are removed while preserving order.
+#'   \code{"all"} expands to HTML, PDF, and DOCX, in that order. With
+#'   \code{render = FALSE}, this argument still controls the formats declared in
+#'   the Quarto source and the paths listed in \code{expected_files}.
+#' @param title A non-empty character scalar used as the Quarto document title.
+#' @param subtitle \code{NULL} or a non-missing character scalar. \code{NULL}
+#'   and \code{""} omit the subtitle from the Quarto metadata.
+#' @param author \code{NULL} or a character vector of non-missing, non-blank
+#'   author names. One name is written as scalar Quarto metadata; multiple names
+#'   are written as a YAML list. \code{character(0)} omits the field.
+#' @param date A non-missing object of length one that can be represented by
+#'   \code{as.character()}, normally a \code{Date}, date-time, or character
+#'   value. The resulting text is written to the Quarto metadata.
+#' @param sections A non-empty character vector selecting visible report
+#'   content. Matching is case-insensitive and duplicate values are removed.
+#'   Use \code{"all"} or any combination of \code{"abstract"},
+#'   \code{"methods"}, \code{"data_quality"}, \code{"overview"},
+#'   \code{"descriptives"}, \code{"frequencies"}, \code{"missingness"},
+#'   \code{"change"}, \code{"arms"}, \code{"correlations"},
+#'   \code{"variability"}, \code{"models"}, \code{"robustness"},
+#'   \code{"outliers"}, \code{"trajectories"}, \code{"figures"},
+#'   \code{"diagnostics"}, \code{"conclusions"}, and \code{"appendix"}.
+#'   Selection affects only the visible report and does not reorder it: the
+#'   payload remains complete, and all eligible MIRA result tables are still
+#'   exported to CSV.
+#' @param include_complete_output A non-missing logical scalar retained for API
+#'   compatibility. The current renderer already traverses all eligible
+#'   scientific results without adding a duplicate complete-output appendix, so
+#'   this value does not change visible content. It is recorded in
+#'   \code{report_config}; the full MIRA object is always preserved in the
+#'   payload, whether this argument is \code{TRUE} or \code{FALSE}.
+#' @param extra_objects A list of supplementary objects, such as fitted models,
+#'   to preserve in the payload and optionally print under the appendix.
+#'   Prefer a named list, for example
+#'   \code{list(adjusted_model = fitted_model)}. Empty or missing names become
+#'   \code{extra_<position>} and duplicate names are made unique. These objects
+#'   are visible only when \code{"appendix"} or \code{"all"} is selected and
+#'   are not included in the CSV archive.
+#' @param max_table_rows A positive numeric scalar or \code{Inf}, controlling
+#'   the maximum number of rows displayed in each report table. The default,
+#'   \code{Inf}, displays every row. A finite value is converted to an effective
+#'   whole-row limit during rendering, with at least one row shown. Truncation
+#'   is explicitly noted below the displayed table and never truncates the CSV
+#'   export.
+#' @param max_table_columns A finite numeric scalar greater than or equal to
+#'   two, converted to an integer for rendering. It is an upper bound per
+#'   displayed table block, not a request to discard columns. Wide tables are
+#'   split into blocks and the first one or two columns, typically identifiers,
+#'   are repeated. Width heuristics can produce smaller blocks; PDF blocks are
+#'   capped at eight columns and non-HTML, non-LaTeX blocks at seven.
+#' @param digits A finite numeric scalar from 1 through 10, converted to an
+#'   integer. It controls numeric display precision in tables. Recognized
+#'   numeric p-value columns below \code{10^-digits} are displayed as less than
+#'   that threshold. CSV values are exported without this display formatting.
+#' @param max_depth A finite numeric scalar greater than or equal to one,
+#'   converted to an integer. This is a safety limit for recursive traversal of
+#'   nested result and supplementary objects. Deeper content is omitted from
+#'   the visible report. For MIRA results, the limit also applies to CSV
+#'   traversal; supplementary objects are never exported to CSV. All original
+#'   content remains in the payload.
+#' @param render A non-missing logical scalar. If \code{TRUE}, render every
+#'   requested format with [quarto::quarto_render()]. If \code{FALSE}, skip
+#'   Quarto but still write the QMD source, runtime script, payload RDS,
+#'   eligible-table CSV archive, and manifest. This mode is useful for
+#'   inspection, testing, deferred rendering, and environments without the
+#'   Quarto CLI.
+#' @param open A non-missing logical scalar. If \code{TRUE} and at least one
+#'   requested format renders successfully, open the first successful file in
+#'   normalized request order using [utils::browseURL()]. It has no effect when
+#'   \code{render = FALSE} or every render fails. Browser-opening errors are
+#'   ignored. The default is \code{interactive()}.
+#' @param overwrite A non-missing logical scalar. If \code{FALSE}, the call
+#'   stops before writing bundle files when a protected source, requested
+#'   rendered output, manifest, or planned CSV file already exists. If
+#'   \code{TRUE}, those artifacts may be replaced. Obsolete CSV files listed in
+#'   a previous valid manifest are removed only when their paths are safely
+#'   contained below this bundle's \code{results} directory; unrelated files
+#'   are not cleaned.
+#' @param quiet A non-missing logical scalar passed to
+#'   [quarto::quarto_render()] for each requested format. It controls Quarto
+#'   console output, not validation warnings or the descriptor printed by this
+#'   function.
+#'
+#' @details
+#' \code{mira_report_freq()} has two input workflows. With a precomputed MIRA
+#' object, it reports that object without refitting or recomputing its analyses.
+#' With \code{data}, it first calls [mira_info()] and then reports the result.
+#' The supplied or newly created MIRA object is serialized unchanged in the
+#' payload. A \code{mira_detect} input produces analysis-context content only;
+#' it has no outcome analyses to render.
+#'
+#' The function validates and normalizes the requested metadata, sections, and
+#' formats; creates the output directory; plans all paths and CSV exports;
+#' protects existing artifacts according to \code{overwrite}; writes the
+#' reproducibility bundle; and, if requested, invokes Quarto once per format.
+#' It prints a compact artifact summary before returning invisibly.
+#'
+#' The visible renderer is deliberately selective. It presents meaningful
+#' analytical results while omitting machinery and source-data fields, disabled
+#' or unperformed modules, empty non-result structures, all-missing correlation
+#' matrices, duplicate equivalent model tables, and models without a fitted
+#' object. Model and plotting failures can instead appear under diagnostics.
+#' This presentation policy does not modify the original MIRA object and does
+#' not remove anything from the serialized payload.
+#'
+#' Tables are adapted to the target medium. HTML uses horizontally scrollable
+#' blocks, PDF uses repeated-header long tables with width-aware columns, and
+#' DOCX uses portable pipe-table output. If \code{knitr} cannot format an
+#' individual table, its contents fall back to a text block. If a stored plot
+#' cannot be drawn, the report receives a warning callout and continues.
+#'
+#' @section Report sections:
+#' Sections are emitted only when the corresponding eligible content exists.
+#' Selecting \code{"all"} enables every route below.
+#'
+#' \describe{
+#'   \item{\code{abstract}}{A generated statement naming outcomes with
+#'     reportable analytical content.}
+#'   \item{\code{methods}}{Resolved configuration and outcome settings,
+#'     including source time variables and display labels.}
+#'   \item{\code{data_quality}}{Dataset overview and detected-variable
+#'     information.}
+#'   \item{\code{overview}}{Outcome-level sample, completeness, and design
+#'     summaries.}
+#'   \item{\code{descriptives}}{Per-timepoint descriptive statistics.}
+#'   \item{\code{frequencies}}{A result component named
+#'     \code{frequencies}, when present; standard MIRA results need not contain
+#'     such a component.}
+#'   \item{\code{missingness}}{Availability summaries by timepoint and
+#'     participant.}
+#'   \item{\code{change}}{Within-participant change summaries and tests.}
+#'   \item{\code{arms}}{Enabled treatment-arm descriptives and comparisons.}
+#'   \item{\code{correlations}}{Estimable Pearson and Spearman matrices and
+#'     pairwise sample sizes.}
+#'   \item{\code{variability}}{Within- and between-participant variability and
+#'     ICC results.}
+#'   \item{\code{models}}{The primary model, advanced tests, advanced models,
+#'     fitted objects, summaries, and model comparisons that have results.}
+#'   \item{\code{robustness}}{Robust inference, effect sizes, multiplicity
+#'     families, and sensitivity results.}
+#'   \item{\code{outliers}}{Eligible IQR-based diagnostic outlier tables.}
+#'   \item{\code{trajectories}}{Participant-level trajectory summaries.}
+#'   \item{\code{figures}}{Stored MIRA plots that can be drawn.}
+#'   \item{\code{diagnostics}}{Configuration diagnostics, relevant model and
+#'     plotting errors or warnings, and failed outcomes from multi-outcome
+#'     analyses.}
+#'   \item{\code{conclusions}}{A generated descriptive table comparing the
+#'     first and last observed means, when there are at least two descriptive
+#'     rows and the means in the first and last rows are finite. It is a
+#'     descriptive summary, not an inferential or causal conclusion.}
+#'   \item{\code{appendix}}{Eligible objects supplied through
+#'     \code{extra_objects}.}
+#' }
+#'
+#' @section Reproducibility bundle:
+#' For normalized stem \code{<stem>}, the bundle has the following layout:
+#'
+#'     <output_dir>/
+#'       <stem>.qmd
+#'       <stem>-runtime.R
+#'       <stem>-payload.rds
+#'       results_manifest.csv
+#'       results/
+#'         *.csv
+#'         <outcome>/*.csv
+#'       <stem>.html
+#'       <stem>.pdf
+#'       <stem>.docx
+#'
+#' The rendered paths at the bottom of the tree are targets, not a guarantee of
+#' current success. Use \code{rendered} and \code{files} as the authoritative
+#' status. In particular, with \code{overwrite = TRUE}, a pre-existing rendered
+#' file can remain on disk after a skipped or failed render. The QMD uses English
+#' document language, hides code and ordinary messages, installs a table of
+#' contents, and numbers sections. HTML uses the Cosmo theme and embeds
+#' resources; PDF uses an A4 article layout with 25-mm margins; DOCX uses
+#' Quarto's standard document output.
+#'
+#' The runtime script contains the report helpers needed by the QMD. The payload
+#' is an RDS list with exactly three top-level components:
+#' \code{result}, \code{extra_objects}, and \code{report}. The last component
+#' records normalized section and table settings plus a UTC creation timestamp.
+#' Keep the QMD, runtime, and payload together when moving or rerendering the
+#' source. For example, a deferred render can use
+#' \code{quarto::quarto_render(report$source, execute_dir =
+#' report$output_dir)}.
+#' Deferred rendering still requires \pkg{knitr}, the Quarto CLI, and any R
+#' packages needed to print or draw stored model and plot classes. The runtime
+#' script supplies the MIRA-specific report helpers, not those dependencies.
+#'
+#' Because \code{results_manifest.csv} and the \code{results} directory have
+#' bundle-level names, use a separate \code{output_dir} for each independently
+#' managed report even when the \code{output_file} stems differ.
+#'
+#' @section CSV archive and manifest:
+#' Every eligible tabular result found across all MIRA report sections is
+#' exported independently of \code{sections}, \code{max_table_rows}, and
+#' \code{max_table_columns}. Consequently, presentation choices cannot silently
+#' truncate the analytical archive. P-values remain raw numeric values in CSV
+#' files. Matrix-valued columns are expanded where possible, list-valued cells
+#' are converted to plain-text representations, and file slugs plus numeric
+#' suffixes prevent case-insensitive name collisions. Multi-outcome results are
+#' partitioned into outcome-specific subdirectories.
+#'
+#' \code{results_manifest.csv} contains one row per exported table and exactly
+#' these columns:
+#'
+#' \describe{
+#'   \item{\code{outcome}}{Outcome key, or an empty value for shared context.}
+#'   \item{\code{path}}{Traversal path of the table inside the MIRA object.}
+#'   \item{\code{file}}{Portable path to the CSV, relative to
+#'     \code{output_dir}.}
+#'   \item{\code{original_class}}{Slash-separated class vector of the source
+#'     table or matrix.}
+#'   \item{\code{rows}, \code{columns}}{Dimensions of the exported CSV data.}
+#' }
+#'
+#' Supplementary \code{extra_objects} are stored in the payload and can be
+#' printed in the appendix, but they are not traversed for CSV export.
+#'
+#' @section Rendering requirements and failures:
+#' Rendering requires the R packages \pkg{knitr} and \pkg{quarto} and a working
+#' Quarto CLI. PDF additionally requires a compatible TeX installation. HTML
+#' is generally the least dependency-intensive rendered target. DOCX rendering
+#' does not require Microsoft Word, but opening or editing the result normally
+#' requires compatible document software.
+#'
+#' Missing rendering packages cause an error after source artifacts have been
+#' written. Once Quarto rendering begins, each requested format is attempted
+#' independently. A per-format failure is captured in \code{render_errors},
+#' contributes to one aggregate warning, and does not discard successful
+#' formats or any source files. A Quarto call that returns without creating its
+#' expected output is also treated as a failure. Because the bundle spans
+#' multiple files, writing is not transactional: an unexpected filesystem
+#' failure can leave a partial bundle for inspection or removal.
+#'
+#' @section Data confidentiality:
+#' Treat \code{output_dir} as analytical data, not merely as a presentation
+#' folder. The payload can contain longitudinal source data, participant
+#' identifiers, fitted objects, diagnostics, and skipped-module reasons. CSV
+#' files can also contain participant-level identifiers or diagnostic rows.
+#' Review the complete bundle before sharing it and apply the same access,
+#' retention, and de-identification controls used for the source analysis.
+#'
+#' @return Invisibly returns a named list with classes
+#'   \code{c("mira_report_freq", "list")}. The object is also printed
+#'   automatically. Its components are:
+#'
+#' \describe{
+#'   \item{\code{call}}{The matched call.}
+#'   \item{\code{mira_result}}{The supplied MIRA object or the object created by
+#'     the internal [mira_info()] call.}
+#'   \item{\code{formats}}{Normalized requested formats.}
+#'   \item{\code{rendered}}{A named logical vector indicating whether each
+#'     requested format was successfully created. Values are \code{FALSE} when
+#'     rendering was skipped.}
+#'   \item{\code{render_errors}}{A named character vector. A failed format has
+#'     its captured message; successful or deliberately unrendered formats have
+#'     \code{NA}.}
+#'   \item{\code{files}}{Named absolute paths to successfully rendered files
+#'     only. It has length zero when no format was rendered successfully.}
+#'   \item{\code{expected_files}}{Named absolute target paths for every
+#'     requested format, whether or not the files exist.}
+#'   \item{\code{source}}{Absolute path to the generated QMD file.}
+#'   \item{\code{payload}}{Absolute path to the compressed payload RDS file.}
+#'   \item{\code{runtime}}{Absolute path to the generated R runtime script.}
+#'   \item{\code{results_manifest}}{Absolute path to
+#'     \code{results_manifest.csv}.}
+#'   \item{\code{result_files}}{Absolute paths to all CSV files planned and
+#'     written for the current bundle.}
+#'   \item{\code{output_dir}}{Normalized absolute bundle-directory path.}
+#'   \item{\code{report_config}}{Normalized section and display settings and
+#'     the UTC bundle-creation timestamp.}
+#' }
+#'
+#' The \code{print.mira_report_freq()} method reports the output directory,
+#' source filename, successful formats, and formats not rendered successfully,
+#' and returns its argument invisibly.
+#'
+#' @seealso [mira_info()] for the analysis that supplies report content,
+#'   [mira_detect()] for configuration-only input, [quarto::quarto_render()] for
+#'   manual rendering, [base::readRDS()] for inspecting the payload, and
+#'   [utils::read.csv()] for inspecting the manifest and table archive.
+#'
+#' @examples
+#' # ------------------------------------------------------------------
+#' # Example 1: create and inspect a complete source bundle without Quarto
+#' # ------------------------------------------------------------------
+#' set.seed(202602)
+#' n_subjects <- 24L
+#' baseline <- rnorm(n_subjects, mean = 50, sd = 7)
+#' report_data <- data.frame(
+#'   subject_id = sprintf("S%03d", seq_len(n_subjects)),
+#'   score_t0 = baseline,
+#'   score_t1 = baseline - 1.5 + rnorm(n_subjects, sd = 2),
+#'   score_t2 = baseline - 3.0 + rnorm(n_subjects, sd = 2)
+#' )
+#'
+#' analysis <- mira_info(
+#'   report_data,
+#'   analyses = "none",
+#'   verbose = FALSE
+#' )
+#'
+#' report_dir <- tempfile("mira-report-")
+#' report <- mira_report_freq(
+#'   analysis,
+#'   output_dir = report_dir,
+#'   output_file = "Example Report",
+#'   format = "html",
+#'   sections = c(
+#'     "abstract", "overview", "descriptives", "change", "conclusions"
+#'   ),
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#'
+#' # The stem is normalized, and all reproducibility sources exist even though
+#' # the HTML file was not rendered.
+#' basename(report$source)
+#' file.exists(c(
+#'   report$source, report$payload, report$runtime, report$results_manifest
+#' ))
+#' report$rendered
+#' report$expected_files
+#'
+#' # Section selection controls the document, not the machine-readable archive.
+#' manifest <- utils::read.csv(
+#'   report$results_manifest,
+#'   stringsAsFactors = FALSE
+#' )
+#' manifest[, c("outcome", "path", "file", "rows", "columns")]
+#'
+#' # The payload preserves the original result rather than a display-truncated
+#' # copy, so exact objects remain available for audit or deferred rendering.
+#' payload <- readRDS(report$payload)
+#' identical(payload$result$descriptives, analysis$descriptives)
+#' unlink(report_dir, recursive = TRUE)
+#'
+#' \dontrun{
+#' # ------------------------------------------------------------------
+#' # Example 2: analyse raw data and build the report in one call
+#' # ------------------------------------------------------------------
+#' direct_report <- mira_report_freq(
+#'   data = report_data,
+#'   id = "subject_id",
+#'   outcomes = "score",
+#'   analyses = "none",
+#'   output_dir = tempfile("mira-direct-"),
+#'   output_file = "direct_analysis",
+#'   format = "html",
+#'   render = TRUE,
+#'   open = TRUE
+#' )
+#'
+#' # ------------------------------------------------------------------
+#' # Example 3: request every output format with publication metadata
+#' # ------------------------------------------------------------------
+#' all_formats <- mira_report_freq(
+#'   analysis,
+#'   output_dir = tempfile("mira-all-formats-"),
+#'   output_file = "primary_longitudinal_analysis",
+#'   format = "all",
+#'   title = "Primary Longitudinal Analysis",
+#'   subtitle = "Frequentist analysis set",
+#'   author = c("A. Analyst", "B. Statistician"),
+#'   date = as.Date("2026-09-15"),
+#'   render = TRUE,
+#'   open = FALSE
+#' )
+#' all_formats$rendered
+#' all_formats$render_errors
+#' all_formats$files
+#'
+#' # ------------------------------------------------------------------
+#' # Example 4: make a focused report while retaining every table in CSV
+#' # ------------------------------------------------------------------
+#' focused <- mira_report_freq(
+#'   analysis,
+#'   output_dir = tempfile("mira-focused-"),
+#'   format = "html",
+#'   sections = c(
+#'     "methods", "data_quality", "descriptives", "missingness",
+#'     "models", "diagnostics"
+#'   ),
+#'   max_table_rows = 50,
+#'   max_table_columns = 8,
+#'   digits = 4,
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#' focused_manifest <- utils::read.csv(focused$results_manifest)
+#' file.exists(file.path(focused$output_dir, focused_manifest$file))
+#'
+#' # ------------------------------------------------------------------
+#' # Example 5: report multiple outcomes
+#' # ------------------------------------------------------------------
+#' multi_data <- transform(
+#'   report_data,
+#'   fatigue_t0 = 30 + rnorm(n_subjects, sd = 5),
+#'   fatigue_t1 = 28 + rnorm(n_subjects, sd = 5),
+#'   fatigue_t2 = 25 + rnorm(n_subjects, sd = 5)
+#' )
+#' multi_analysis <- mira_info(
+#'   multi_data,
+#'   outcomes = c("score", "fatigue"),
+#'   analyses = "none",
+#'   verbose = FALSE
+#' )
+#' multi_report <- mira_report_freq(
+#'   multi_analysis,
+#'   output_dir = tempfile("mira-multi-"),
+#'   format = "html",
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#' multi_manifest <- utils::read.csv(multi_report$results_manifest)
+#' split(multi_manifest$file[nzchar(multi_manifest$outcome)],
+#'       multi_manifest$outcome[nzchar(multi_manifest$outcome)])
+#'
+#' # ------------------------------------------------------------------
+#' # Example 6: preserve a fitted object for a future appendix
+#' # ------------------------------------------------------------------
+#' auxiliary_model <- stats::lm(score_t2 ~ score_t0, data = report_data)
+#' with_appendix <- mira_report_freq(
+#'   analysis,
+#'   output_dir = tempfile("mira-appendix-"),
+#'   sections = c("descriptives", "change", "appendix"),
+#'   extra_objects = list(baseline_adjusted_model = auxiliary_model),
+#'   format = "html",
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#' names(readRDS(with_appendix$payload)$extra_objects)
+#'
+#' # ------------------------------------------------------------------
+#' # Example 7: document detection decisions without running analyses
+#' # ------------------------------------------------------------------
+#' detected <- mira_detect(report_data, verbose = FALSE)
+#' detection_report <- mira_report_freq(
+#'   detected,
+#'   output_dir = tempfile("mira-detection-"),
+#'   sections = c("methods", "data_quality", "diagnostics"),
+#'   format = "html",
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#'
+#' # ------------------------------------------------------------------
+#' # Example 8: deliberately replace a previously generated bundle
+#' # ------------------------------------------------------------------
+#' stable_dir <- tempfile("mira-stable-report-")
+#' first_report <- mira_report_freq(
+#'   analysis,
+#'   output_dir = stable_dir,
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#' updated_report <- mira_report_freq(
+#'   analysis,
+#'   output_dir = stable_dir,
+#'   sections = c("overview", "descriptives", "change"),
+#'   render = FALSE,
+#'   open = FALSE,
+#'   overwrite = TRUE
+#' )
+#'
+#' # A source-only bundle can also be rendered later while keeping execution
+#' # relative to its companion runtime and payload files.
+#' quarto::quarto_render(
+#'   input = updated_report$source,
+#'   output_format = "html",
+#'   execute_dir = updated_report$output_dir
+#' )
+#' }
+#' @export
 mira_report_freq <- function(
     x = NULL,
     data = NULL,
@@ -1364,12 +1899,12 @@ mira_report_freq <- function(
     stop("format must contain html, pdf, docx, or all.", call. = FALSE)
   }
   formats <- unique(tolower(format))
-  if ("all" %in% formats) formats <- allowed_formats
-  invalid_formats <- setdiff(formats, allowed_formats)
+  invalid_formats <- setdiff(formats, c(allowed_formats, "all"))
   if (length(invalid_formats) > 0L) {
     stop(sprintf("Unrecognized formats: %s.",
                  paste(invalid_formats, collapse = ", ")), call. = FALSE)
   }
+  if ("all" %in% formats) formats <- allowed_formats
 
   if (!is.numeric(max_table_rows) || length(max_table_rows) != 1L ||
       is.na(max_table_rows) || max_table_rows <= 0) {
@@ -1377,7 +1912,7 @@ mira_report_freq <- function(
   }
   if (!is.numeric(max_table_columns) || length(max_table_columns) != 1L ||
       is.na(max_table_columns) || !is.finite(max_table_columns) ||
-      max_table_columns < 2) {
+      max_table_columns < 2 || max_table_columns > .Machine$integer.max) {
     stop("max_table_columns must be a finite integer >= 2.", call. = FALSE)
   }
   if (!is.numeric(digits) || length(digits) != 1L || is.na(digits) ||
@@ -1385,7 +1920,7 @@ mira_report_freq <- function(
     stop("digits must be an integer between 1 and 10.", call. = FALSE)
   }
   if (!is.numeric(max_depth) || length(max_depth) != 1L || is.na(max_depth) ||
-      !is.finite(max_depth) || max_depth < 1) {
+      !is.finite(max_depth) || max_depth < 1 || max_depth > .Machine$integer.max) {
     stop("max_depth must be a finite integer >= 1.", call. = FALSE)
   }
   if (!is.list(extra_objects)) {
@@ -1444,7 +1979,7 @@ mira_report_freq <- function(
     output_dir <- file.path(getwd(), "mira_analyses", "mira_report_flong")
   }
   if (!is.character(output_dir) || length(output_dir) != 1L ||
-      is.na(output_dir) || !nzchar(output_dir)) {
+      is.na(output_dir) || !nzchar(trimws(output_dir))) {
     stop("output_dir must be a non-empty path.", call. = FALSE)
   }
   if (!dir.exists(output_dir)) {
@@ -1539,8 +2074,10 @@ mira_report_freq <- function(
   }
   utils::write.csv(manifest, manifest_path, row.names = FALSE,
                    fileEncoding = "UTF-8", na = "")
-  stale <- setdiff(previous_csv, planned_csv)
-  if (length(stale)) unlink(stale[file.exists(stale)])
+  stale <- .mira_report_safe_stale_files(
+    setdiff(previous_csv, planned_csv), output_dir
+  )
+  if (length(stale)) unlink(stale)
 
   rendered <- stats::setNames(rep(FALSE, length(formats)), formats)
   render_errors <- stats::setNames(rep(NA_character_, length(formats)), formats)
@@ -1573,6 +2110,11 @@ mira_report_freq <- function(
         )
         NULL
       }, error = function(e) conditionMessage(e))
+      if (is.null(error_message) && !file.exists(output_paths[[fmt]])) {
+        error_message <- sprintf(
+          "Quarto returned without creating the expected %s file.", fmt
+        )
+      }
       rendered[[fmt]] <- is.null(error_message) && file.exists(output_paths[[fmt]])
       if (!is.null(error_message)) render_errors[[fmt]] <- error_message
     }
@@ -1618,6 +2160,19 @@ mira_report_freq <- function(
   invisible(result)
 }
 
+#' Print a MIRA report descriptor
+#'
+#' Prints the bundle directory, generated Quarto source, successfully rendered
+#' formats, and requested formats that were not rendered successfully. The
+#' method does not inspect or rerender report contents.
+#'
+#' @param x An object returned by [mira_report_freq()].
+#' @param ... Reserved for compatibility with the \code{print} generic;
+#'   currently ignored.
+#'
+#' @return \code{x}, invisibly.
+#' @seealso [mira_report_freq()]
+#' @method print mira_report_freq
 #' @export
 print.mira_report_freq <- function(x, ...) {
   cat("MIRA Quarto report\n")

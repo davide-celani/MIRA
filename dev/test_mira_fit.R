@@ -83,7 +83,7 @@ result <- mira_info(
 )
 
 rep <- mira_report_freq(
-  x = resul,
+  x = result,
   format = "pdf",
   overwrite = TRUE
 )

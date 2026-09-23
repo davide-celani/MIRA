@@ -1,3 +1,25 @@
+.mira_covariate_initial_values <- function(P, K, rw_scale) {
+  # A 0 x (K - 1) R matrix is serialized to JSON as `[]`, which loses the
+  # second dimension and cannot initialize Stan's matrix[0, K - 1]. Empty
+  # Stan parameters need no explicit values, so omit the whole covariate
+  # initialization block when P = 0.
+  if (P == 0L) {
+    return(list())
+  }
+
+  list(
+    covariate_baseline_effect = rep(0, P),
+    beta_covariate_time = rep(0, P),
+    z_covariate_step = matrix(
+      0,
+      nrow = P,
+      ncol = K - 1L
+    ),
+    tau_covariate = rep(rw_scale, P)
+  )
+}
+
+
 #' Fit MIRA longitudinal treatment model
 #'
 #' Fits the outcome-adaptive MIRA longitudinal mixed-effects model with
@@ -773,44 +795,41 @@ mira_fit <- function(
   rw_scale <- max(sd_y / sqrt(elapsed_safe) / 10, scale_floor)
 
   init <- function() {
-    initial_values <- list(
-      baseline_mean = baseline_init,
-      beta_time = as.numeric(stan_prior_data$beta_time_prior_mean),
-      z_common_step = rep(0, stan_data$K - 1),
-      tau_common = rw_scale,
-      beta_treatment = rep(0, stan_data$G - 1),
-      z_treatment_step = matrix(
-        0,
-        nrow = stan_data$G - 1,
-        ncol = stan_data$K - 1
+    initial_values <- c(
+      list(
+        baseline_mean = baseline_init,
+        beta_time = as.numeric(stan_prior_data$beta_time_prior_mean),
+        z_common_step = rep(0, stan_data$K - 1),
+        tau_common = rw_scale,
+        beta_treatment = rep(0, stan_data$G - 1),
+        z_treatment_step = matrix(
+          0,
+          nrow = stan_data$G - 1,
+          ncol = stan_data$K - 1
+        ),
+        tau_treatment = rep(rw_scale, stan_data$G - 1),
+        z_arm_baseline = rep(0, stan_data$G - 1),
+        arm_baseline_sd = max(sd_y / 10, scale_floor)
       ),
-      tau_treatment = rep(rw_scale, stan_data$G - 1),
-      z_arm_baseline = rep(0, stan_data$G - 1),
-      arm_baseline_sd = max(sd_y / 10, scale_floor),
-
-      # One longitudinal trajectory for each active encoded covariate term.
-      # These expressions deliberately preserve the zero dimensions for P = 0.
-      covariate_baseline_effect = rep(0, stan_data$P),
-      beta_covariate_time = rep(0, stan_data$P),
-      z_covariate_step = matrix(
-        0,
-        nrow = stan_data$P,
-        ncol = stan_data$K - 1
+      .mira_covariate_initial_values(
+        P = stan_data$P,
+        K = stan_data$K,
+        rw_scale = rw_scale
       ),
-      tau_covariate = rep(rw_scale, stan_data$P),
-
-      z_subject = matrix(
-        0,
-        nrow = 2,
-        ncol = stan_data$S
-      ),
-      sigma_subject = c(
-        max(sd_y / 2, scale_floor),
-        max(slope_scale / 2, scale_floor)
-      ),
-      L_subject = diag(2),
-      sigma = max(sd_y / 2, scale_floor),
-      mcid = max(stan_data$mcid_prior_mean, 1e-6)
+      list(
+        z_subject = matrix(
+          0,
+          nrow = 2,
+          ncol = stan_data$S
+        ),
+        sigma_subject = c(
+          max(sd_y / 2, scale_floor),
+          max(slope_scale / 2, scale_floor)
+        ),
+        L_subject = diag(2),
+        sigma = max(sd_y / 2, scale_floor),
+        mcid = max(stan_data$mcid_prior_mean, 1e-6)
+      )
     )
 
     # The Stan parameter has dimension zero for non-Student-t families.
@@ -828,21 +847,36 @@ mira_fit <- function(
 
   sampling_started <- Sys.time()
 
-  fit <- model$sample(
-    data = sampling_data,
-    chains = chains,
-    parallel_chains = parallel_chains,
-    iter_warmup = iter_warmup,
-    iter_sampling = iter_sampling,
-    seed = seed,
-    init = init,
-    refresh = refresh,
-    adapt_delta = adapt_delta,
-    step_size = step_size,
-    max_treedepth = max_treedepth,
-    metric = metric,
-    show_messages = show_messages
-  )
+  sample_model <- function() {
+    model$sample(
+      data = sampling_data,
+      chains = chains,
+      parallel_chains = parallel_chains,
+      iter_warmup = iter_warmup,
+      iter_sampling = iter_sampling,
+      seed = seed,
+      init = init,
+      refresh = refresh,
+      adapt_delta = adapt_delta,
+      step_size = step_size,
+      max_treedepth = max_treedepth,
+      metric = metric,
+      show_messages = show_messages
+    )
+  }
+
+  fit <- if (stan_data$P == 0L) {
+    # CmdStanR reports intentionally omitted zero-dimensional parameters as
+    # partial initial values. Silence only that notice for this sample call
+    # and restore the user's option even if sampling fails.
+    local({
+      old_options <- options(cmdstanr_warn_inits = FALSE)
+      on.exit(options(old_options), add = TRUE)
+      sample_model()
+    })
+  } else {
+    sample_model()
+  }
 
   sampling_elapsed_seconds <- as.numeric(
     difftime(Sys.time(), sampling_started, units = "secs")

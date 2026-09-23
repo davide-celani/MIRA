@@ -101,19 +101,6 @@ mock_dynamic_covariate_fit <- function(stan_data, n_draws = 20L) {
 }
 
 
-dynamic_covariate_sampling_data <- function(stan_data, prior) {
-  model_fields <- c(
-    "N", "S", "K", "G", "P", "likelihood_id",
-    "has_lower_bound", "outcome_lower_bound",
-    "has_upper_bound", "outcome_upper_bound",
-    "y", "subject", "time", "arm", "X", "time_value", "direction",
-    "mcid_prior_mean", "mcid_prior_sd",
-    "meaningful_between_arm_difference"
-  )
-  c(stan_data[model_fields], mira_prior_stan_data(prior))
-}
-
-
 test_that("A: NULL and character(0) produce a complete P = 0 pipeline", {
   none <- prepare_dynamic_covariates(character(0))
   null <- prepare_dynamic_covariates(NULL)
@@ -139,6 +126,27 @@ test_that("A: NULL and character(0) produce a complete P = 0 pipeline", {
 
   expect_false(none$covariate_metadata$selection$request_was_null)
   expect_true(null$covariate_metadata$selection$request_was_null)
+})
+
+
+test_that("A: covariate initial values are omitted for P = 0", {
+  zero <- .mira_covariate_initial_values(P = 0L, K = 5L, rw_scale = 0.25)
+  active <- .mira_covariate_initial_values(P = 2L, K = 5L, rw_scale = 0.25)
+
+  expect_identical(zero, list())
+  expect_named(
+    active,
+    c(
+      "covariate_baseline_effect",
+      "beta_covariate_time",
+      "z_covariate_step",
+      "tau_covariate"
+    )
+  )
+  expect_identical(dim(active$z_covariate_step), c(2L, 4L))
+  expect_equal(active$covariate_baseline_effect, c(0, 0))
+  expect_equal(active$beta_covariate_time, c(0, 0))
+  expect_equal(active$tau_covariate, c(0.25, 0.25))
 })
 
 
@@ -449,7 +457,7 @@ test_that("H and I: Stan is generic, legacy-free, and statically P = 0 safe", {
 })
 
 
-test_that("H: opt-in CmdStan smoke test accepts P = 0 data", {
+test_that("H: opt-in mira_fit smoke test accepts P = 0 and P > 0", {
   run_smoke <- tolower(Sys.getenv("MIRA_RUN_CMDSTAN_TESTS", unset = "false")) %in%
     c("1", "true", "yes")
   skip_if_not(run_smoke, "Set MIRA_RUN_CMDSTAN_TESTS=true for CmdStan smoke tests")
@@ -474,27 +482,41 @@ test_that("H: opt-in CmdStan smoke test accepts P = 0 data", {
     "CmdStan is not configured"
   )
 
-  stan_data <- prepare_dynamic_covariates(character(0))
-  prior <- mira_prior(stan_data)
-  sampling_data <- dynamic_covariate_sampling_data(stan_data, prior)
-  expect_identical(sampling_data$P, 0L)
-  expect_identical(dim(sampling_data$X), c(sampling_data$S, 0L))
-
   temporary_stan <- file.path(tempdir(), "mira_dynamic_covariates_smoke.stan")
   expect_true(file.copy(
     dynamic_covariate_stan_file(), temporary_stan, overwrite = TRUE
   ))
-  model <- cmdstanr::cmdstan_model(temporary_stan, quiet = TRUE)
-  expect_s3_class(model, "CmdStanModel")
 
-  fit <- model$sample(
-    data = sampling_data,
-    seed = 20260923,
-    chains = 1,
-    parallel_chains = 1,
-    iter_warmup = 20,
-    iter_sampling = 1,
-    refresh = 0
+  cases <- list(
+    no_covariates = prepare_dynamic_covariates(character(0)),
+    age = prepare_dynamic_covariates("age")
   )
-  expect_s3_class(fit, "CmdStanMCMC")
+
+  expect_identical(cases$no_covariates$P, 0L)
+  expect_identical(
+    dim(cases$no_covariates$X),
+    c(cases$no_covariates$S, 0L)
+  )
+  expect_identical(cases$age$P, 1L)
+
+  for (i in seq_along(cases)) {
+    stan_data <- cases[[i]]
+    prior <- mira_prior(stan_data)
+    fit <- mira_fit(
+      stan_data = stan_data,
+      prior = prior,
+      seed = 20260922 + i,
+      chains = 1,
+      parallel_chains = 1,
+      iter_warmup = 20,
+      iter_sampling = 1,
+      refresh = 0,
+      show_messages = FALSE,
+      stan_file = temporary_stan,
+      verbose = FALSE
+    )
+
+    expect_s3_class(fit, "CmdStanMCMC")
+    expect_true(all(fit$return_codes() == 0L))
+  }
 })

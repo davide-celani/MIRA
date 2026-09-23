@@ -23,8 +23,8 @@
 #'
 #' @return A list containing population trajectories, changes, new-subject
 #'   responder estimands, individual summaries, treatment contrasts,
-#'   time-specific gender and age-threshold contrasts (with group sizes when
-#'   `stan_data` is supplied), heterogeneity,
+#'   time-specific effects for every selected encoded covariate term (with
+#'   readable design-matrix metadata when available), heterogeneity,
 #'   posterior predictive checks, log-likelihood information,
 #'   MCMC diagnostics, model information and raw posterior draws.
 #'
@@ -298,6 +298,62 @@ mira_summary <- function(
     if (N < 1 && !is.null(y)) N <- length(y)
   }
 
+  covariate_effect_cols <- get_cols("covariate_effect")
+  covariate_effect_idx <- parse_indices(covariate_effect_cols)
+
+  if (!is.null(stan_data) && "P" %in% names(stan_data)) {
+    P <- validate_dimension(stan_data$P, "P", 0L)
+  } else if (!is.null(fit_info) && !is.null(fit_info$P)) {
+    P_value <- fit_info$P
+    if (!is.numeric(P_value) || length(P_value) != 1L ||
+        !is.finite(P_value) || P_value < 0L ||
+        P_value != as.integer(P_value)) {
+      stop("Attached fit metadata contain an invalid covariate dimension P.", call. = FALSE)
+    }
+    P <- as.integer(P_value)
+  } else if (length(covariate_effect_idx) > 0L) {
+    P <- max(vapply(covariate_effect_idx, function(x) x[[1L]], integer(1L)))
+  } else {
+    P <- 0L
+  }
+
+  # When both sources are available, never let caller-supplied `stan_data`
+  # relabel posterior draws from a different same-sized design matrix.
+  if (!is.null(stan_data) && !is.null(fit_info) && !is.null(fit_info$P)) {
+    fit_P <- fit_info$P
+    if (!is.numeric(fit_P) || length(fit_P) != 1L ||
+        !is.finite(fit_P) || fit_P < 0L || fit_P != as.integer(fit_P)) {
+      stop("Attached fit metadata contain an invalid covariate dimension P.", call. = FALSE)
+    }
+    if (as.integer(fit_P) != P) {
+      stop(
+        "`stan_data$P` does not match the covariate dimension stored in `fit`.",
+        call. = FALSE
+      )
+    }
+
+    stan_covariate_names <- if (!is.null(stan_data$covariate_names)) {
+      as.character(stan_data$covariate_names)
+    } else if (!is.null(stan_data$X) && !is.null(colnames(stan_data$X))) {
+      as.character(colnames(stan_data$X))
+    } else {
+      NULL
+    }
+    fit_covariate_names <- if (!is.null(fit_info$covariate_names)) {
+      as.character(fit_info$covariate_names)
+    } else {
+      NULL
+    }
+    if (!is.null(stan_covariate_names) && !is.null(fit_covariate_names) &&
+        !identical(stan_covariate_names, fit_covariate_names)) {
+      stop(
+        "Covariate names/order in `stan_data` do not match the metadata ",
+        "stored in `fit`.",
+        call. = FALSE
+      )
+    }
+  }
+
   # ============================================================
   # METADATA
   # ============================================================
@@ -415,22 +471,6 @@ mira_summary <- function(
     rep(NA_integer_, S)
   }
 
-  subject_male <- if (!is.null(stan_data) &&
-                      "male" %in% names(stan_data) &&
-                      length(stan_data$male) == S) {
-    as.integer(stan_data$male)
-  } else {
-    rep(NA_integer_, S)
-  }
-
-  subject_age_above_threshold <- if (!is.null(stan_data) &&
-                                     "age_above_threshold" %in% names(stan_data) &&
-                                     length(stan_data$age_above_threshold) == S) {
-    as.integer(stan_data$age_above_threshold)
-  } else {
-    rep(NA_integer_, S)
-  }
-
   subject_labels <- if (!is.null(stan_data) &&
                         "subject_labels" %in% names(stan_data) &&
                         length(stan_data$subject_labels) == S) {
@@ -439,40 +479,191 @@ mira_summary <- function(
     as.character(seq_len(S))
   }
 
-  gender_labels <- if (!is.null(stan_data) &&
-                       "gender_labels" %in% names(stan_data) &&
-                       length(stan_data$gender_labels) >= 2) {
-    c(
-      reference = as.character(stan_data$gender_labels[[1]]),
-      comparison = as.character(stan_data$gender_labels[[2]])
-    )
-  } else {
-    c(reference = "Female", comparison = "Male")
+  metadata_value <- function(name, default = NULL) {
+    if (!is.null(stan_data) && !is.null(stan_data[[name]])) {
+      return(stan_data[[name]])
+    }
+    if (!is.null(fit_info) && !is.null(fit_info[[name]])) {
+      return(fit_info[[name]])
+    }
+    default
   }
 
-  age_threshold <- if (!is.null(stan_data) &&
-                       "age_threshold" %in% names(stan_data) &&
-                       length(stan_data$age_threshold) >= 1) {
-    as.numeric(stan_data$age_threshold)[1]
-  } else {
-    NA_real_
+  covariate_names <- metadata_value("covariate_names")
+  if (is.null(covariate_names) && !is.null(stan_data$X) &&
+      !is.null(colnames(stan_data$X))) {
+    covariate_names <- colnames(stan_data$X)
+  }
+  if (is.null(covariate_names)) {
+    covariate_names <- paste0("covariate_", seq_len(P))
+  }
+  covariate_names <- as.character(covariate_names)
+  if (length(covariate_names) != P || anyNA(covariate_names) ||
+      any(!nzchar(covariate_names)) || anyDuplicated(covariate_names)) {
+    stop(
+      "Covariate metadata must provide exactly P unique, non-missing encoded names.",
+      call. = FALSE
+    )
   }
 
-  age_group_labels <- if (!is.null(stan_data) &&
-                          "age_group_labels" %in% names(stan_data) &&
-                          length(stan_data$age_group_labels) >= 2) {
-    c(
-      reference = as.character(stan_data$age_group_labels[[1]]),
-      comparison = as.character(stan_data$age_group_labels[[2]])
-    )
-  } else if (is.finite(age_threshold)) {
-    c(
-      reference = paste0("<=", age_threshold),
-      comparison = paste0(">", age_threshold)
-    )
-  } else {
-    c(reference = "age_reference", comparison = "age_above_threshold")
+  covariate_field <- function(name, default) {
+    value <- metadata_value(name)
+    if (is.null(value) || length(value) != P) default else value
   }
+
+  covariate_original_names <- as.character(covariate_field(
+    "covariate_original_names", covariate_names
+  ))
+  covariate_labels <- as.character(covariate_field(
+    "covariate_labels", covariate_names
+  ))
+  covariate_types <- as.character(covariate_field(
+    "covariate_types", rep("unspecified", P)
+  ))
+  covariate_reference_levels <- as.character(covariate_field(
+    "covariate_reference_levels", rep(NA_character_, P)
+  ))
+  covariate_centers <- as.numeric(covariate_field(
+    "covariate_centers", rep(0, P)
+  ))
+  covariate_scales <- as.numeric(covariate_field(
+    "covariate_scales", rep(1, P)
+  ))
+
+  covariate_map <- metadata_value("covariate_map")
+  covariate_metadata_object <- metadata_value("covariate_metadata")
+  if ((!is.data.frame(covariate_map) || nrow(covariate_map) != P) &&
+      is.list(covariate_metadata_object) &&
+      is.data.frame(covariate_metadata_object$columns)) {
+    covariate_map <- covariate_metadata_object$columns
+  }
+  if (!is.data.frame(covariate_map) || nrow(covariate_map) != P) {
+    covariate_map <- data.frame(
+      index = seq_len(P),
+      name = covariate_names,
+      label = covariate_labels,
+      original_name = covariate_original_names,
+      original_label = covariate_original_names,
+      type = covariate_types,
+      encoding = rep("unspecified", P),
+      level = rep(NA_character_, P),
+      reference_level = covariate_reference_levels,
+      center = covariate_centers,
+      scale = covariate_scales,
+      unit = rep(NA_character_, P),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  required_map_defaults <- list(
+    index = seq_len(P),
+    name = covariate_names,
+    label = covariate_labels,
+    original_name = covariate_original_names,
+    original_label = covariate_original_names,
+    type = covariate_types,
+    encoding = rep("unspecified", P),
+    level = rep(NA_character_, P),
+    reference_level = covariate_reference_levels,
+    center = covariate_centers,
+    scale = covariate_scales,
+    unit = rep(NA_character_, P)
+  )
+  for (nm in names(required_map_defaults)) {
+    if (!nm %in% names(covariate_map)) {
+      covariate_map[[nm]] <- required_map_defaults[[nm]]
+    }
+  }
+  covariate_map$index <- as.integer(covariate_map$index)
+  covariate_map$name <- as.character(covariate_map$name)
+  if (!identical(covariate_map$index, seq_len(P)) ||
+      !identical(covariate_map$name, covariate_names)) {
+    stop(
+      "`covariate_map` indices and names must match the P columns of X in order.",
+      call. = FALSE
+    )
+  }
+
+  subject_X <- NULL
+  if (!is.null(stan_data) && !is.null(stan_data$X)) {
+    subject_X <- stan_data$X
+    if (!is.matrix(subject_X) || !is.numeric(subject_X) ||
+        !identical(as.integer(dim(subject_X)), c(S, P)) ||
+        any(!is.finite(subject_X))) {
+      stop("`stan_data$X` must be a finite numeric S by P matrix.", call. = FALSE)
+    }
+    colnames(subject_X) <- covariate_names
+  } else if (P == 0L) {
+    subject_X <- matrix(numeric(0), nrow = S, ncol = 0L)
+  }
+
+  individual_covariates <- data.frame(
+    subject = seq_len(S),
+    subject_id = subject_labels,
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(subject_X) && P > 0L) {
+    individual_covariates <- cbind(
+      individual_covariates,
+      as.data.frame(subject_X, check.names = FALSE, stringsAsFactors = FALSE)
+    )
+  }
+
+  covariate_distributions <- metadata_value("covariate_distributions")
+  if ((!is.data.frame(covariate_distributions) ||
+       nrow(covariate_distributions) != P) && !is.null(subject_X)) {
+    covariate_distributions <- data.frame(
+      index = seq_len(P),
+      name = covariate_names,
+      n = rep.int(S, P),
+      n_unique = integer(P),
+      mean = numeric(P),
+      sd = numeric(P),
+      min = numeric(P),
+      q25 = numeric(P),
+      median = numeric(P),
+      q75 = numeric(P),
+      max = numeric(P),
+      n_zero = integer(P),
+      n_one = integer(P),
+      stringsAsFactors = FALSE
+    )
+    if (P > 0L) {
+      for (j in seq_len(P)) {
+        xj <- as.numeric(subject_X[, j])
+        qj <- stats::quantile(xj, c(0.25, 0.50, 0.75), names = FALSE)
+        covariate_distributions$n_unique[j] <- length(unique(xj))
+        covariate_distributions$mean[j] <- mean(xj)
+        covariate_distributions$sd[j] <- stats::sd(xj)
+        covariate_distributions$min[j] <- min(xj)
+        covariate_distributions$q25[j] <- qj[[1L]]
+        covariate_distributions$median[j] <- qj[[2L]]
+        covariate_distributions$q75[j] <- qj[[3L]]
+        covariate_distributions$max[j] <- max(xj)
+        covariate_distributions$n_zero[j] <- sum(xj == 0)
+        covariate_distributions$n_one[j] <- sum(xj == 1)
+      }
+    }
+  }
+  if (!is.data.frame(covariate_distributions)) {
+    covariate_distributions <- data.frame()
+  }
+
+  reference_profile_default <- "X = 0 on the encoded design-matrix scale"
+  if (is.list(covariate_metadata_object) &&
+      is.list(covariate_metadata_object$reference_profile)) {
+    reference_description <-
+      covariate_metadata_object$reference_profile$description
+    if (is.character(reference_description) &&
+        length(reference_description) == 1L &&
+        !is.na(reference_description) && nzchar(reference_description)) {
+      reference_profile_default <- reference_description
+    }
+  }
+  population_reference_profile <- metadata_value(
+    "population_reference_profile",
+    reference_profile_default
+  )
 
   between_arm_threshold <- if (!is.null(stan_data) &&
                                "meaningful_between_arm_difference" %in% names(stan_data)) {
@@ -487,9 +678,8 @@ mira_summary <- function(
     "tau_common_prior_rate",
     "beta_treatment_prior_sd", "tau_treatment_prior_rate",
     "arm_baseline_sd_prior_rate",
-    "gender_baseline_prior_sd", "beta_gender_prior_sd",
-    "tau_gender_prior_rate",
-    "age_baseline_prior_sd", "beta_age_prior_sd", "tau_age_prior_rate",
+    "covariate_baseline_prior_sd", "beta_covariate_prior_sd",
+    "tau_covariate_prior_rate",
     "sigma_intercept_prior_rate", "sigma_slope_prior_rate",
     "sigma_prior_rate", "nu_prior_shape", "nu_prior_rate"
   )
@@ -531,12 +721,6 @@ mira_summary <- function(
     "beta_time",
     "tau_common",
     "arm_baseline_sd",
-    "gender_baseline_effect",
-    "beta_gender_time",
-    "tau_gender",
-    "age_baseline_effect",
-    "beta_age_time",
-    "tau_age",
     "sigma",
     "nu",
     "nu_value",
@@ -695,168 +879,203 @@ mira_summary <- function(
   }
 
   # ============================================================
-  # GENDER AND AGE-THRESHOLD DIFFERENCES BY TIME
+  # DYNAMIC COVARIATE PARAMETERS AND TIME-SPECIFIC EFFECTS
   # ============================================================
 
-  add_time_metadata <- function(x) {
-    if (nrow(x) > 0) {
-      x$time_value <- time_value[x$time]
-      x <- x[order(x$time), ]
+  covariate_effect_interpretation <- function(j) {
+    row <- covariate_map[j, , drop = FALSE]
+    level <- as.character(row$level[[1L]])
+    reference <- as.character(row$reference_level[[1L]])
+    encoding <- tolower(as.character(row$encoding[[1L]]))
+    scale <- suppressWarnings(as.numeric(row$scale[[1L]]))
+    center <- suppressWarnings(as.numeric(row$center[[1L]]))
+    unit <- as.character(row$unit[[1L]])
+
+    if (!is.na(level) && nzchar(level) &&
+        !is.na(reference) && nzchar(reference)) {
+      return(paste0(level, " versus ", reference, " (encoded 0 -> 1)"))
     }
+    if (grepl("dummy|treatment|binary|logical", encoding) &&
+        !is.na(reference) && nzchar(reference)) {
+      return(paste0("encoded 0 -> 1 relative to ", reference))
+    }
+    if (is.finite(scale) && abs(scale - 1) > sqrt(.Machine$double.eps)) {
+      center_text <- if (is.finite(center)) paste0("; centered at ", signif(center, 6L)) else ""
+      return(paste0(
+        "+1 encoded unit (= +", signif(scale, 6L),
+        " original-scale units", center_text, ")"
+      ))
+    }
+    if (!is.na(unit) && nzchar(unit)) {
+      return(paste0("+1 original-scale unit (", unit, ")"))
+    }
+    "+1 original-scale unit"
+  }
+
+  covariate_interpretations <- if (P > 0L) {
+    vapply(seq_len(P), covariate_effect_interpretation, character(1L))
+  } else {
+    character(0)
+  }
+
+  add_covariate_metadata <- function(x, include_time = FALSE) {
+    if (!"covariate" %in% names(x)) {
+      stop("Internal error: covariate-indexed summary lacks `covariate`.", call. = FALSE)
+    }
+    idx <- x$covariate
+    x$encoded_term <- covariate_names[idx]
+    x$original_covariate <- as.character(covariate_map$original_name[idx])
+    x$label <- as.character(covariate_map$label[idx])
+    x$type <- as.character(covariate_map$type[idx])
+    x$encoding <- as.character(covariate_map$encoding[idx])
+    x$level <- as.character(covariate_map$level[idx])
+    x$reference_level <- as.character(covariate_map$reference_level[idx])
+    x$center <- suppressWarnings(as.numeric(covariate_map$center[idx]))
+    x$scale <- suppressWarnings(as.numeric(covariate_map$scale[idx]))
+    x$effect_interpretation <- covariate_interpretations[idx]
+    if (isTRUE(include_time)) {
+      x$time_value <- time_value[x$time]
+      x <- x[order(x$covariate, x$time), , drop = FALSE]
+    } else {
+      x <- x[order(x$covariate), , drop = FALSE]
+    }
+    rownames(x) <- NULL
     x
   }
 
-  add_time_probability <- function(x, prefix, output_name, predicate) {
-    if (nrow(x) == 0) {
+  add_covariate_probability <- function(x, prefix, output_name, predicate) {
+    if (nrow(x) == 0L) {
       x[[output_name]] <- numeric(0)
       return(x)
     }
-
     columns <- get_cols(prefix)
     idx <- parse_indices(columns)
-
     x[[output_name]] <- vapply(
-      x$time,
-      function(k) {
+      seq_len(nrow(x)),
+      function(i) {
+        wanted <- c(x$covariate[[i]], x$time[[i]])
         pos <- which(vapply(
           idx,
-          function(z) length(z) == 1 && z[1] == k,
-          logical(1)
+          function(z) length(z) == 2L && all(z == wanted),
+          logical(1L)
         ))
-
-        if (length(pos) != 1) return(NA_real_)
-        mean(predicate(as.numeric(draws[[columns[pos]]])), na.rm = TRUE)
+        if (length(pos) != 1L) return(NA_real_)
+        mean(predicate(as.numeric(draws[[columns[[pos]]]])), na.rm = TRUE)
       },
-      numeric(1)
+      numeric(1L)
     )
-
     x
   }
 
-  gender_level_difference <- summarize_indexed(
-    "male_vs_female_difference",
-    "time"
+  covariate_baseline_summary <- add_covariate_metadata(
+    summarize_indexed("covariate_baseline_effect", "covariate")
   )
-  gender_change_difference <- summarize_indexed(
-    "male_vs_female_change_difference",
-    "time"
+  beta_covariate_summary <- add_covariate_metadata(
+    summarize_indexed("beta_covariate_time", "covariate")
   )
-  gender_directional_change_difference <- summarize_indexed(
-    "directional_male_vs_female_change_difference",
-    "time"
+  tau_covariate_summary <- add_covariate_metadata(
+    summarize_indexed("tau_covariate", "covariate")
   )
 
-  gender_level_difference <- add_time_metadata(gender_level_difference)
-  gender_change_difference <- add_time_metadata(gender_change_difference)
-  gender_directional_change_difference <- add_time_metadata(
-    gender_directional_change_difference
+  covariate_model_effect <- add_covariate_metadata(
+    summarize_indexed("covariate_effect", c("covariate", "time")),
+    include_time = TRUE
   )
-
-  if (nrow(gender_level_difference) > 0) {
-    gender_level_difference$comparison_group <- gender_labels[["comparison"]]
-    gender_level_difference$reference_group <- gender_labels[["reference"]]
-    gender_level_difference <- add_time_probability(
-      gender_level_difference,
-      "male_vs_female_difference",
-      "P_comparison_minus_reference_gt_0",
-      function(z) z > 0
-    )
-  }
-
-  if (nrow(gender_change_difference) > 0) {
-    gender_change_difference$comparison_group <- gender_labels[["comparison"]]
-    gender_change_difference$reference_group <- gender_labels[["reference"]]
-    gender_change_difference <- add_time_probability(
-      gender_change_difference,
-      "male_vs_female_change_difference",
-      "P_change_difference_gt_0",
-      function(z) z > 0
-    )
-  }
-
-  if (nrow(gender_directional_change_difference) > 0) {
-    gender_directional_change_difference$comparison_group <-
-      gender_labels[["comparison"]]
-    gender_directional_change_difference$reference_group <-
-      gender_labels[["reference"]]
-    gender_directional_change_difference <- add_time_probability(
-      gender_directional_change_difference,
-      "directional_male_vs_female_change_difference",
-      "P_comparison_has_better_change",
-      function(z) z > 0
-    )
-  }
-
-  age_level_difference <- summarize_indexed(
-    "older_vs_younger_difference",
-    "time"
-  )
-  age_change_difference <- summarize_indexed(
-    "older_vs_younger_change_difference",
-    "time"
-  )
-  age_directional_change_difference <- summarize_indexed(
-    "directional_older_vs_younger_change_difference",
-    "time"
-  )
-
-  age_level_difference <- add_time_metadata(age_level_difference)
-  age_change_difference <- add_time_metadata(age_change_difference)
-  age_directional_change_difference <- add_time_metadata(
-    age_directional_change_difference
-  )
-
-  if (nrow(age_level_difference) > 0) {
-    age_level_difference$comparison_group <- age_group_labels[["comparison"]]
-    age_level_difference$reference_group <- age_group_labels[["reference"]]
-    age_level_difference$age_threshold <- age_threshold
-    age_level_difference <- add_time_probability(
-      age_level_difference,
-      "older_vs_younger_difference",
-      "P_comparison_minus_reference_gt_0",
-      function(z) z > 0
-    )
-  }
-
-  if (nrow(age_change_difference) > 0) {
-    age_change_difference$comparison_group <- age_group_labels[["comparison"]]
-    age_change_difference$reference_group <- age_group_labels[["reference"]]
-    age_change_difference$age_threshold <- age_threshold
-    age_change_difference <- add_time_probability(
-      age_change_difference,
-      "older_vs_younger_change_difference",
-      "P_change_difference_gt_0",
-      function(z) z > 0
-    )
-  }
-
-  if (nrow(age_directional_change_difference) > 0) {
-    age_directional_change_difference$comparison_group <-
-      age_group_labels[["comparison"]]
-    age_directional_change_difference$reference_group <-
-      age_group_labels[["reference"]]
-    age_directional_change_difference$age_threshold <- age_threshold
-    age_directional_change_difference <- add_time_probability(
-      age_directional_change_difference,
-      "directional_older_vs_younger_change_difference",
-      "P_comparison_has_better_change",
-      function(z) z > 0
-    )
-  }
-
-  covariate_effects <- list(
-    gender = list(
-      level_difference = gender_level_difference,
-      change_difference = gender_change_difference,
-      directional_change_difference = gender_directional_change_difference
+  covariate_level_difference <- add_covariate_metadata(
+    summarize_indexed(
+      "covariate_population_mean_difference",
+      c("covariate", "time")
     ),
-    age_threshold = list(
-      threshold = age_threshold,
-      level_difference = age_level_difference,
-      change_difference = age_change_difference,
-      directional_change_difference = age_directional_change_difference
-    )
+    include_time = TRUE
   )
+  covariate_change_difference <- add_covariate_metadata(
+    summarize_indexed(
+      "covariate_population_mean_change_difference",
+      c("covariate", "time")
+    ),
+    include_time = TRUE
+  )
+  covariate_directional_change_difference <- add_covariate_metadata(
+    summarize_indexed(
+      "directional_covariate_population_mean_change_difference",
+      c("covariate", "time")
+    ),
+    include_time = TRUE
+  )
+
+  covariate_level_difference <- add_covariate_probability(
+    covariate_level_difference,
+    "covariate_population_mean_difference",
+    "P_level_difference_gt_0",
+    function(z) z > 0
+  )
+  covariate_change_difference <- add_covariate_probability(
+    covariate_change_difference,
+    "covariate_population_mean_change_difference",
+    "P_change_difference_gt_0",
+    function(z) z > 0
+  )
+  covariate_directional_change_difference <- add_covariate_probability(
+    covariate_directional_change_difference,
+    "directional_covariate_population_mean_change_difference",
+    "P_directional_change_gt_0",
+    function(z) z > 0
+  )
+
+  add_effect_stats <- function(base, extra, prefix) {
+    statistic_names <- c("mean", "median", "sd", "mad", "lower", "upper", "CrI_width")
+    key <- paste(base$covariate, base$time, sep = ":")
+    extra_key <- paste(extra$covariate, extra$time, sep = ":")
+    matched <- match(key, extra_key)
+    for (nm in statistic_names) {
+      base[[paste0(prefix, "_", nm)]] <- extra[[nm]][matched]
+    }
+    base
+  }
+
+  covariate_effects <- covariate_level_difference
+  if (nrow(covariate_effects) == 0L && nrow(covariate_model_effect) > 0L) {
+    covariate_effects <- covariate_model_effect
+    covariate_effects$estimand_scale <- rep(
+      "model/link scale", nrow(covariate_effects)
+    )
+  } else {
+    covariate_effects$estimand_scale <- rep(
+      "natural-outcome mean difference", nrow(covariate_effects)
+    )
+  }
+  if (nrow(covariate_effects) > 0L) {
+    covariate_effects <- add_effect_stats(
+      covariate_effects, covariate_model_effect, "model_scale"
+    )
+    covariate_effects <- add_effect_stats(
+      covariate_effects, covariate_change_difference, "change_from_baseline"
+    )
+    covariate_effects <- add_effect_stats(
+      covariate_effects,
+      covariate_directional_change_difference,
+      "directional_change_from_baseline"
+    )
+    change_key <- paste(
+      covariate_change_difference$covariate,
+      covariate_change_difference$time,
+      sep = ":"
+    )
+    directional_key <- paste(
+      covariate_directional_change_difference$covariate,
+      covariate_directional_change_difference$time,
+      sep = ":"
+    )
+    base_key <- paste(covariate_effects$covariate, covariate_effects$time, sep = ":")
+    covariate_effects$P_change_difference_gt_0 <-
+      covariate_change_difference$P_change_difference_gt_0[
+        match(base_key, change_key)
+      ]
+    covariate_effects$P_directional_change_gt_0 <-
+      covariate_directional_change_difference$P_directional_change_gt_0[
+        match(base_key, directional_key)
+      ]
+  }
 
 
   # ============================================================
@@ -998,134 +1217,99 @@ mira_summary <- function(
   }
 
   # ------------------------------------------------------------
-  # Gender: all pairwise differences in change
-  #
-  # [Male(to)-Male(from)] - [Female(to)-Female(from)]
+  # Covariates: all pairwise differences in their time-varying
+  # natural-scale effects, one table for every encoded term.
   # ------------------------------------------------------------
 
-  gender_pairwise_rows <- list()
+  covariate_pairwise_rows <- list()
   pair_counter <- 1L
 
-  for (pair in time_pairs) {
-    from <- pair[[1L]]
-    to <- pair[[2L]]
+  if (P > 0L) {
+    for (p in seq_len(P)) {
+      for (pair in time_pairs) {
+        from <- pair[[1L]]
+        to <- pair[[2L]]
 
-    col_from <- indexed_draw_column("male_vs_female_difference", from)
-    col_to <- indexed_draw_column("male_vs_female_difference", to)
+        col_from <- indexed_draw_column(
+          "covariate_population_mean_difference", c(p, from)
+        )
+        col_to <- indexed_draw_column(
+          "covariate_population_mean_difference", c(p, to)
+        )
 
-    if (is.na(col_from) || is.na(col_to)) next
+        if (is.na(col_from) || is.na(col_to)) next
 
-    z <- as.numeric(draws[[col_to]]) - as.numeric(draws[[col_from]])
-    s <- posterior_pairwise_stats(z)
+        z <- as.numeric(draws[[col_to]]) - as.numeric(draws[[col_from]])
+        s <- posterior_pairwise_stats(z)
+        directional_z <- if (direction_available) {
+          direction * z
+        } else {
+          rep(NA_real_, length(z))
+        }
 
-    directional_z <- if (direction_available) {
-      direction * z
-    } else {
-      rep(NA_real_, length(z))
+        covariate_pairwise_rows[[pair_counter]] <- data.frame(
+          covariate = p,
+          encoded_term = covariate_names[p],
+          original_covariate = as.character(covariate_map$original_name[p]),
+          label = as.character(covariate_map$label[p]),
+          type = as.character(covariate_map$type[p]),
+          encoding = as.character(covariate_map$encoding[p]),
+          level = as.character(covariate_map$level[p]),
+          reference_level = as.character(covariate_map$reference_level[p]),
+          effect_interpretation = covariate_interpretations[p],
+          from = from,
+          to = to,
+          from_label = time_label_pairwise(from),
+          to_label = time_label_pairwise(to),
+          from_time_value = time_value[from],
+          to_time_value = time_value[to],
+          elapsed = time_value[to] - time_value[from],
+          mean = s$mean,
+          median = s$median,
+          sd = s$sd,
+          mad = s$mad,
+          lower = s$lower,
+          upper = s$upper,
+          CrI_width = s$CrI_width,
+          P_change_difference_gt_0 = mean(z > 0),
+          mean_directional_change_difference =
+            if (direction_available) mean(directional_z) else NA_real_,
+          P_directional_change_gt_0 =
+            if (direction_available) mean(directional_z > 0) else NA_real_,
+          stringsAsFactors = FALSE
+        )
+        pair_counter <- pair_counter + 1L
+      }
     }
-
-    gender_pairwise_rows[[pair_counter]] <- data.frame(
-      from = from,
-      to = to,
-      from_label = time_label_pairwise(from),
-      to_label = time_label_pairwise(to),
-      from_time_value = time_value[from],
-      to_time_value = time_value[to],
-      elapsed = time_value[to] - time_value[from],
-      comparison_group = gender_labels[["comparison"]],
-      reference_group = gender_labels[["reference"]],
-      mean = s$mean,
-      median = s$median,
-      sd = s$sd,
-      mad = s$mad,
-      lower = s$lower,
-      upper = s$upper,
-      CrI_width = s$CrI_width,
-      P_change_difference_gt_0 = mean(z > 0),
-      mean_directional_change_difference =
-        if (direction_available) mean(directional_z) else NA_real_,
-      P_comparison_has_better_change =
-        if (direction_available) mean(directional_z > 0) else NA_real_,
-      stringsAsFactors = FALSE
-    )
-
-    pair_counter <- pair_counter + 1L
   }
 
-  gender_pairwise_change <- if (length(gender_pairwise_rows) > 0L) {
-    do.call(rbind, gender_pairwise_rows)
+  covariate_pairwise_change <- if (length(covariate_pairwise_rows) > 0L) {
+    do.call(rbind, covariate_pairwise_rows)
   } else {
     data.frame()
   }
 
-  if (nrow(gender_pairwise_change) > 0L) {
-    rownames(gender_pairwise_change) <- NULL
+  if (nrow(covariate_pairwise_change) > 0L) {
+    rownames(covariate_pairwise_change) <- NULL
+    covariate_pairwise_change <- covariate_pairwise_change[
+      order(
+        covariate_pairwise_change$covariate,
+        covariate_pairwise_change$from,
+        covariate_pairwise_change$to
+      ),
+      ,
+      drop = FALSE
+    ]
   }
 
-  # ------------------------------------------------------------
-  # Age threshold: all pairwise differences in change
-  #
-  # [Older(to)-Older(from)] - [Younger(to)-Younger(from)]
-  # ------------------------------------------------------------
-
-  age_pairwise_rows <- list()
-  pair_counter <- 1L
-
-  for (pair in time_pairs) {
-    from <- pair[[1L]]
-    to <- pair[[2L]]
-
-    col_from <- indexed_draw_column("older_vs_younger_difference", from)
-    col_to <- indexed_draw_column("older_vs_younger_difference", to)
-
-    if (is.na(col_from) || is.na(col_to)) next
-
-    z <- as.numeric(draws[[col_to]]) - as.numeric(draws[[col_from]])
-    s <- posterior_pairwise_stats(z)
-
-    directional_z <- if (direction_available) {
-      direction * z
-    } else {
-      rep(NA_real_, length(z))
-    }
-
-    age_pairwise_rows[[pair_counter]] <- data.frame(
-      from = from,
-      to = to,
-      from_label = time_label_pairwise(from),
-      to_label = time_label_pairwise(to),
-      from_time_value = time_value[from],
-      to_time_value = time_value[to],
-      elapsed = time_value[to] - time_value[from],
-      comparison_group = age_group_labels[["comparison"]],
-      reference_group = age_group_labels[["reference"]],
-      age_threshold = age_threshold,
-      mean = s$mean,
-      median = s$median,
-      sd = s$sd,
-      mad = s$mad,
-      lower = s$lower,
-      upper = s$upper,
-      CrI_width = s$CrI_width,
-      P_change_difference_gt_0 = mean(z > 0),
-      mean_directional_change_difference =
-        if (direction_available) mean(directional_z) else NA_real_,
-      P_comparison_has_better_change =
-        if (direction_available) mean(directional_z > 0) else NA_real_,
-      stringsAsFactors = FALSE
-    )
-
-    pair_counter <- pair_counter + 1L
-  }
-
-  age_pairwise_change <- if (length(age_pairwise_rows) > 0L) {
-    do.call(rbind, age_pairwise_rows)
+  covariate_consecutive_change <- if (nrow(covariate_pairwise_change) > 0L) {
+    covariate_pairwise_change[
+      covariate_pairwise_change$to == covariate_pairwise_change$from + 1L,
+      ,
+      drop = FALSE
+    ]
   } else {
     data.frame()
-  }
-
-  if (nrow(age_pairwise_change) > 0L) {
-    rownames(age_pairwise_change) <- NULL
   }
 
   # ------------------------------------------------------------
@@ -1326,8 +1510,7 @@ mira_summary <- function(
     if (nrow(x) > 0) {
       x$arm_label <- arm_labels[x$arm]
       x$time_value <- time_value[x$time]
-      x$gender_profile <- gender_labels[["reference"]]
-      x$age_group_profile <- age_group_labels[["reference"]]
+      x$covariate_profile <- population_reference_profile
       x <- x[order(x$arm, x$time), ]
     }
     x
@@ -1381,26 +1564,6 @@ mira_summary <- function(
         NA_character_,
         arm_labels[x$arm]
       )
-      x$male <- subject_male[x$subject]
-      x$gender_label <- ifelse(
-        is.na(x$male),
-        NA_character_,
-        ifelse(
-          x$male == 1L,
-          gender_labels[["comparison"]],
-          gender_labels[["reference"]]
-        )
-      )
-      x$age_above_threshold <- subject_age_above_threshold[x$subject]
-      x$age_group_label <- ifelse(
-        is.na(x$age_above_threshold),
-        NA_character_,
-        ifelse(
-          x$age_above_threshold == 1L,
-          age_group_labels[["comparison"]],
-          age_group_labels[["reference"]]
-        )
-      )
       x <- x[order(x$subject, x$time), ]
     }
     x
@@ -1417,8 +1580,7 @@ mira_summary <- function(
   if (nrow(individual_responder) > 0) {
     individual_clinical <- individual_responder[
       , c(
-        "time", "subject", "subject_id", "P_MCID", "time_value", "arm", "arm_label",
-        "male", "gender_label", "age_above_threshold", "age_group_label"
+        "time", "subject", "subject_id", "P_MCID", "time_value", "arm", "arm_label"
       ),
       drop = FALSE
     ]
@@ -1616,9 +1778,7 @@ mira_summary <- function(
     "sigma_slope",
     "rho_subject",
     "arm_baseline_sd",
-    "tau_common",
-    "tau_gender",
-    "tau_age"
+    "tau_common"
   )
 
   heterogeneity_parameters <- heterogeneity_parameters[
@@ -1660,8 +1820,7 @@ mira_summary <- function(
       arm_label = final_change$arm_label,
       final_time = K,
       final_time_value = time_value[K],
-      gender_profile = gender_labels[["reference"]],
-      age_group_profile = age_group_labels[["reference"]],
+      covariate_profile = population_reference_profile,
       final_population_change_mean = final_change$mean,
       P_final_improvement = final_change$P_improvement,
       P_final_responder = final_change$P_responder,
@@ -1933,33 +2092,6 @@ mira_summary <- function(
   # MODEL INFORMATION
   # ============================================================
 
-  gender_counts <- if (all(!is.na(subject_male))) {
-    stats::setNames(
-      c(sum(subject_male == 0L), sum(subject_male == 1L)),
-      c(gender_labels[["reference"]], gender_labels[["comparison"]])
-    )
-  } else {
-    stats::setNames(
-      c(NA_integer_, NA_integer_),
-      c(gender_labels[["reference"]], gender_labels[["comparison"]])
-    )
-  }
-
-  age_group_counts <- if (all(!is.na(subject_age_above_threshold))) {
-    stats::setNames(
-      c(
-        sum(subject_age_above_threshold == 0L),
-        sum(subject_age_above_threshold == 1L)
-      ),
-      c(age_group_labels[["reference"]], age_group_labels[["comparison"]])
-    )
-  } else {
-    stats::setNames(
-      c(NA_integer_, NA_integer_),
-      c(age_group_labels[["reference"]], age_group_labels[["comparison"]])
-    )
-  }
-
   model_information <- list(
     outcome = outcome,
     outcome_name = outcome_name,
@@ -2006,23 +2138,29 @@ mira_summary <- function(
     n_subjects = S,
     n_time_points = K,
     n_arms = G,
+    n_covariates = P,
+    P = P,
     subject_labels = subject_labels,
     arm_labels = arm_labels,
     reference_arm = 1L,
     reference_label = arm_labels[1],
-    gender_labels = gender_labels,
-    gender_reference = gender_labels[["reference"]],
-    gender_comparison = gender_labels[["comparison"]],
-    gender_counts = gender_counts,
-    age_threshold = age_threshold,
-    age_group_labels = age_group_labels,
-    age_reference = age_group_labels[["reference"]],
-    age_comparison = age_group_labels[["comparison"]],
-    age_group_counts = age_group_counts,
-    population_reference_profile = paste0(
-      gender_labels[["reference"]],
-      ", age ",
-      age_group_labels[["reference"]]
+    covariate_names = covariate_names,
+    covariate_original_names = covariate_original_names,
+    covariate_labels = covariate_labels,
+    covariate_types = covariate_types,
+    covariate_reference_levels = covariate_reference_levels,
+    covariate_centers = covariate_centers,
+    covariate_scales = covariate_scales,
+    covariate_map = covariate_map,
+    covariate_metadata = metadata_value("covariate_metadata"),
+    covariates_requested = metadata_value("covariates_requested"),
+    covariates_selected = metadata_value("covariates_selected"),
+    covariate_distributions = covariate_distributions,
+    population_reference_profile = population_reference_profile,
+    covariate_effect_definition = paste0(
+      "Each term is evaluated as a +1 design-matrix-unit change while all ",
+      "other covariates are fixed at X = 0. Natural-scale mean differences ",
+      "are computed at the reference treatment arm."
     ),
     time_value = time_value,
     direction = direction,
@@ -2057,16 +2195,11 @@ mira_summary <- function(
     },
     prior_data = prior_data,
     covariate_prior_structure = list(
-      gender = c(
-        "gender_baseline_prior_sd",
-        "beta_gender_prior_sd",
-        "tau_gender_prior_rate"
-      ),
-      age_threshold = c(
-        "age_baseline_prior_sd",
-        "beta_age_prior_sd",
-        "tau_age_prior_rate"
-      )
+      baseline = "covariate_baseline_prior_sd",
+      linear_time = "beta_covariate_prior_sd",
+      nonlinear_time = "tau_covariate_prior_rate",
+      dimension = P,
+      terms = covariate_names
     ),
     credible_level = credible_level,
     responder_thresholds = responder_thresholds,
@@ -2091,14 +2224,13 @@ mira_summary <- function(
       get_cols("population_percent_change_from_baseline")
     ),
     covariates = c(
-      get_cols("gender_effect"),
-      get_cols("age_threshold_effect"),
-      get_cols("male_vs_female_difference"),
-      get_cols("male_vs_female_change_difference"),
-      get_cols("directional_male_vs_female_change_difference"),
-      get_cols("older_vs_younger_difference"),
-      get_cols("older_vs_younger_change_difference"),
-      get_cols("directional_older_vs_younger_change_difference")
+      get_cols("covariate_baseline_effect"),
+      get_cols("beta_covariate_time"),
+      get_cols("tau_covariate"),
+      get_cols("covariate_effect"),
+      get_cols("covariate_population_mean_difference"),
+      get_cols("covariate_population_mean_change_difference"),
+      get_cols("directional_covariate_population_mean_change_difference")
     ),
     new_subject = c(
       get_cols("new_subject_latent_any_improvement_draw"),
@@ -2129,6 +2261,105 @@ mira_summary <- function(
     )
   )
 
+  tag_covariate_parameter <- function(x, component) {
+    x$component <- rep(component, nrow(x))
+    x
+  }
+  covariate_parameter_summary <- do.call(
+    rbind,
+    list(
+      tag_covariate_parameter(covariate_baseline_summary, "baseline"),
+      tag_covariate_parameter(beta_covariate_summary, "linear_time"),
+      tag_covariate_parameter(tau_covariate_summary, "rw1_scale")
+    )
+  )
+  rownames(covariate_parameter_summary) <- NULL
+
+  add_legacy_group_columns <- function(x) {
+    if (!is.data.frame(x)) return(x)
+    x$comparison_group <- ifelse(
+      is.na(x$level) | !nzchar(x$level), x$label, x$level
+    )
+    x$reference_group <- x$reference_level
+    if ("P_level_difference_gt_0" %in% names(x)) {
+      x$P_comparison_minus_reference_gt_0 <- x$P_level_difference_gt_0
+    }
+    if ("P_directional_change_gt_0" %in% names(x)) {
+      x$P_comparison_has_better_change <- x$P_directional_change_gt_0
+    }
+    x
+  }
+
+  legacy_covariate_alias <- function(index, threshold = NULL) {
+    if (length(index) != 1L) return(NULL)
+    level <- add_legacy_group_columns(
+      covariate_level_difference[
+        covariate_level_difference$covariate == index,
+        ,
+        drop = FALSE
+      ]
+    )
+    from_baseline <- add_legacy_group_columns(
+      covariate_change_difference[
+        covariate_change_difference$covariate == index,
+        ,
+        drop = FALSE
+      ]
+    )
+    directional <- add_legacy_group_columns(
+      covariate_directional_change_difference[
+        covariate_directional_change_difference$covariate == index,
+        ,
+        drop = FALSE
+      ]
+    )
+    pairwise <- add_legacy_group_columns(
+      covariate_pairwise_change[
+        covariate_pairwise_change$covariate == index,
+        ,
+        drop = FALSE
+      ]
+    )
+    family <- list(
+      level = level,
+      change = pairwise,
+      from_baseline = from_baseline,
+      directional_from_baseline = directional,
+      consecutive = if (nrow(pairwise) > 0L) {
+        pairwise[pairwise$to == pairwise$from + 1L, , drop = FALSE]
+      } else {
+        data.frame()
+      }
+    )
+    effects <- list(
+      level_difference = level,
+      change_difference = from_baseline,
+      directional_change_difference = directional
+    )
+    if (!is.null(threshold)) {
+      family$threshold <- threshold
+      effects$threshold <- threshold
+    }
+    list(family = family, effects = effects)
+  }
+
+  normalized_original_names <- tolower(trimws(covariate_map$original_name))
+  has_clean_binary_contrast <- !is.na(covariate_map$level) &
+    nzchar(covariate_map$level) &
+    !is.na(covariate_map$reference_level) &
+    nzchar(covariate_map$reference_level)
+  gender_index <- which(
+    normalized_original_names %in% c("gender", "sex") & has_clean_binary_contrast
+  )
+  age_threshold_index <- which(
+    (
+      grepl("age.*threshold|age_above_threshold", normalized_original_names) |
+        grepl("threshold", tolower(covariate_map$encoding))
+    ) & has_clean_binary_contrast
+  )
+  gender_legacy <- legacy_covariate_alias(gender_index)
+  age_threshold_legacy <- legacy_covariate_alias(age_threshold_index)
+
   # ============================================================
   # RETURN
   # ============================================================
@@ -2157,37 +2388,25 @@ mira_summary <- function(
     change_from_baseline = population_change,
     change_consecutive = population_consecutive_change,
 
-    gender = list(
-      level = gender_level_difference,
-      change = gender_pairwise_change,
-      from_baseline = gender_change_difference,
-      directional_from_baseline = gender_directional_change_difference,
-      consecutive = if (nrow(gender_pairwise_change) > 0L) {
-        gender_pairwise_change[
-          gender_pairwise_change$to == gender_pairwise_change$from + 1L,
-          ,
-          drop = FALSE
-        ]
-      } else {
-        data.frame()
-      }
-    ),
-
-    age = list(
-      threshold = age_threshold,
-      level = age_level_difference,
-      change = age_pairwise_change,
-      from_baseline = age_change_difference,
-      directional_from_baseline = age_directional_change_difference,
-      consecutive = if (nrow(age_pairwise_change) > 0L) {
-        age_pairwise_change[
-          age_pairwise_change$to == age_pairwise_change$from + 1L,
-          ,
-          drop = FALSE
-        ]
-      } else {
-        data.frame()
-      }
+    covariates = list(
+      P = P,
+      names = covariate_names,
+      map = covariate_map,
+      metadata = metadata_value("covariate_metadata"),
+      distributions = covariate_distributions,
+      reference_profile = population_reference_profile,
+      parameters = list(
+        baseline = covariate_baseline_summary,
+        linear_time = beta_covariate_summary,
+        rw1_scale = tau_covariate_summary
+      ),
+      parameter_summary = covariate_parameter_summary,
+      model_scale = covariate_model_effect,
+      level = covariate_level_difference,
+      from_baseline = covariate_change_difference,
+      directional_from_baseline = covariate_directional_change_difference,
+      pairwise_change = covariate_pairwise_change,
+      consecutive_change = covariate_consecutive_change
     ),
 
     treatment = list(
@@ -2199,10 +2418,18 @@ mira_summary <- function(
       ratio_of_ratios = treatment_ratio_of_ratios
     ),
 
-    # Backwards-compatible names retained
+    # Primary generic covariate table and metadata-derived legacy aliases.
     covariate_effects = covariate_effects,
-    gender_effects = covariate_effects$gender,
-    age_threshold_effects = covariate_effects$age_threshold,
+    covariate_parameters = covariate_parameter_summary,
+    covariate_pairwise_change = covariate_pairwise_change,
+    gender = if (!is.null(gender_legacy)) gender_legacy$family else NULL,
+    age = if (!is.null(age_threshold_legacy)) age_threshold_legacy$family else NULL,
+    gender_effects = if (!is.null(gender_legacy)) gender_legacy$effects else NULL,
+    age_threshold_effects = if (!is.null(age_threshold_legacy)) {
+      age_threshold_legacy$effects
+    } else {
+      NULL
+    },
     population_consecutive_change = population_consecutive_change,
     population_slope = data.frame(),
 
@@ -2220,6 +2447,7 @@ mira_summary <- function(
     individual_change = individual_change,
     individual_directional_change = individual_directional_change,
     individual_clinical = individual_clinical,
+    individual_covariates = individual_covariates,
     individual_slope = data.frame(),
 
     # Responders
@@ -2272,7 +2500,8 @@ mira_summary <- function(
 #' @param max_rows Maximum number of rows printed for any one table.
 #' @param trajectories Print adjusted population trajectories by arm.
 #' @param treatment Print treatment effects versus the reference arm.
-#' @param covariates Print time-specific gender and age-threshold contrasts.
+#' @param covariates Print time-specific effects for selected encoded
+#'   covariate terms.
 #' @param responders Print responder summaries.
 #' @param heterogeneity Print random-effect / heterogeneity parameters.
 #' @param ppc Print posterior predictive checks.
@@ -2432,18 +2661,18 @@ print.mira_summary <- function(
     cat("Population reference profile: ", info$population_reference_profile, "\n", sep = "")
   }
 
-  if (!is.null(info$gender_counts)) {
-    cat("Subjects by gender: ")
-    cat(paste0(names(info$gender_counts), "=", info$gender_counts, collapse = " | "), "\n")
-  }
-
-  if (!is.null(info$age_group_counts)) {
-    cat("Subjects by age group: ")
-    cat(paste0(names(info$age_group_counts), "=", info$age_group_counts, collapse = " | "), "\n")
-  }
-
-  if (!is.null(info$age_threshold) && is.finite(info$age_threshold)) {
-    cat("Age threshold: ", fmt_num(info$age_threshold, 1L), "\n", sep = "")
+  if (!is.null(info$n_covariates) && info$n_covariates == 0L) {
+    cat("Selected covariates: none (P = 0).\n")
+  } else if (is.data.frame(info$covariate_map) && nrow(info$covariate_map) > 0L) {
+    cat("Selected encoded covariate terms: ", nrow(info$covariate_map), "\n", sep = "")
+    keep <- intersect(
+      c(
+        "index", "name", "label", "original_name", "type", "encoding",
+        "level", "reference_level", "center", "scale", "unit"
+      ),
+      names(info$covariate_map)
+    )
+    print(info$covariate_map[, keep, drop = FALSE], row.names = FALSE)
   }
 
   if (safe_df(x$mcid)) {
@@ -2509,8 +2738,7 @@ print.mira_summary <- function(
     section("CORE POSTERIOR PARAMETERS")
 
     core_names <- c(
-      "baseline_mean", "beta_time", "gender_baseline_effect", "beta_gender_time",
-      "age_baseline_effect", "beta_age_time", "sigma_intercept", "sigma_slope",
+      "baseline_mean", "beta_time", "sigma_intercept", "sigma_slope",
       "rho_subject", "sigma", "residual_sd", "residual_cv", "nu_value", "mcid"
     )
     core <- x$population[x$population$parameter %in% core_names, , drop = FALSE]
@@ -2637,82 +2865,95 @@ print.mira_summary <- function(
   }
 
   # ------------------------------------------------------------
-  # GENDER AND AGE EFFECTS
+  # SELECTED COVARIATE EFFECTS
   # ------------------------------------------------------------
   if (covariates) {
-    section("GENDER EFFECTS")
+    section("SELECTED COVARIATE EFFECTS")
 
-    ge <- x$gender
-    if (is.null(ge) || !safe_df(ge$level)) {
-      cat("Gender contrasts not available.\n")
+    ce <- x$covariate_effects
+    if (!safe_df(ce)) {
+      if (!is.null(info$P) && info$P == 0L) {
+        cat("No additional covariates were selected (P = 0).\n")
+      } else {
+        cat("Covariate effects are not available.\n")
+      }
     } else {
-      lev <- ge$level
-      g_level_print <- data.frame(
-        Time = lev$time_value,
-        Comparison = paste0(lev$comparison_group, " - ", lev$reference_group),
-        Level_difference = round(lev$mean, digits),
-        CrI_low = round(lev$lower, digits),
-        CrI_high = round(lev$upper, digits),
-        P_level_gt_0 = round(lev$P_comparison_minus_reference_gt_0, 3L),
+      value_or_na <- function(data, name) {
+        if (name %in% names(data)) data[[name]] else rep(NA_real_, nrow(data))
+      }
+      ce_print <- data.frame(
+        Encoded_term = ce$encoded_term,
+        Covariate = ce$original_covariate,
+        Interpretation = ce$effect_interpretation,
+        Time = ce$time_value,
+        Natural_difference = round(ce$mean, digits),
+        CrI_low = round(ce$lower, digits),
+        CrI_high = round(ce$upper, digits),
+        Model_scale_effect = round(value_or_na(ce, "model_scale_mean"), digits),
+        Change_from_baseline = round(
+          value_or_na(ce, "change_from_baseline_mean"), digits
+        ),
+        Directional_change = round(
+          value_or_na(ce, "directional_change_from_baseline_mean"), digits
+        ),
+        P_directional_change_gt_0 = round(
+          value_or_na(ce, "P_directional_change_gt_0"), 3L
+        ),
         check.names = FALSE
       )
-      cat("Adjusted level difference at each time:\n")
-      print(limit_table(g_level_print, "gender level rows"), row.names = FALSE)
-
-      if (safe_df(ge$change)) {
-        gc <- ge$change
-        g_change_print <- data.frame(
-          From = gc$from_label,
-          To = gc$to_label,
-          Change_difference = round(gc$mean, digits),
-          CrI_low = round(gc$lower, digits),
-          CrI_high = round(gc$upper, digits),
-          Directional_difference = round(gc$mean_directional_change_difference, digits),
-          P_change_gt_0 = round(gc$P_change_difference_gt_0, 3L),
-          P_comparison_better = round(gc$P_comparison_has_better_change, 3L),
-          check.names = FALSE
-        )
-        cat("\nAll pairwise gender differences in temporal change:\n")
-        print(limit_table(g_change_print, "pairwise gender-change rows"), row.names = FALSE)
-      }
+      print(limit_table(ce_print, "covariate-effect rows"), row.names = FALSE)
+      cat(
+        "Natural differences compare X[p] = 1 with X[p] = 0 at the reference ",
+        "arm while all other encoded covariates remain zero.\n",
+        sep = ""
+      )
     }
 
-    section("AGE-THRESHOLD EFFECTS")
-
-    ae <- x$age
-    if (is.null(ae) || !safe_df(ae$level)) {
-      cat("Age-threshold contrasts not available.\n")
-    } else {
-      lev <- ae$level
-      a_level_print <- data.frame(
-        Time = lev$time_value,
-        Comparison = paste0(lev$comparison_group, " - ", lev$reference_group),
-        Threshold = lev$age_threshold,
-        Level_difference = round(lev$mean, digits),
-        CrI_low = round(lev$lower, digits),
-        CrI_high = round(lev$upper, digits),
-        P_level_gt_0 = round(lev$P_comparison_minus_reference_gt_0, 3L),
+    cp <- x$covariate_parameters
+    if (safe_df(cp)) {
+      cat("\nCovariate trajectory parameters on the model/link scale:\n")
+      cp_print <- data.frame(
+        Encoded_term = cp$encoded_term,
+        Component = cp$component,
+        Mean = round(cp$mean, digits),
+        SD = round(cp$sd, digits),
+        CrI_low = round(cp$lower, digits),
+        CrI_high = round(cp$upper, digits),
         check.names = FALSE
       )
-      cat("Adjusted level difference at each time:\n")
-      print(limit_table(a_level_print, "age level rows"), row.names = FALSE)
+      print(limit_table(cp_print, "covariate-parameter rows"), row.names = FALSE)
+    }
 
-      if (safe_df(ae$change)) {
-        ac <- ae$change
-        a_change_print <- data.frame(
-          From = ac$from_label,
-          To = ac$to_label,
-          Change_difference = round(ac$mean, digits),
-          CrI_low = round(ac$lower, digits),
-          CrI_high = round(ac$upper, digits),
-          Directional_difference = round(ac$mean_directional_change_difference, digits),
-          P_change_gt_0 = round(ac$P_change_difference_gt_0, 3L),
-          P_comparison_better = round(ac$P_comparison_has_better_change, 3L),
-          check.names = FALSE
-        )
-        cat("\nAll pairwise age-group differences in temporal change:\n")
-        print(limit_table(a_change_print, "pairwise age-change rows"), row.names = FALSE)
-      }
+    cc <- x$covariate_pairwise_change
+    if (safe_df(cc)) {
+      cat("\nAll pairwise changes in covariate effects:\n")
+      cc_print <- data.frame(
+        Encoded_term = cc$encoded_term,
+        From = cc$from_label,
+        To = cc$to_label,
+        Change_difference = round(cc$mean, digits),
+        CrI_low = round(cc$lower, digits),
+        CrI_high = round(cc$upper, digits),
+        Directional_difference = round(
+          cc$mean_directional_change_difference, digits
+        ),
+        P_directional_gt_0 = round(cc$P_directional_change_gt_0, 3L),
+        check.names = FALSE
+      )
+      print(limit_table(cc_print, "pairwise covariate-change rows"), row.names = FALSE)
+    }
+
+    cd <- if (!is.null(x$covariates)) x$covariates$distributions else NULL
+    if (safe_df(cd)) {
+      cat("\nEncoded covariate distributions across subjects:\n")
+      keep <- intersect(
+        c("name", "n", "n_unique", "mean", "sd", "min", "median", "max", "n_zero", "n_one"),
+        names(cd)
+      )
+      cd_print <- cd[, keep, drop = FALSE]
+      numeric_cols <- vapply(cd_print, is.numeric, logical(1L))
+      cd_print[numeric_cols] <- lapply(cd_print[numeric_cols], round, digits = digits)
+      print(limit_table(cd_print, "covariate-distribution rows"), row.names = FALSE)
     }
   }
 
@@ -2896,14 +3137,15 @@ print.mira_summary <- function(
     "$change" = "ALL unique population time-to-time changes for every arm (t0->t1, t0->t2, ...)",
     "$change_from_baseline" = "Population changes restricted to baseline -> each follow-up",
     "$change_consecutive" = "Population changes restricted to consecutive visits",
-    "$gender$level" = "Male - Female adjusted level difference at every time",
-    "$gender$change" = "ALL pairwise Male-vs-Female differences in temporal change",
-    "$gender$from_baseline" = "Male-vs-Female differences in change from baseline",
-    "$gender$consecutive" = "Male-vs-Female differences in consecutive-visit changes",
-    "$age$level" = "Above-threshold - at/below-threshold adjusted level difference at every time",
-    "$age$change" = "ALL pairwise age-group differences in temporal change",
-    "$age$from_baseline" = "Age-group differences in change from baseline",
-    "$age$consecutive" = "Age-group differences in consecutive-visit changes",
+    "$covariate_effects" = "Readable term-by-time natural/model-scale effects and changes from baseline",
+    "$covariate_parameters" = "Baseline, linear-time and RW1-scale parameters for every encoded term",
+    "$covariate_pairwise_change" = "ALL pairwise changes in each encoded covariate effect",
+    "$covariates$map" = "Mapping from encoded terms to original variables, levels, references and scaling",
+    "$covariates$distributions" = "Subject-level distributions of encoded design-matrix columns",
+    "$covariates$model_scale" = "Time-specific +1-design-unit effects on the model/link scale",
+    "$covariates$level" = "Natural-scale +1-design-unit mean differences at each time",
+    "$covariates$from_baseline" = "Covariate differences in change from baseline",
+    "$covariates$directional_from_baseline" = "Clinically oriented covariate differences in change",
     "$treatment$level" = "Treatment - reference adjusted level difference at every time",
     "$treatment$change" = "ALL pairwise treatment-vs-reference differences in temporal change",
     "$treatment$from_baseline" = "Treatment-vs-reference differences in change from baseline",
@@ -2924,12 +3166,6 @@ print.mira_summary <- function(
     "$treatment_effects" = "Primary treatment-versus-reference change contrasts, probabilities of benefit and responder uplift",
     "$treatment_responder_uplift" = "Difference between arms in latent responder probability",
     "$treatment_ratio_of_ratios" = "CMT treatment/reference ratio of temporal ratios",
-    "$gender_effects$level_difference" = "Male - Female adjusted outcome difference at each time",
-    "$gender_effects$change_difference" = "Male - Female difference in change from baseline at each time",
-    "$gender_effects$directional_change_difference" = "Gender difference in clinically oriented change, including posterior probability of better change",
-    "$age_threshold_effects$level_difference" = "Above-threshold - at/below-threshold adjusted outcome difference at each time",
-    "$age_threshold_effects$change_difference" = "Age-group difference in change from baseline at each time",
-    "$age_threshold_effects$directional_change_difference" = "Age-group difference in clinically oriented change",
     "$clinical" = "Final-time population change, probability of improvement and probability of MCID response",
     "$population_clinical$latent_any_improvement" = "Latent probability of any improvement for a new subject",
     "$population_clinical$latent_responder" = "Latent probability of clinically meaningful response for a new subject",
@@ -2937,6 +3173,7 @@ print.mira_summary <- function(
     "$individual_change" = "Subject-specific posterior change from baseline",
     "$individual_directional_change" = "Subject-specific change oriented according to the clinical direction",
     "$individual_clinical" = "Subject-level posterior responder probabilities and responder classifications",
+    "$individual_covariates" = "Subject lookup table containing the active encoded design-matrix values",
     "$responders" = "Existing-subject responder overview by arm and time",
     "$heterogeneity" = "Random-intercept, random-slope, correlation and trajectory-heterogeneity summaries",
     "$ppc" = "Family-specific PPCs, boundary/support checks, visit checks and predictive p-values",
@@ -2948,6 +3185,19 @@ print.mira_summary <- function(
     "$draws" = "Complete posterior draws; use only when a custom posterior calculation is needed"
   )
 
+  if (!is.null(x$gender_effects)) {
+    guide <- c(
+      guide,
+      "$gender_effects" = "Metadata-derived legacy alias for a single binary gender/sex term"
+    )
+  }
+  if (!is.null(x$age_threshold_effects)) {
+    guide <- c(
+      guide,
+      "$age_threshold_effects" = "Metadata-derived legacy alias for an explicit age-threshold term"
+    )
+  }
+
   width <- max(nchar(names(guide)))
   for (nm in names(guide)) {
     cat(sprintf("  %-*s  %s\n", width, nm, unname(guide[[nm]])))
@@ -2957,11 +3207,10 @@ print.mira_summary <- function(
   cat("  names(object)                         list all top-level components\n")
   cat("  object$change                         inspect every population time-to-time change\n")
   cat("  object$treatment$change               inspect every pairwise treatment change contrast\n")
-  cat("  object$gender$change                  inspect every pairwise gender change contrast\n")
-  cat("  object$age$change                     inspect every pairwise age-group change contrast\n")
-  cat("  object$treatment_effects              legacy baseline treatment contrasts\n")
-  cat("  object$gender_effects                 legacy gender estimands (compatibility)\n")
-  cat("  object$age_threshold_effects          legacy age estimands (compatibility)\n")
+  cat("  object$covariate_effects               inspect all term-by-time covariate effects\n")
+  cat("  object$covariates$map                 inspect encoding, references and scaling\n")
+  cat("  object$covariate_pairwise_change       inspect pairwise covariate-effect changes\n")
+  cat("  object$treatment_effects               primary baseline treatment contrasts\n")
   cat("  object$diagnostics$parameters         inspect detailed MCMC diagnostics\n")
   cat("  print(object, max_rows = Inf)         print every row of the report tables\n")
   cat("  print(object, ppc = FALSE)            skip PPC output when a shorter print is desired\n")

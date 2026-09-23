@@ -20,7 +20,9 @@ mira_prepare_data(
   female_label = "Female",
   male_label = "Male",
   age_column = "age",
-  age_threshold = 60
+  age_threshold = 60,
+  covariates = "auto",
+  covariate_reference_levels = NULL
 )
 }
 \arguments{
@@ -69,18 +71,19 @@ is set equal to \code{meaningful_change}.}
 \item{reference_arm}{Value identifying the reference arm. If NULL, the
 first observed arm is used and a warning is emitted.}
 
-\item{gender_column}{Name of the sex/gender column in \code{data}.}
+\item{gender_column, female_label, male_label, age_column, age_threshold}{Deprecated compatibility arguments. They are ignored; gender and age are
+handled through the generic \code{covariates} interface and continuous age is
+never dichotomized automatically.}
 
-\item{female_label}{Value identifying the Female reference category.}
+\item{covariates}{Covariate selection. \code{"auto"} uses every eligible
+subject-level column after excluding identifiers, treatment, longitudinal
+outcomes, time variables, and internal columns. \code{NULL} or \code{character(0)}
+selects no covariates. A character vector selects exactly those columns.}
 
-\item{male_label}{Value identifying the Male category. The Stan model
-estimates the Male - Female difference at each measurement occasion.}
-
-\item{age_column}{Name of the age column in \code{data}.}
-
-\item{age_threshold}{Numeric age threshold used to define two groups.
-Subjects with age > \code{age_threshold} are coded as the older group;
-subjects with age <= \code{age_threshold} are the reference group.}
+\item{covariate_reference_levels}{Optional uniquely named list or vector of
+reference levels for active factor, character, or logical covariates.
+Factors otherwise use their first observed declared level, characters use
+their first level in lexical order, and logical variables use \code{FALSE}.}
 }
 \value{
 A named list containing the variables required by Stan plus

@@ -7,12 +7,9 @@
   "beta_treatment_prior_sd",
   "tau_treatment_prior_rate",
   "arm_baseline_sd_prior_rate",
-  "gender_baseline_prior_sd",
-  "beta_gender_prior_sd",
-  "tau_gender_prior_rate",
-  "age_baseline_prior_sd",
-  "beta_age_prior_sd",
-  "tau_age_prior_rate",
+  "covariate_baseline_prior_sd",
+  "beta_covariate_prior_sd",
+  "tau_covariate_prior_rate",
   "sigma_intercept_prior_rate",
   "sigma_slope_prior_rate",
   "sigma_prior_rate",
@@ -30,12 +27,9 @@
   "beta_treatment_sd",
   "tau_treatment_rate",
   "arm_baseline_sd_rate",
-  "gender_baseline_sd",
-  "beta_gender_sd",
-  "tau_gender_rate",
-  "age_baseline_sd",
-  "beta_age_sd",
-  "tau_age_rate",
+  "covariate_baseline_sd",
+  "beta_covariate_sd",
+  "tau_covariate_rate",
   "sigma_intercept_rate",
   "sigma_slope_rate",
   "sigma_rate",
@@ -47,6 +41,29 @@
 .mira_prior_field_map <- stats::setNames(
   .mira_prior_user_fields,
   .mira_prior_fields
+)
+
+
+.mira_covariate_prior_fields <- c(
+  "covariate_baseline_prior_sd",
+  "beta_covariate_prior_sd",
+  "tau_covariate_prior_rate"
+)
+
+
+.mira_covariate_prior_user_fields <- c(
+  "covariate_baseline_sd",
+  "beta_covariate_sd",
+  "tau_covariate_rate"
+)
+
+
+.mira_legacy_covariate_prior_fields <- c(
+  "gender_baseline_sd", "beta_gender_sd", "tau_gender_rate",
+  "age_baseline_sd", "beta_age_sd", "tau_age_rate",
+  "gender_baseline_prior_sd", "beta_gender_prior_sd",
+  "tau_gender_prior_rate", "age_baseline_prior_sd",
+  "beta_age_prior_sd", "tau_age_prior_rate"
 )
 
 
@@ -152,18 +169,15 @@
     "baseline_sd",
     "beta_time_sd",
     "beta_treatment_sd",
-    "gender_baseline_sd",
-    "beta_gender_sd",
-    "age_baseline_sd",
-    "beta_age_sd"
+    "covariate_baseline_sd",
+    "beta_covariate_sd"
   )
 
   exponential_rate_fields <- c(
     "tau_common_rate",
     "tau_treatment_rate",
     "arm_baseline_sd_rate",
-    "tau_gender_rate",
-    "tau_age_rate",
+    "tau_covariate_rate",
     "sigma_intercept_rate",
     "sigma_slope_rate",
     "sigma_rate"
@@ -194,7 +208,9 @@
 
 
 .mira_normalize_custom_prior <- function(custom_prior) {
-  if (is.null(custom_prior)) return(list())
+  if (is.null(custom_prior)) {
+    return(list(global = list(), covariates = list()))
+  }
 
   if (!is.list(custom_prior) ||
       is.null(names(custom_prior)) ||
@@ -205,6 +221,31 @@
       "`custom_prior` must be a named list with unique, non-empty names.",
       call. = FALSE
     )
+  }
+
+  covariate_overrides <- custom_prior$covariates
+  custom_prior$covariates <- NULL
+  if (is.null(covariate_overrides)) covariate_overrides <- list()
+  if (!is.list(covariate_overrides) ||
+      (length(covariate_overrides) > 0L &&
+       (is.null(names(covariate_overrides)) ||
+        anyNA(names(covariate_overrides)) ||
+        any(!nzchar(names(covariate_overrides))) ||
+        anyDuplicated(names(covariate_overrides))))) {
+    stop(
+      "`custom_prior$covariates` must be a uniquely named list.",
+      call. = FALSE
+    )
+  }
+
+  legacy_names <- intersect(names(custom_prior), .mira_legacy_covariate_prior_fields)
+  if (length(legacy_names) > 0L) {
+    warning(
+      "Deprecated gender/age-specific custom prior fields are ignored: ",
+      paste(legacy_names, collapse = ", "), ". Use generic covariate priors.",
+      call. = FALSE
+    )
+    custom_prior[legacy_names] <- NULL
   }
 
   normalized_names <- names(custom_prior)
@@ -231,7 +272,137 @@
   }
 
   names(custom_prior) <- normalized_names
-  custom_prior
+  list(global = custom_prior, covariates = covariate_overrides)
+}
+
+
+.mira_expand_covariate_prior <- function(value, field, P, covariate_names) {
+  if (!is.numeric(value) || any(!is.finite(value)) || any(value <= 0)) {
+    stop("`", field, "` must contain positive finite numeric values.", call. = FALSE)
+  }
+
+  if (P == 0L) {
+    if (!(length(value) %in% c(0L, 1L))) {
+      stop("`", field, "` must have length 0 or 1 when P = 0.", call. = FALSE)
+    }
+    return(stats::setNames(numeric(0), character(0)))
+  }
+
+  if (length(value) == 1L) {
+    return(stats::setNames(rep(as.numeric(value), P), covariate_names))
+  }
+  if (length(value) != P) {
+    stop(
+      "`", field, "` must have length 1 or P (", P, ").",
+      call. = FALSE
+    )
+  }
+
+  if (!is.null(names(value))) {
+    if (anyNA(names(value)) || any(!nzchar(names(value))) ||
+        anyDuplicated(names(value)) ||
+        !setequal(names(value), covariate_names)) {
+      stop(
+        "Named `", field, "` values must use each encoded covariate name exactly once.",
+        call. = FALSE
+      )
+    }
+    value <- value[covariate_names]
+  }
+
+  stats::setNames(as.numeric(value), covariate_names)
+}
+
+
+.mira_apply_covariate_overrides <- function(values, overrides, covariate_map) {
+  if (length(overrides) == 0L) {
+    return(list(values = values, customized = character(0)))
+  }
+
+  allowed <- c(
+    baseline_sd = "covariate_baseline_sd",
+    covariate_baseline_sd = "covariate_baseline_sd",
+    covariate_baseline_prior_sd = "covariate_baseline_sd",
+    beta_time_sd = "beta_covariate_sd",
+    beta_sd = "beta_covariate_sd",
+    beta_covariate_sd = "beta_covariate_sd",
+    beta_covariate_prior_sd = "beta_covariate_sd",
+    tau_rate = "tau_covariate_rate",
+    tau_covariate_rate = "tau_covariate_rate",
+    tau_covariate_prior_rate = "tau_covariate_rate"
+  )
+  customized <- character(0)
+
+  for (key in names(overrides)) {
+    term_match <- which(covariate_map$name == key)
+    variable_match <- which(covariate_map$original_name == key)
+    if (length(term_match) > 0L && length(variable_match) > 0L &&
+        !identical(term_match, variable_match)) {
+      stop(
+        "Ambiguous covariate prior key `", key,
+        "`: it matches both an original variable and a different encoded term.",
+        call. = FALSE
+      )
+    }
+    index <- unique(c(term_match, variable_match))
+    if (length(index) == 0L) {
+      stop(
+        "Unknown covariate prior key `", key, "`. Use an original variable ",
+        "name or an encoded name from `stan_data$covariate_names`.",
+        call. = FALSE
+      )
+    }
+
+    specification <- overrides[[key]]
+    if (is.atomic(specification) && !is.list(specification)) {
+      specification <- as.list(specification)
+    }
+    if (!is.list(specification) || is.null(names(specification)) ||
+        anyNA(names(specification)) || any(!nzchar(names(specification))) ||
+        anyDuplicated(names(specification))) {
+      stop(
+        "`custom_prior$covariates$", key,
+        "` must be a uniquely named list or numeric vector.",
+        call. = FALSE
+      )
+    }
+
+    unknown <- setdiff(names(specification), names(allowed))
+    if (length(unknown) > 0L) {
+      stop(
+        "Unknown fields for covariate `", key, "`: ",
+        paste(unknown, collapse = ", "), ".",
+        call. = FALSE
+      )
+    }
+    normalized <- unname(allowed[names(specification)])
+    if (anyDuplicated(normalized)) {
+      stop(
+        "`custom_prior$covariates$", key,
+        "` specifies the same prior component more than once.",
+        call. = FALSE
+      )
+    }
+
+    for (j in seq_along(specification)) {
+      value <- specification[[j]]
+      if (length(value) != 1L || !is.numeric(value) ||
+          !is.finite(value) || value <= 0) {
+        stop(
+          "Covariate-specific prior `", names(specification)[j],
+          "` for `", key, "` must be one positive finite number.",
+          call. = FALSE
+        )
+      }
+      values[[normalized[j]]][index] <- as.numeric(value)
+      customized <- c(
+        customized,
+        paste0("covariates$", key, "$", names(specification)[j])
+      )
+    }
+  }
+
+  list(values = values, customized = unique(customized))
 }
 
 
@@ -241,7 +412,7 @@
 #' BCVA can use weak, standard, informative, or custom priors, and the same is
 #' true for CMT. Prior locations and scales are expressed on the active link
 #' scale: identity for Gaussian/Student-t and log for log-normal. The returned
-#' object contains exactly the 19 prior fields used by Stan, plus R-side
+#' object contains exactly the 16 prior fields used by Stan, plus R-side
 #' metadata. Student-t degrees-of-freedom priors are inactive for the other
 #' likelihoods.
 #'
@@ -268,8 +439,12 @@
 #'   unit.
 #' @param custom_prior Optional named list of replacements. It may use the
 #'   short argument names, such as `baseline_mean`, or the exact Stan names,
-#'   such as `baseline_prior_mean`. Unspecified fields inherit the selected
-#'   outcome's standard prior.
+#'   such as `baseline_prior_mean`. Per-covariate overrides can be supplied as
+#'   `custom_prior$covariates$<name>`, where `<name>` is an original variable
+#'   or encoded-term name and fields include `baseline_sd`, `beta_time_sd`,
+#'   and `tau_rate`. An original categorical variable name applies to all of
+#'   its encoded columns. Unspecified fields inherit the selected outcome's
+#'   standard prior.
 #' @param profile Optional legacy profile. Supported for compatibility with
 #'   existing code: `"auto"`, `"bcva"`, `"cmt"`, `"default"`, `"weak"`,
 #'   `"regularized"`, `"informative"`, and `"custom"`.
@@ -281,12 +456,13 @@
 #' @param beta_treatment_sd Prior SD for treatment slope differences.
 #' @param tau_treatment_rate Exponential rate for treatment RW1 scales.
 #' @param arm_baseline_sd_rate Exponential rate for baseline arm imbalance SD.
-#' @param gender_baseline_sd Prior SD for the gender baseline difference.
-#' @param beta_gender_sd Prior SD for the gender slope difference.
-#' @param tau_gender_rate Exponential rate for the gender RW1 scale.
-#' @param age_baseline_sd Prior SD for the age-group baseline difference.
-#' @param beta_age_sd Prior SD for the age-group slope difference.
-#' @param tau_age_rate Exponential rate for the age-group RW1 scale.
+#' @param gender_baseline_sd,beta_gender_sd,tau_gender_rate Deprecated
+#'   gender-specific compatibility arguments. They are ignored; use the
+#'   generic covariate arguments or named overrides in
+#'   `custom_prior$covariates`.
+#' @param age_baseline_sd,beta_age_sd,tau_age_rate Deprecated age-specific
+#'   compatibility arguments. They are ignored; use the generic covariate
+#'   arguments or named overrides in `custom_prior$covariates`.
 #' @param sigma_intercept_rate Exponential rate for random-intercept SD.
 #' @param sigma_slope_rate Exponential rate for random-slope SD.
 #' @param sigma_rate Exponential rate for the residual scale (natural-scale SD
@@ -295,6 +471,13 @@
 #'   inactive for Gaussian and log-normal models.
 #' @param nu_rate Rate of the Gamma prior for Student-t degrees of freedom;
 #'   inactive for Gaussian and log-normal models.
+#' @param covariate_baseline_sd Shared scalar or length-`P` vector of prior SDs
+#'   for encoded covariate effects at baseline. A named vector is matched to
+#'   `stan_data$covariate_names`.
+#' @param beta_covariate_sd Shared scalar or length-`P` vector of prior SDs for
+#'   the linear time component of each encoded covariate effect.
+#' @param tau_covariate_rate Shared scalar or length-`P` vector of Exponential
+#'   rates for covariate-specific RW1 scales.
 #'
 #' @return An object of class `mira_prior`.
 #'
@@ -325,17 +508,40 @@ mira_prior <- function(
     sigma_slope_rate = NULL,
     sigma_rate = NULL,
     nu_shape = NULL,
-    nu_rate = NULL
+    nu_rate = NULL,
+    covariate_baseline_sd = NULL,
+    beta_covariate_sd = NULL,
+    tau_covariate_rate = NULL
 ) {
 
   outcome_was_missing <- missing(outcome)
   informativeness_was_missing <- missing(informativeness)
 
+  legacy_supplied <- c(
+    gender_baseline_sd = !missing(gender_baseline_sd),
+    beta_gender_sd = !missing(beta_gender_sd),
+    tau_gender_rate = !missing(tau_gender_rate),
+    age_baseline_sd = !missing(age_baseline_sd),
+    beta_age_sd = !missing(beta_age_sd),
+    tau_age_rate = !missing(tau_age_rate)
+  )
+  if (any(legacy_supplied)) {
+    warning(
+      "Deprecated gender/age-specific prior arguments are ignored. Use ",
+      "`covariate_baseline_sd`, `beta_covariate_sd`, ",
+      "`tau_covariate_rate`, or `custom_prior$covariates`.",
+      call. = FALSE
+    )
+  }
+
   if (!is.list(stan_data)) {
     stop("`stan_data` must be a list.", call. = FALSE)
   }
 
-  required_data <- c("y", "time", "time_value", "mean_y", "sd_y")
+  required_data <- c(
+    "y", "time", "time_value", "mean_y", "sd_y", "S", "P", "X",
+    "covariate_names", "covariate_map"
+  )
   missing_data <- setdiff(required_data, names(stan_data))
 
   if (length(missing_data) > 0L) {
@@ -351,6 +557,11 @@ mira_prior <- function(
   time_value <- stan_data$time_value
   mean_y <- stan_data$mean_y
   sd_y <- stan_data$sd_y
+  S <- stan_data$S
+  P <- stan_data$P
+  X <- stan_data$X
+  covariate_names <- stan_data$covariate_names
+  covariate_map <- stan_data$covariate_map
 
   if (!is.numeric(y) || length(y) < 1L || any(!is.finite(y))) {
     stop("`stan_data$y` must contain finite numeric values.", call. = FALSE)
@@ -387,6 +598,43 @@ mira_prior <- function(
       sd_y <= 0) {
     stop("`stan_data$sd_y` must be one positive finite numeric value.",
          call. = FALSE)
+  }
+
+  if (length(S) != 1L || !is.numeric(S) || !is.finite(S) ||
+      S != floor(S) || S < 1L) {
+    stop("`stan_data$S` must be one positive integer.", call. = FALSE)
+  }
+  S <- as.integer(S)
+
+  if (length(P) != 1L || !is.numeric(P) || !is.finite(P) ||
+      P != floor(P) || P < 0L) {
+    stop("`stan_data$P` must be one non-negative integer.", call. = FALSE)
+  }
+  P <- as.integer(P)
+
+  if (!is.matrix(X) || !is.numeric(X) ||
+      !identical(dim(X), c(S, P)) || any(!is.finite(X))) {
+    stop("`stan_data$X` must be a finite numeric S by P matrix.", call. = FALSE)
+  }
+  if (!is.character(covariate_names) || length(covariate_names) != P ||
+      anyNA(covariate_names) || any(!nzchar(covariate_names)) ||
+      anyDuplicated(covariate_names)) {
+    stop(
+      "`stan_data$covariate_names` must contain P unique non-empty names.",
+      call. = FALSE
+    )
+  }
+  required_map_fields <- c(
+    "index", "name", "original_name", "type", "encoding"
+  )
+  if (!is.data.frame(covariate_map) || nrow(covariate_map) != P ||
+      !all(required_map_fields %in% names(covariate_map)) ||
+      !identical(as.character(covariate_map$name), covariate_names) ||
+      !identical(as.integer(covariate_map$index), seq_len(P))) {
+    stop(
+      "`stan_data$covariate_map` must contain one coherent row per encoded covariate.",
+      call. = FALSE
+    )
   }
 
   legacy_profile <- NULL
@@ -561,12 +809,9 @@ mira_prior <- function(
       beta_treatment_sd = 0.5 * slope_unit,
       tau_treatment_rate = 1 / (1.0 * rw_unit),
       arm_baseline_sd_rate = 1 / 4,
-      gender_baseline_sd = 3,
-      beta_gender_sd = 0.25 * slope_unit,
-      tau_gender_rate = 1 / (1.0 * rw_unit),
-      age_baseline_sd = 5,
-      beta_age_sd = 0.25 * slope_unit,
-      tau_age_rate = 1 / (1.0 * rw_unit),
+      covariate_baseline_sd = 5,
+      beta_covariate_sd = 0.25 * slope_unit,
+      tau_covariate_rate = 1 / (1.0 * rw_unit),
       sigma_intercept_rate = 1 / 10,
       sigma_slope_rate = 1 / (0.6 * slope_unit),
       sigma_rate = 1 / 3,
@@ -585,12 +830,9 @@ mira_prior <- function(
       beta_treatment_sd = 0.03 * slope_unit,
       tau_treatment_rate = 1 / (0.06 * rw_unit),
       arm_baseline_sd_rate = 1 / 0.10,
-      gender_baseline_sd = 0.10,
-      beta_gender_sd = 0.015 * slope_unit,
-      tau_gender_rate = 1 / (0.05 * rw_unit),
-      age_baseline_sd = 0.12,
-      beta_age_sd = 0.015 * slope_unit,
-      tau_age_rate = 1 / (0.05 * rw_unit),
+      covariate_baseline_sd = 0.12,
+      beta_covariate_sd = 0.015 * slope_unit,
+      tau_covariate_rate = 1 / (0.05 * rw_unit),
       sigma_intercept_rate = 1 / 0.25,
       sigma_slope_rate = 1 / (0.03 * slope_unit),
       sigma_rate = 1 / 0.20,
@@ -608,12 +850,9 @@ mira_prior <- function(
       beta_treatment_sd = 6 * slope_unit,
       tau_treatment_rate = 1 / (15 * rw_unit),
       arm_baseline_sd_rate = 1 / 30,
-      gender_baseline_sd = 25,
-      beta_gender_sd = 3 * slope_unit,
-      tau_gender_rate = 1 / (15 * rw_unit),
-      age_baseline_sd = 30,
-      beta_age_sd = 3 * slope_unit,
-      tau_age_rate = 1 / (15 * rw_unit),
+      covariate_baseline_sd = 30,
+      beta_covariate_sd = 3 * slope_unit,
+      tau_covariate_rate = 1 / (15 * rw_unit),
       sigma_intercept_rate = 1 / 60,
       sigma_slope_rate = 1 / (6 * slope_unit),
       sigma_rate = 1 / 25,
@@ -630,12 +869,9 @@ mira_prior <- function(
       beta_treatment_sd = 2 * slope_scale,
       tau_treatment_rate = 1 / rw_scale,
       arm_baseline_sd_rate = 1 / outcome_scale,
-      gender_baseline_sd = 2 * outcome_scale,
-      beta_gender_sd = 2 * slope_scale,
-      tau_gender_rate = 1 / rw_scale,
-      age_baseline_sd = 2 * outcome_scale,
-      beta_age_sd = 2 * slope_scale,
-      tau_age_rate = 1 / rw_scale,
+      covariate_baseline_sd = 2 * outcome_scale,
+      beta_covariate_sd = 2 * slope_scale,
+      tau_covariate_rate = 1 / rw_scale,
       sigma_intercept_rate = 1 / outcome_scale,
       sigma_slope_rate = 1 / slope_scale,
       sigma_rate = 1 / outcome_scale,
@@ -646,10 +882,30 @@ mira_prior <- function(
 
   values <- .mira_apply_informativeness(values, informativeness)
 
-  custom_values <- .mira_normalize_custom_prior(custom_prior)
-  for (name in names(custom_values)) {
-    values[[name]] <- custom_values[[name]]
+  for (name in .mira_covariate_prior_user_fields) {
+    values[[name]] <- .mira_expand_covariate_prior(
+      values[[name]], name, P, covariate_names
+    )
   }
+
+  custom_specification <- .mira_normalize_custom_prior(custom_prior)
+  custom_values <- custom_specification$global
+  for (name in names(custom_values)) {
+    if (name %in% .mira_covariate_prior_user_fields) {
+      values[[name]] <- .mira_expand_covariate_prior(
+        custom_values[[name]], name, P, covariate_names
+      )
+    } else {
+      values[[name]] <- custom_values[[name]]
+    }
+  }
+
+  named_custom <- .mira_apply_covariate_overrides(
+    values,
+    custom_specification$covariates,
+    covariate_map
+  )
+  values <- named_custom$values
 
   direct_overrides <- list(
     baseline_mean = baseline_mean,
@@ -660,17 +916,14 @@ mira_prior <- function(
     beta_treatment_sd = beta_treatment_sd,
     tau_treatment_rate = tau_treatment_rate,
     arm_baseline_sd_rate = arm_baseline_sd_rate,
-    gender_baseline_sd = gender_baseline_sd,
-    beta_gender_sd = beta_gender_sd,
-    tau_gender_rate = tau_gender_rate,
-    age_baseline_sd = age_baseline_sd,
-    beta_age_sd = beta_age_sd,
-    tau_age_rate = tau_age_rate,
     sigma_intercept_rate = sigma_intercept_rate,
     sigma_slope_rate = sigma_slope_rate,
     sigma_rate = sigma_rate,
     nu_shape = nu_shape,
-    nu_rate = nu_rate
+    nu_rate = nu_rate,
+    covariate_baseline_sd = covariate_baseline_sd,
+    beta_covariate_sd = beta_covariate_sd,
+    tau_covariate_rate = tau_covariate_rate
   )
 
   direct_names <- names(direct_overrides)[
@@ -678,10 +931,18 @@ mira_prior <- function(
   ]
 
   for (name in direct_names) {
-    values[[name]] <- direct_overrides[[name]]
+    if (name %in% .mira_covariate_prior_user_fields) {
+      values[[name]] <- .mira_expand_covariate_prior(
+        direct_overrides[[name]], name, P, covariate_names
+      )
+    } else {
+      values[[name]] <- direct_overrides[[name]]
+    }
   }
 
-  customized_fields <- unique(c(names(custom_values), direct_names))
+  customized_fields <- unique(c(
+    names(custom_values), named_custom$customized, direct_names
+  ))
   if (informativeness == "custom" && length(customized_fields) == 0L) {
     stop(
       "With `informativeness = 'custom'`, supply `custom_prior` or at least one explicit prior argument.",
@@ -690,7 +951,10 @@ mira_prior <- function(
   }
 
   finite_names <- c("baseline_mean", "beta_time_mean")
-  positive_names <- setdiff(.mira_prior_user_fields, finite_names)
+  positive_names <- setdiff(
+    .mira_prior_user_fields,
+    c(finite_names, .mira_covariate_prior_user_fields)
+  )
 
   for (name in finite_names) {
     value <- values[[name]]
@@ -712,6 +976,12 @@ mira_prior <- function(
     }
   }
 
+  for (name in .mira_covariate_prior_user_fields) {
+    values[[name]] <- .mira_expand_covariate_prior(
+      values[[name]], name, P, covariate_names
+    )
+  }
+
   prior <- list(
     baseline_prior_mean = as.numeric(values$baseline_mean),
     baseline_prior_sd = as.numeric(values$baseline_sd),
@@ -721,12 +991,15 @@ mira_prior <- function(
     beta_treatment_prior_sd = as.numeric(values$beta_treatment_sd),
     tau_treatment_prior_rate = as.numeric(values$tau_treatment_rate),
     arm_baseline_sd_prior_rate = as.numeric(values$arm_baseline_sd_rate),
-    gender_baseline_prior_sd = as.numeric(values$gender_baseline_sd),
-    beta_gender_prior_sd = as.numeric(values$beta_gender_sd),
-    tau_gender_prior_rate = as.numeric(values$tau_gender_rate),
-    age_baseline_prior_sd = as.numeric(values$age_baseline_sd),
-    beta_age_prior_sd = as.numeric(values$beta_age_sd),
-    tau_age_prior_rate = as.numeric(values$tau_age_rate),
+    covariate_baseline_prior_sd = stats::setNames(
+      as.numeric(values$covariate_baseline_sd), covariate_names
+    ),
+    beta_covariate_prior_sd = stats::setNames(
+      as.numeric(values$beta_covariate_sd), covariate_names
+    ),
+    tau_covariate_prior_rate = stats::setNames(
+      as.numeric(values$tau_covariate_rate), covariate_names
+    ),
     sigma_intercept_prior_rate = as.numeric(values$sigma_intercept_rate),
     sigma_slope_prior_rate = as.numeric(values$sigma_slope_rate),
     sigma_prior_rate = as.numeric(values$sigma_rate),
@@ -741,6 +1014,17 @@ mira_prior <- function(
     modeling_scale = if (resolved_likelihood == "lognormal") "log" else "identity",
     informativeness = informativeness,
     time_unit = time_unit,
+    P = P,
+    covariate_names = covariate_names,
+    covariate_map = covariate_map,
+    covariate_prior_table = data.frame(
+      name = covariate_names,
+      original_name = as.character(covariate_map$original_name),
+      baseline_sd = as.numeric(values$covariate_baseline_sd),
+      beta_time_sd = as.numeric(values$beta_covariate_sd),
+      tau_rate = as.numeric(values$tau_covariate_rate),
+      stringsAsFactors = FALSE
+    ),
     customized_fields = customized_fields,
     legacy_profile = legacy_profile,
     reference_scales = list(
@@ -848,7 +1132,10 @@ mira_validate_prior <- function(prior) {
   }
 
   finite_fields <- c("baseline_prior_mean", "beta_time_prior_mean")
-  positive_fields <- setdiff(.mira_prior_fields, finite_fields)
+  positive_fields <- setdiff(
+    .mira_prior_fields,
+    c(finite_fields, .mira_covariate_prior_fields)
+  )
 
   for (name in finite_fields) {
     value <- prior[[name]]
@@ -874,6 +1161,57 @@ mira_validate_prior <- function(prior) {
     }
   }
 
+  vector_lengths <- vapply(
+    prior[.mira_covariate_prior_fields], length, integer(1L)
+  )
+  if (length(unique(vector_lengths)) != 1L) {
+    stop(
+      "The three generic covariate prior vectors must have the same length.",
+      call. = FALSE
+    )
+  }
+  inferred_P <- unname(vector_lengths[[1L]])
+  if (!is.null(prior$P)) {
+    if (length(prior$P) != 1L || !is.numeric(prior$P) ||
+        !is.finite(prior$P) || prior$P != floor(prior$P) || prior$P < 0L) {
+      stop("Invalid prior metadata `P`.", call. = FALSE)
+    }
+    if (as.integer(prior$P) != inferred_P) {
+      stop("Prior metadata `P` does not match the covariate prior vectors.", call. = FALSE)
+    }
+  }
+
+  for (name in .mira_covariate_prior_fields) {
+    value <- prior[[name]]
+    if (!is.numeric(value) || length(value) != inferred_P ||
+        any(!is.finite(value)) || any(value <= 0)) {
+      stop(
+        "Invalid prior field `", name,
+        "`: expected P positive finite numbers.",
+        call. = FALSE
+      )
+    }
+  }
+
+  if (!is.null(prior$covariate_names)) {
+    covariate_names <- prior$covariate_names
+    if (!is.character(covariate_names) || length(covariate_names) != inferred_P ||
+        anyNA(covariate_names) || any(!nzchar(covariate_names)) ||
+        anyDuplicated(covariate_names)) {
+      stop("Invalid prior metadata `covariate_names`.", call. = FALSE)
+    }
+    for (name in .mira_covariate_prior_fields) {
+      value_names <- names(prior[[name]])
+      if (!is.null(value_names) && !identical(value_names, covariate_names)) {
+        stop(
+          "Names of prior field `", name,
+          "` do not match `covariate_names`.",
+          call. = FALSE
+        )
+      }
+    }
+  }
+
   invisible(TRUE)
 }
 
@@ -882,12 +1220,18 @@ mira_validate_prior <- function(prior) {
 #'
 #' @param prior A `mira_prior` object or complete named list.
 #'
-#' @return A list containing exactly the 19 prior fields declared in Stan.
+#' @return A list containing exactly the 16 prior fields declared in Stan.
 #'
 #' @export
 mira_prior_stan_data <- function(prior) {
   mira_validate_prior(prior)
-  stan_prior <- lapply(.mira_prior_fields, function(name) prior[[name]])
+  stan_prior <- lapply(.mira_prior_fields, function(name) {
+    if (name %in% .mira_covariate_prior_fields) {
+      as.numeric(prior[[name]])
+    } else {
+      prior[[name]]
+    }
+  })
   names(stan_prior) <- .mira_prior_fields
   stan_prior
 }
@@ -915,6 +1259,12 @@ print.mira_prior <- function(x, ...) {
     cat("Informativeness: ", x$informativeness, "\n", sep = "")
   }
   if (!is.null(x$time_unit)) cat("Time unit: ", x$time_unit, "\n", sep = "")
+  if (!is.null(x$P)) {
+    cat("Encoded covariate terms: ", x$P, "\n", sep = "")
+    if (x$P > 0L && !is.null(x$covariate_names)) {
+      cat("Covariates: ", paste(x$covariate_names, collapse = ", "), "\n", sep = "")
+    }
+  }
   if (!is.null(x$customized_fields) && length(x$customized_fields) > 0L) {
     cat(
       "Customized: ", paste(x$customized_fields, collapse = ", "), "\n",

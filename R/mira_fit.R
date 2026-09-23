@@ -1,20 +1,19 @@
 #' Fit MIRA longitudinal treatment model
 #'
 #' Fits the outcome-adaptive MIRA longitudinal mixed-effects model with
-#' treatment-, gender-, and age-threshold-specific trajectories using CmdStan.
+#' treatment- and user-selected covariate-specific trajectories using CmdStan.
 #' The likelihood and link are selected by [mira_prepare_data()]: censored
 #' Student-t/Gaussian identity models and a positive log-normal/log-link model
 #' share a coherent natural-scale clinical output interface.
 #'
 #' @param stan_data Data prepared for the MIRA Stan model. The list may
-#'   contain additional R-side metadata (for example `mean_y`, `sd_y`, or
-#'   `arm_labels`, gender labels, or the age threshold); only variables required
-#'   by Stan are passed to CmdStan. The current model requires subject-level
-#'   binary indicators `male` (0 = Female reference, 1 = Male) and
-#'   `age_above_threshold` (0 = age <= threshold, 1 = age > threshold).
+#'   contain additional R-side metadata (for example `mean_y`, `sd_y`,
+#'   `arm_labels`, and `covariate_metadata`); only variables required by Stan
+#'   are passed to CmdStan. Subject-level covariates are supplied through `P`
+#'   and the `S` by `P` design matrix `X`. `P = 0` is supported.
 #' @param prior A `mira_prior` object, or a named list containing the Stan
-#'   prior fields required by the selected model, including dedicated priors
-#'   for gender- and age-threshold trajectories. If `NULL`, `mira_prior()`
+#'   prior fields required by the selected model, including prior vectors for
+#'   the active encoded covariate terms. If `NULL`, `mira_prior()`
 #'   automatically selects the outcome and uses standard priors, unless all
 #'   prior fields are already present in `stan_data`. A non-NULL `prior` takes
 #'   precedence over prior fields embedded in `stan_data`.
@@ -48,8 +47,7 @@
 #'   automatically after successful sampling. The fitted CmdStanMCMC object is
 #'   still returned invisibly and can be assigned normally.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
-#'   looks for `inst/stan/gaussian_longitudinal.stan`, then legacy MIRA Stan
-#'   filenames for backwards compatibility.
+#'   looks for `inst/stan/gaussian_longitudinal.stan`.
 #'
 #' @return A CmdStanMCMC object.
 #'
@@ -171,12 +169,11 @@ mira_fit <- function(
   metric <- match.arg(metric)
 
   model_data_names <- c(
-    "N", "S", "K", "G",
+    "N", "S", "K", "G", "P",
     "likelihood_id",
     "has_lower_bound", "outcome_lower_bound",
     "has_upper_bound", "outcome_upper_bound",
-    "y", "subject", "time", "arm",
-    "male", "age_above_threshold", "time_value",
+    "y", "subject", "time", "arm", "X", "time_value",
     "direction",
     "mcid_prior_mean", "mcid_prior_sd",
     "meaningful_between_arm_difference"
@@ -196,7 +193,7 @@ mira_fit <- function(
   # Dimensions and indices
   # ------------------------------------------------------------
 
-  scalar_integer_names <- c("N", "S", "K", "G")
+  scalar_integer_names <- c("N", "S", "K", "G", "P")
 
   for (nm in scalar_integer_names) {
     x <- stan_data[[nm]]
@@ -210,6 +207,7 @@ mira_fit <- function(
   if (stan_data$S < 1) stop("`S` must be >= 1.", call. = FALSE)
   if (stan_data$K < 2) stop("`K` must be >= 2.", call. = FALSE)
   if (stan_data$G < 2) stop("`G` must be >= 2 for the current treatment model.", call. = FALSE)
+  if (stan_data$P < 0) stop("`P` must be >= 0.", call. = FALSE)
 
   if (!is.numeric(stan_data$likelihood_id) ||
       length(stan_data$likelihood_id) != 1L ||
@@ -300,47 +298,130 @@ mira_fit <- function(
   }
 
   # ------------------------------------------------------------
-  # Subject-level gender and age-group indicators
+  # Subject-level covariate design matrix
   # ------------------------------------------------------------
 
-  validate_binary_subject_indicator <- function(x, name) {
-    if (!is.numeric(x) || length(x) != stan_data$S) {
-      stop(
-        "`", name, "` must be a numeric/integer vector of length S.",
-        call. = FALSE
-      )
-    }
-
-    if (any(!is.finite(x)) ||
-        any(x != floor(x)) ||
-        any(!(x %in% c(0, 1)))) {
-      stop(
-        "`", name, "` must contain exactly S binary integer values (0/1).",
-        call. = FALSE
-      )
-    }
+  if (!is.matrix(stan_data$X) || !is.numeric(stan_data$X)) {
+    stop("`X` must be a numeric matrix with dimensions S by P.", call. = FALSE)
   }
 
-  validate_binary_subject_indicator(stan_data$male, "male")
-  validate_binary_subject_indicator(
-    stan_data$age_above_threshold,
-    "age_above_threshold"
+  expected_x_dim <- c(as.integer(stan_data$S), as.integer(stan_data$P))
+  if (!identical(as.integer(dim(stan_data$X)), expected_x_dim)) {
+    stop(
+      "`X` must have dimensions S by P (expected ",
+      expected_x_dim[[1L]], " by ", expected_x_dim[[2L]], "; got ",
+      paste(dim(stan_data$X), collapse = " by "), ").",
+      call. = FALSE
+    )
+  }
+
+  if (any(!is.finite(stan_data$X))) {
+    stop("Every element of `X` must be finite.", call. = FALSE)
+  }
+
+  covariate_names <- if (!is.null(stan_data$covariate_names)) {
+    as.character(stan_data$covariate_names)
+  } else if (!is.null(colnames(stan_data$X))) {
+    as.character(colnames(stan_data$X))
+  } else {
+    paste0("covariate_", seq_len(stan_data$P))
+  }
+
+  if (length(covariate_names) != stan_data$P ||
+      anyNA(covariate_names) || any(!nzchar(covariate_names)) ||
+      anyDuplicated(covariate_names)) {
+    stop(
+      "`covariate_names` must contain exactly P unique, non-missing names.",
+      call. = FALSE
+    )
+  }
+
+  if (!is.null(colnames(stan_data$X)) &&
+      !identical(as.character(colnames(stan_data$X)), covariate_names)) {
+    stop(
+      "Column names of `X` must match `covariate_names` in the same order.",
+      call. = FALSE
+    )
+  }
+
+  metadata_vectors <- c(
+    "covariate_names", "covariate_original_names", "covariate_labels",
+    "covariate_types", "covariate_reference_levels", "covariate_centers",
+    "covariate_scales"
   )
-
-  if (length(unique(stan_data$male)) < 2) {
-    warning(
-      "`male` contains only one observed category; the gender-by-time effect ",
-      "will be weakly/non-identified by these data.",
-      call. = FALSE
-    )
+  for (nm in intersect(metadata_vectors, names(stan_data))) {
+    if (length(stan_data[[nm]]) != stan_data$P) {
+      stop(
+        "`", nm, "` must have exactly P elements.",
+        call. = FALSE
+      )
+    }
   }
 
-  if (length(unique(stan_data$age_above_threshold)) < 2) {
-    warning(
-      "`age_above_threshold` contains only one observed group; the age-group-by-time ",
-      "effect will be weakly/non-identified by these data.",
-      call. = FALSE
+  if (!is.null(stan_data$covariate_centers) &&
+      any(!is.finite(stan_data$covariate_centers))) {
+    stop("Every `covariate_centers` value must be finite.", call. = FALSE)
+  }
+  if (!is.null(stan_data$covariate_scales) &&
+      (any(!is.finite(stan_data$covariate_scales)) ||
+       any(stan_data$covariate_scales <= 0))) {
+    stop("Every `covariate_scales` value must be positive and finite.", call. = FALSE)
+  }
+
+  validate_covariate_table <- function(metadata_terms, label) {
+    if (!is.data.frame(metadata_terms) || nrow(metadata_terms) != stan_data$P) {
+      stop("`", label, "` must be a data frame with exactly P rows.", call. = FALSE)
+    }
+    metadata_name_field <- intersect(
+      c("name", "covariate_name", "encoded_name", "term"),
+      names(metadata_terms)
     )
+    if (length(metadata_name_field) > 0L) {
+      metadata_names <- as.character(metadata_terms[[metadata_name_field[[1L]]]])
+      if (!identical(metadata_names, covariate_names)) {
+        stop(
+          "Covariate names in `", label,
+          "` must match `covariate_names` in order.",
+          call. = FALSE
+        )
+      }
+    }
+    invisible(TRUE)
+  }
+
+  if (!is.null(stan_data$covariate_map)) {
+    validate_covariate_table(stan_data$covariate_map, "covariate_map")
+  }
+
+  if (!is.null(stan_data$covariate_metadata)) {
+    metadata_terms <- stan_data$covariate_metadata
+    if (is.list(metadata_terms) && !is.data.frame(metadata_terms)) {
+      if (!is.null(metadata_terms$columns)) {
+        metadata_terms <- metadata_terms$columns
+      } else if (!is.null(metadata_terms$terms)) {
+        metadata_terms <- metadata_terms$terms
+      }
+    }
+    if (is.data.frame(metadata_terms)) {
+      validate_covariate_table(metadata_terms, "covariate_metadata")
+    }
+  }
+
+  if (stan_data$P > 0L) {
+    constant_covariates <- vapply(
+      seq_len(stan_data$P),
+      function(j) length(unique(stan_data$X[, j])) < 2L,
+      logical(1L)
+    )
+    if (any(constant_covariates)) {
+      warning(
+        "The following active design-matrix columns are constant and their ",
+        "covariate trajectories will be weakly/non-identified: ",
+        paste(covariate_names[constant_covariates], collapse = ", "),
+        ".",
+        call. = FALSE
+      )
+    }
   }
 
   if (!is.numeric(stan_data$time_value) ||
@@ -395,12 +476,9 @@ mira_fit <- function(
     "beta_treatment_prior_sd",
     "tau_treatment_prior_rate",
     "arm_baseline_sd_prior_rate",
-    "gender_baseline_prior_sd",
-    "beta_gender_prior_sd",
-    "tau_gender_prior_rate",
-    "age_baseline_prior_sd",
-    "beta_age_prior_sd",
-    "tau_age_prior_rate",
+    "covariate_baseline_prior_sd",
+    "beta_covariate_prior_sd",
+    "tau_covariate_prior_rate",
     "sigma_intercept_prior_rate",
     "sigma_slope_prior_rate",
     "sigma_prior_rate",
@@ -408,12 +486,78 @@ mira_fit <- function(
     "nu_prior_rate"
   )
 
+  covariate_prior_names <- c(
+    "covariate_baseline_prior_sd",
+    "beta_covariate_prior_sd",
+    "tau_covariate_prior_rate"
+  )
+
+  validate_prior_covariate_identity <- function(
+      prior_values,
+      metadata_names = NULL,
+      source = "prior"
+  ) {
+    named_prior_fields <- lapply(
+      covariate_prior_names,
+      function(name) names(prior_values[[name]])
+    )
+    named_prior_fields <- Filter(Negate(is.null), named_prior_fields)
+    if (length(named_prior_fields) > 1L &&
+        !all(vapply(
+          named_prior_fields[-1L],
+          identical,
+          logical(1L),
+          named_prior_fields[[1L]]
+        ))) {
+      stop(
+        "Names on the generic covariate prior vectors must match in order.",
+        call. = FALSE
+      )
+    }
+
+    prior_covariate_names <- if (!is.null(metadata_names)) {
+      as.character(metadata_names)
+    } else if (length(named_prior_fields) > 0L) {
+      named_prior_fields[[1L]]
+    } else {
+      NULL
+    }
+    if (!is.null(prior_covariate_names) &&
+        !identical(prior_covariate_names, covariate_names)) {
+      stop(
+        "The ", source, " covariate names/order do not match ",
+        "`stan_data$covariate_names`. Rebuild the prior from these data ",
+        "or provide values in the active encoded-term order.",
+        call. = FALSE
+      )
+    }
+    invisible(TRUE)
+  }
+
   embedded_prior_names <- intersect(prior_names, names(stan_data))
 
   # An explicit `prior` argument takes precedence over any embedded fields.
   if (!is.null(prior)) {
 
     mira_validate_prior(prior)
+
+    prior_P <- length(prior$covariate_baseline_prior_sd)
+    if (prior_P != stan_data$P) {
+      stop(
+        "The supplied prior was built for P = ", prior_P,
+        ", but `stan_data` has P = ", stan_data$P, ".",
+        call. = FALSE
+      )
+    }
+
+    # `mira_prior_stan_data()` intentionally removes R-side names before
+    # serialization. Check identity/order first so that a prior built for a
+    # different same-size design matrix cannot silently target the wrong term.
+    validate_prior_covariate_identity(
+      prior,
+      metadata_names = prior$covariate_names,
+      source = "supplied prior"
+    )
 
     if (!is.null(prior$likelihood)) {
       expected_likelihood <- c("student_t", "gaussian", "lognormal")[[
@@ -435,6 +579,10 @@ mira_fit <- function(
   } else if (all(prior_names %in% names(stan_data))) {
 
     stan_prior_data <- stan_data[prior_names]
+    validate_prior_covariate_identity(
+      stan_prior_data,
+      source = "embedded prior"
+    )
     prior_source <- "embedded in stan_data"
 
   } else {
@@ -462,10 +610,11 @@ mira_fit <- function(
 
   if (length(missing_prior) > 0) {
     stop(
-      "The prior specification is not compatible with the new Stan model. ",
+      "The prior specification is not compatible with the MIRA Stan model. ",
       "Missing Stan prior fields: ",
       paste(missing_prior, collapse = ", "),
-      ". Update `mira_prior()` / `mira_prior_stan_data()` so that gender and age priors are included, or pass a complete named prior list.",
+      ". Update `mira_prior()` / `mira_prior_stan_data()` so that generic ",
+      "covariate priors are included, or pass a complete named prior list.",
       call. = FALSE
     )
   }
@@ -480,9 +629,25 @@ mira_fit <- function(
     }
   }
 
-  positive_prior_names <- setdiff(prior_names, finite_prior_names)
+  positive_prior_names <- setdiff(
+    prior_names,
+    c(finite_prior_names, covariate_prior_names)
+  )
   for (nm in positive_prior_names) {
     positive_scalar(stan_prior_data[[nm]], nm)
+  }
+
+  for (nm in covariate_prior_names) {
+    x <- stan_prior_data[[nm]]
+    if (!is.numeric(x) || length(x) != stan_data$P ||
+        any(!is.finite(x)) || any(x <= 0)) {
+      stop(
+        "`", nm, "` must be a positive finite numeric vector of length P ",
+        "(use `numeric(0)` when P = 0).",
+        call. = FALSE
+      )
+    }
+    stan_prior_data[[nm]] <- as.numeric(x)
   }
 
   # Pass only objects declared in the Stan data block. This lets stan_data
@@ -496,16 +661,14 @@ mira_fit <- function(
   sampling_data$S <- as.integer(sampling_data$S)
   sampling_data$K <- as.integer(sampling_data$K)
   sampling_data$G <- as.integer(sampling_data$G)
+  sampling_data$P <- as.integer(sampling_data$P)
   sampling_data$likelihood_id <- as.integer(sampling_data$likelihood_id)
   sampling_data$has_lower_bound <- as.integer(sampling_data$has_lower_bound)
   sampling_data$has_upper_bound <- as.integer(sampling_data$has_upper_bound)
   sampling_data$subject <- as.integer(sampling_data$subject)
   sampling_data$time <- as.integer(sampling_data$time)
   sampling_data$arm <- as.integer(sampling_data$arm)
-  sampling_data$male <- as.integer(sampling_data$male)
-  sampling_data$age_above_threshold <- as.integer(
-    sampling_data$age_above_threshold
-  )
+  storage.mode(sampling_data$X) <- "double"
   sampling_data$direction <- as.integer(sampling_data$direction)
 
   # ------------------------------------------------------------
@@ -514,11 +677,7 @@ mira_fit <- function(
 
   if (is.null(stan_file)) {
 
-    candidates <- c(
-      "gaussian_longitudinal.stan",
-      "gaussian_longitudinal_gender_age.stan",
-      "mira_longitudinal.stan"
-    )
+    candidates <- "gaussian_longitudinal.stan"
 
     candidate_paths <- vapply(
       candidates,
@@ -538,8 +697,7 @@ mira_fit <- function(
     if (length(existing) == 0) {
       stop(
         "Could not find the MIRA Stan model in `inst/stan`. Expected ",
-        "`gaussian_longitudinal.stan` (preferred), ",
-        "`gaussian_longitudinal_gender_age.stan`, or `mira_longitudinal.stan`.",
+        "`gaussian_longitudinal.stan`.",
         call. = FALSE
       )
     }
@@ -630,17 +788,16 @@ mira_fit <- function(
       z_arm_baseline = rep(0, stan_data$G - 1),
       arm_baseline_sd = max(sd_y / 10, scale_floor),
 
-      # Gender-by-time trajectory: Male - Female.
-      gender_baseline_effect = 0,
-      beta_gender_time = 0,
-      z_gender_step = rep(0, stan_data$K - 1),
-      tau_gender = rw_scale,
-
-      # Age-group-by-time trajectory: age > threshold - age <= threshold.
-      age_baseline_effect = 0,
-      beta_age_time = 0,
-      z_age_step = rep(0, stan_data$K - 1),
-      tau_age = rw_scale,
+      # One longitudinal trajectory for each active encoded covariate term.
+      # These expressions deliberately preserve the zero dimensions for P = 0.
+      covariate_baseline_effect = rep(0, stan_data$P),
+      beta_covariate_time = rep(0, stan_data$P),
+      z_covariate_step = matrix(
+        0,
+        nrow = stan_data$P,
+        ncol = stan_data$K - 1
+      ),
+      tau_covariate = rep(rw_scale, stan_data$P),
 
       z_subject = matrix(
         0,
@@ -713,21 +870,76 @@ mira_fit <- function(
     )
   )
 
-  gender_counts <- c(
-    Female = sum(stan_data$male == 0L),
-    Male = sum(stan_data$male == 1L)
-  )
-
-  age_threshold <- if (!is.null(stan_data$age_threshold)) {
-    as.numeric(stan_data$age_threshold)[1]
-  } else {
-    NA_real_
+  covariate_field <- function(name, default) {
+    value <- stan_data[[name]]
+    if (is.null(value) || length(value) != stan_data$P) default else value
   }
 
-  age_counts <- c(
-    at_or_below_threshold = sum(stan_data$age_above_threshold == 0L),
-    above_threshold = sum(stan_data$age_above_threshold == 1L)
+  covariate_map <- stan_data$covariate_map
+  if (!is.data.frame(covariate_map) || nrow(covariate_map) != stan_data$P) {
+    covariate_map <- data.frame(
+      index = seq_len(stan_data$P),
+      name = covariate_names,
+      label = as.character(covariate_field("covariate_labels", covariate_names)),
+      original_name = as.character(covariate_field(
+        "covariate_original_names", covariate_names
+      )),
+      type = as.character(covariate_field(
+        "covariate_types", rep("unspecified", stan_data$P)
+      )),
+      reference_level = as.character(covariate_field(
+        "covariate_reference_levels", rep(NA_character_, stan_data$P)
+      )),
+      center = as.numeric(covariate_field(
+        "covariate_centers", rep(0, stan_data$P)
+      )),
+      scale = as.numeric(covariate_field(
+        "covariate_scales", rep(1, stan_data$P)
+      )),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (!"index" %in% names(covariate_map)) {
+    covariate_map$index <- seq_len(stan_data$P)
+  }
+  if (!"name" %in% names(covariate_map)) {
+    covariate_map$name <- covariate_names
+  }
+
+  covariate_distributions <- data.frame(
+    index = seq_len(stan_data$P),
+    name = covariate_names,
+    n = rep.int(stan_data$S, stan_data$P),
+    n_unique = integer(stan_data$P),
+    mean = numeric(stan_data$P),
+    sd = numeric(stan_data$P),
+    min = numeric(stan_data$P),
+    q25 = numeric(stan_data$P),
+    median = numeric(stan_data$P),
+    q75 = numeric(stan_data$P),
+    max = numeric(stan_data$P),
+    n_zero = integer(stan_data$P),
+    n_one = integer(stan_data$P),
+    stringsAsFactors = FALSE
   )
+
+  if (stan_data$P > 0L) {
+    for (j in seq_len(stan_data$P)) {
+      xj <- as.numeric(stan_data$X[, j])
+      qj <- stats::quantile(xj, c(0.25, 0.50, 0.75), names = FALSE)
+      covariate_distributions$n_unique[j] <- length(unique(xj))
+      covariate_distributions$mean[j] <- mean(xj)
+      covariate_distributions$sd[j] <- stats::sd(xj)
+      covariate_distributions$min[j] <- min(xj)
+      covariate_distributions$q25[j] <- qj[[1L]]
+      covariate_distributions$median[j] <- qj[[2L]]
+      covariate_distributions$q75[j] <- qj[[3L]]
+      covariate_distributions$max[j] <- max(xj)
+      covariate_distributions$n_zero[j] <- sum(xj == 0)
+      covariate_distributions$n_one[j] <- sum(xj == 1)
+    }
+  }
 
   prior_profile <- if (!is.null(prior) && !is.null(prior$profile)) {
     as.character(prior$profile)[1]
@@ -735,6 +947,18 @@ mira_fit <- function(
     "embedded in stan_data"
   } else {
     "named/custom prior list"
+  }
+
+  population_reference_profile <- "X = 0 on the encoded design-matrix scale"
+  if (is.list(stan_data$covariate_metadata) &&
+      is.list(stan_data$covariate_metadata$reference_profile)) {
+    reference_description <-
+      stan_data$covariate_metadata$reference_profile$description
+    if (is.character(reference_description) &&
+        length(reference_description) == 1L &&
+        !is.na(reference_description) && nzchar(reference_description)) {
+      population_reference_profile <- reference_description
+    }
   }
 
   mira_fit_info <- list(
@@ -791,11 +1015,35 @@ mira_fit <- function(
     n_subjects = as.integer(stan_data$S),
     n_time_points = as.integer(stan_data$K),
     n_arms = as.integer(stan_data$G),
+    n_covariates = as.integer(stan_data$P),
+    P = as.integer(stan_data$P),
     arm_labels = arm_labels,
     arm_counts = arm_counts,
-    gender_counts = gender_counts,
-    age_threshold = age_threshold,
-    age_counts = age_counts,
+    covariate_names = covariate_names,
+    covariate_original_names = as.character(covariate_field(
+      "covariate_original_names", covariate_names
+    )),
+    covariate_labels = as.character(covariate_field(
+      "covariate_labels", covariate_names
+    )),
+    covariate_types = as.character(covariate_field(
+      "covariate_types", rep("unspecified", stan_data$P)
+    )),
+    covariate_reference_levels = covariate_field(
+      "covariate_reference_levels", rep(NA_character_, stan_data$P)
+    ),
+    covariate_centers = as.numeric(covariate_field(
+      "covariate_centers", rep(0, stan_data$P)
+    )),
+    covariate_scales = as.numeric(covariate_field(
+      "covariate_scales", rep(1, stan_data$P)
+    )),
+    covariate_map = covariate_map,
+    covariate_metadata = stan_data$covariate_metadata,
+    covariates_requested = stan_data$covariates_requested,
+    covariates_selected = stan_data$covariates_selected,
+    covariate_distributions = covariate_distributions,
+    population_reference_profile = population_reference_profile,
     time_value = as.numeric(stan_data$time_value),
     direction = as.integer(stan_data$direction),
     direction_interpretation = if (stan_data$direction == 1L) {
@@ -969,11 +1217,12 @@ print.mira_fit <- function(
 
   if (!is.null(info$n_subjects)) {
     cat(sprintf(
-      "Subjects: %d | Observations: %d | Timepoints: %d | Arms: %d\n",
+      "Subjects: %d | Observations: %d | Timepoints: %d | Arms: %d | Covariate terms: %d\n",
       info$n_subjects,
       info$n_observations,
       info$n_time_points,
-      info$n_arms
+      info$n_arms,
+      if (!is.null(info$n_covariates)) info$n_covariates else 0L
     ))
   }
 
@@ -1007,20 +1256,19 @@ print.mira_fit <- function(
     print(info$arm_counts)
   }
 
-  if (!is.null(info$gender_counts)) {
-    cat("\nSubjects by gender (Female reference):\n")
-    print(info$gender_counts)
-  }
-
-  if (!is.null(info$age_counts)) {
-    if (!is.null(info$age_threshold) && is.finite(info$age_threshold)) {
-      names(info$age_counts) <- c(
-        paste0("age <= ", info$age_threshold),
-        paste0("age > ", info$age_threshold)
-      )
-    }
-    cat("\nSubjects by age-threshold group:\n")
-    print(info$age_counts)
+  if (!is.null(info$n_covariates) && info$n_covariates == 0L) {
+    cat("Active covariates: none (time-only adjustment profile; P = 0).\n")
+  } else if (is.data.frame(info$covariate_map) && nrow(info$covariate_map) > 0L) {
+    cat("\nActive encoded covariate terms:\n")
+    keep <- intersect(
+      c(
+        "index", "name", "label", "original_name", "type", "encoding",
+        "level", "reference_level", "center", "scale", "unit",
+        "n_reference", "n_comparison"
+      ),
+      names(info$covariate_map)
+    )
+    print(info$covariate_map[, keep, drop = FALSE], row.names = FALSE)
   }
 
   # ============================================================
@@ -1272,12 +1520,9 @@ print.mira_fit <- function(
       "beta_treatment",
       "tau_treatment",
       "arm_baseline_sd",
-      "gender_baseline_effect",
-      "beta_gender_time",
-      "tau_gender",
-      "age_baseline_effect",
-      "beta_age_time",
-      "tau_age",
+      "covariate_baseline_effect",
+      "beta_covariate_time",
+      "tau_covariate",
       "sigma_subject",
       "sigma",
       "nu",
@@ -1292,6 +1537,16 @@ print.mira_fit <- function(
     }
     if (!is.null(info$likelihood) && info$likelihood != "lognormal") {
       core_candidates <- setdiff(core_candidates, "residual_cv")
+    }
+    if (!is.null(info$n_covariates) && info$n_covariates == 0L) {
+      core_candidates <- setdiff(
+        core_candidates,
+        c(
+          "covariate_baseline_effect",
+          "beta_covariate_time",
+          "tau_covariate"
+        )
+      )
     }
 
     available_core <- core_candidates
@@ -1351,7 +1606,7 @@ print.mira_fit <- function(
       "  attr(fit, 'mira_fit_info') MIRA data/sampling metadata attached to this fit\n",
       "\n",
       "  mira_summary(fit, stan_data = stan_data)\n",
-      "      -> treatment, longitudinal change, gender, age, responder and clinical estimands\n",
+      "      -> treatment, longitudinal change, selected-covariate, responder and clinical estimands\n",
       sep = ""
     )
   }

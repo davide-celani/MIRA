@@ -30,7 +30,10 @@ mira_prior(
   sigma_slope_rate = NULL,
   sigma_rate = NULL,
   nu_shape = NULL,
-  nu_rate = NULL
+  nu_rate = NULL,
+  covariate_baseline_sd = NULL,
+  beta_covariate_sd = NULL,
+  tau_covariate_rate = NULL
 )
 }
 \arguments{
@@ -59,8 +62,12 @@ unit.}
 
 \item{custom_prior}{Optional named list of replacements. It may use the
 short argument names, such as \code{baseline_mean}, or the exact Stan names,
-such as \code{baseline_prior_mean}. Unspecified fields inherit the selected
-outcome's standard prior.}
+such as \code{baseline_prior_mean}. Per-covariate overrides can be supplied as
+\verb{custom_prior$covariates$<name>}, where \verb{<name>} is an original variable
+or encoded-term name and fields include \code{baseline_sd}, \code{beta_time_sd},
+and \code{tau_rate}. An original categorical variable name applies to all of
+its encoded columns. Unspecified fields inherit the selected outcome's
+standard prior.}
 
 \item{profile}{Optional legacy profile. Supported for compatibility with
 existing code: \code{"auto"}, \code{"bcva"}, \code{"cmt"}, \code{"default"}, \code{"weak"},
@@ -82,17 +89,14 @@ existing code: \code{"auto"}, \code{"bcva"}, \code{"cmt"}, \code{"default"}, \co
 
 \item{arm_baseline_sd_rate}{Exponential rate for baseline arm imbalance SD.}
 
-\item{gender_baseline_sd}{Prior SD for the gender baseline difference.}
+\item{gender_baseline_sd, beta_gender_sd, tau_gender_rate}{Deprecated
+gender-specific compatibility arguments. They are ignored; use the
+generic covariate arguments or named overrides in
+\code{custom_prior$covariates}.}
 
-\item{beta_gender_sd}{Prior SD for the gender slope difference.}
-
-\item{tau_gender_rate}{Exponential rate for the gender RW1 scale.}
-
-\item{age_baseline_sd}{Prior SD for the age-group baseline difference.}
-
-\item{beta_age_sd}{Prior SD for the age-group slope difference.}
-
-\item{tau_age_rate}{Exponential rate for the age-group RW1 scale.}
+\item{age_baseline_sd, beta_age_sd, tau_age_rate}{Deprecated age-specific
+compatibility arguments. They are ignored; use the generic covariate
+arguments or named overrides in \code{custom_prior$covariates}.}
 
 \item{sigma_intercept_rate}{Exponential rate for random-intercept SD.}
 
@@ -106,6 +110,16 @@ inactive for Gaussian and log-normal models.}
 
 \item{nu_rate}{Rate of the Gamma prior for Student-t degrees of freedom;
 inactive for Gaussian and log-normal models.}
+
+\item{covariate_baseline_sd}{Shared scalar or length-\code{P} vector of prior SDs
+for encoded covariate effects at baseline. A named vector is matched to
+\code{stan_data$covariate_names}.}
+
+\item{beta_covariate_sd}{Shared scalar or length-\code{P} vector of prior SDs for
+the linear time component of each encoded covariate effect.}
+
+\item{tau_covariate_rate}{Shared scalar or length-\code{P} vector of Exponential
+rates for covariate-specific RW1 scales.}
 }
 \value{
 An object of class \code{mira_prior}.
@@ -115,7 +129,7 @@ An object of class \code{mira_prior}.
 BCVA can use weak, standard, informative, or custom priors, and the same is
 true for CMT. Prior locations and scales are expressed on the active link
 scale: identity for Gaussian/Student-t and log for log-normal. The returned
-object contains exactly the 19 prior fields used by Stan, plus R-side
+object contains exactly the 16 prior fields used by Stan, plus R-side
 metadata. Student-t degrees-of-freedom priors are inactive for the other
 likelihoods.
 }

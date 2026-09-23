@@ -169,8 +169,8 @@ data {
   array[N] int<lower=1, upper=S> subject;
   array[N] int<lower=1, upper=K> time;
   array[S] int<lower=1, upper=G> arm;
-  array[S] int<lower=0, upper=1> male;
-  array[S] int<lower=0, upper=1> age_above_threshold;
+  int<lower=0> P;
+  matrix[S, P] X;
   vector[K] time_value;
   int<lower=-1, upper=1> direction;
 
@@ -188,12 +188,9 @@ data {
   real<lower=0> beta_treatment_prior_sd;
   real<lower=0> tau_treatment_prior_rate;
   real<lower=0> arm_baseline_sd_prior_rate;
-  real<lower=0> gender_baseline_prior_sd;
-  real<lower=0> beta_gender_prior_sd;
-  real<lower=0> tau_gender_prior_rate;
-  real<lower=0> age_baseline_prior_sd;
-  real<lower=0> beta_age_prior_sd;
-  real<lower=0> tau_age_prior_rate;
+  vector<lower=0>[P] covariate_baseline_prior_sd;
+  vector<lower=0>[P] beta_covariate_prior_sd;
+  vector<lower=0>[P] tau_covariate_prior_rate;
   real<lower=0> sigma_intercept_prior_rate;
   real<lower=0> sigma_slope_prior_rate;
   real<lower=0> sigma_prior_rate;
@@ -252,17 +249,11 @@ parameters {
   vector[G - 1] z_arm_baseline;
   real<lower=0> arm_baseline_sd;
 
-  // Male - Female trajectory.
-  real gender_baseline_effect;
-  real beta_gender_time;
-  vector[K - 1] z_gender_step;
-  real<lower=0> tau_gender;
-
-  // Age above - age at/below threshold trajectory.
-  real age_baseline_effect;
-  real beta_age_time;
-  vector[K - 1] z_age_step;
-  real<lower=0> tau_age;
+  // One longitudinal trajectory per encoded covariate column.
+  vector[P] covariate_baseline_effect;
+  vector[P] beta_covariate_time;
+  matrix[P, K - 1] z_covariate_step;
+  vector<lower=0>[P] tau_covariate;
 
   // Correlated subject random intercept and slope on the link scale.
   matrix[2, S] z_subject;
@@ -284,8 +275,7 @@ transformed parameters {
   vector[K] mu_reference;
   matrix[G - 1, K] treatment_change;
   vector[G - 1] arm_baseline_offset;
-  vector[K] gender_effect;
-  vector[K] age_threshold_effect;
+  matrix[P, K] covariate_effect;
   matrix[2, S] b_subject;
 
   mu_reference[1] = baseline_mean;
@@ -309,20 +299,17 @@ transformed parameters {
 
   arm_baseline_offset = arm_baseline_sd * z_arm_baseline;
 
-  gender_effect[1] = gender_baseline_effect;
-  for (k in 2:K) {
-    gender_effect[k] =
-      gender_effect[k - 1]
-      + beta_gender_time * dt[k - 1]
-      + tau_gender * sqrt(dt[k - 1]) * z_gender_step[k - 1];
-  }
-
-  age_threshold_effect[1] = age_baseline_effect;
-  for (k in 2:K) {
-    age_threshold_effect[k] =
-      age_threshold_effect[k - 1]
-      + beta_age_time * dt[k - 1]
-      + tau_age * sqrt(dt[k - 1]) * z_age_step[k - 1];
+  if (P > 0) {
+    for (p in 1:P) {
+      covariate_effect[p, 1] = covariate_baseline_effect[p];
+      for (k in 2:K) {
+        covariate_effect[p, k] =
+          covariate_effect[p, k - 1]
+          + beta_covariate_time[p] * dt[k - 1]
+          + tau_covariate[p] * sqrt(dt[k - 1])
+            * z_covariate_step[p, k - 1];
+      }
+    }
   }
 
   b_subject = diag_pre_multiply(sigma_subject, L_subject) * z_subject;
@@ -340,15 +327,12 @@ model {
   z_arm_baseline ~ std_normal();
   arm_baseline_sd ~ exponential(arm_baseline_sd_prior_rate);
 
-  gender_baseline_effect ~ normal(0, gender_baseline_prior_sd);
-  beta_gender_time ~ normal(0, beta_gender_prior_sd);
-  z_gender_step ~ std_normal();
-  tau_gender ~ exponential(tau_gender_prior_rate);
-
-  age_baseline_effect ~ normal(0, age_baseline_prior_sd);
-  beta_age_time ~ normal(0, beta_age_prior_sd);
-  z_age_step ~ std_normal();
-  tau_age ~ exponential(tau_age_prior_rate);
+  if (P > 0) {
+    covariate_baseline_effect ~ normal(0, covariate_baseline_prior_sd);
+    beta_covariate_time ~ normal(0, beta_covariate_prior_sd);
+    to_vector(z_covariate_step) ~ std_normal();
+    tau_covariate ~ exponential(tau_covariate_prior_rate);
+  }
 
   to_vector(z_subject) ~ std_normal();
   sigma_subject[1] ~ exponential(sigma_intercept_prior_rate);
@@ -371,10 +355,11 @@ model {
     if (g > 1)
       eta += arm_baseline_offset[g - 1] + treatment_change[g - 1, k];
 
+    if (P > 0)
+      eta += dot_product(X[s], col(covariate_effect, k));
+
     eta +=
-      male[s] * gender_effect[k]
-      + age_above_threshold[s] * age_threshold_effect[k]
-      + b_subject[1, s]
+      b_subject[1, s]
       + b_subject[2, s] * (time_value[k] - time_value[1]);
 
     if (likelihood_id == 1) {
@@ -417,7 +402,7 @@ generated quantities {
   real residual_sd;
   real residual_cv = 0;
 
-  // Population estimands.
+  // Population estimands at the explicit reference profile X = 0.
   matrix[G, K] population_model_location;
   matrix[G, K] population_median;
   matrix[G, K] population_mean;
@@ -427,12 +412,11 @@ generated quantities {
   matrix[G, K] population_ratio_from_baseline;
   matrix[G, K] population_percent_change_from_baseline;
 
-  vector[K] male_vs_female_difference;
-  vector[K] male_vs_female_change_difference;
-  vector[K] older_vs_younger_difference;
-  vector[K] older_vs_younger_change_difference;
-  vector[K] directional_male_vs_female_change_difference;
-  vector[K] directional_older_vs_younger_change_difference;
+  // Natural-scale population-mean contrasts for a +1 change in one encoded
+  // covariate column, holding all other columns at the reference profile.
+  matrix[P, K] covariate_population_mean_difference;
+  matrix[P, K] covariate_population_mean_change_difference;
+  matrix[P, K] directional_covariate_population_mean_change_difference;
 
   // Posterior means of these binary draws estimate new-subject response
   // probabilities while retaining the complete generative model.
@@ -471,7 +455,7 @@ generated quantities {
   if (likelihood_id == 3)
     residual_cv = sqrt(exp(square(sigma)) - 1);
 
-  // Natural-scale population trajectories. For log-normal outcomes,
+  // Natural-scale population trajectories at X = 0. For log-normal outcomes,
   // population_mean integrates over subject effects and observation noise;
   // population_median is the zero-random-effect conditional median.
   for (g in 1:G) {
@@ -533,7 +517,9 @@ generated quantities {
     }
   }
 
-  // Natural-scale covariate contrasts at the reference arm.
+  // Natural-scale +1-design-unit covariate contrasts at the reference arm
+  // and X = 0. covariate_effect itself is the corresponding link-scale
+  // contrast and is emitted as a transformed parameter.
   for (k in 1:K) {
     real elapsed = time_value[k] - time_value[1];
     real random_effect_variance =
@@ -545,35 +531,35 @@ generated quantities {
       has_lower_bound, outcome_lower_bound,
       has_upper_bound, outcome_upper_bound
     );
-    real male_mean = natural_population_mean(
-      mu_reference[k] + gender_effect[k],
-      sigma, fmax(random_effect_variance, 0), likelihood_id,
-      has_lower_bound, outcome_lower_bound,
-      has_upper_bound, outcome_upper_bound
-    );
-    real older_mean = natural_population_mean(
-      mu_reference[k] + age_threshold_effect[k],
-      sigma, fmax(random_effect_variance, 0), likelihood_id,
-      has_lower_bound, outcome_lower_bound,
-      has_upper_bound, outcome_upper_bound
-    );
 
-    male_vs_female_difference[k] = male_mean - reference_mean;
-    older_vs_younger_difference[k] = older_mean - reference_mean;
+    if (P > 0) {
+      for (p in 1:P) {
+        real shifted_mean = natural_population_mean(
+          mu_reference[k] + covariate_effect[p, k],
+          sigma, fmax(random_effect_variance, 0), likelihood_id,
+          has_lower_bound, outcome_lower_bound,
+          has_upper_bound, outcome_upper_bound
+        );
+
+        covariate_population_mean_difference[p, k] =
+          shifted_mean - reference_mean;
+      }
+    }
   }
 
-  for (k in 1:K) {
-    male_vs_female_change_difference[k] =
-      male_vs_female_difference[k] - male_vs_female_difference[1];
-    older_vs_younger_change_difference[k] =
-      older_vs_younger_difference[k] - older_vs_younger_difference[1];
-    directional_male_vs_female_change_difference[k] =
-      direction * male_vs_female_change_difference[k];
-    directional_older_vs_younger_change_difference[k] =
-      direction * older_vs_younger_change_difference[k];
+  if (P > 0) {
+    for (p in 1:P) {
+      for (k in 1:K) {
+        covariate_population_mean_change_difference[p, k] =
+          covariate_population_mean_difference[p, k]
+          - covariate_population_mean_difference[p, 1];
+        directional_covariate_population_mean_change_difference[p, k] =
+          direction * covariate_population_mean_change_difference[p, k];
+      }
+    }
   }
 
-  // New-subject latent and posterior-predictive responder draws. A full
+  // New-subject latent and posterior-predictive responder draws at X = 0. A full
   // correlated random intercept/slope draw is required for absolute changes
   // under the CMT log link, where the intercept does not cancel.
   for (g in 1:G) {
@@ -644,10 +630,13 @@ generated quantities {
     int g = arm[s];
     real baseline_eta =
       population_model_location[g, 1]
-      + male[s] * gender_effect[1]
-      + age_above_threshold[s] * age_threshold_effect[1]
       + b_subject[1, s];
-    real baseline_latent = natural_latent_location(
+    real baseline_latent;
+
+    if (P > 0)
+      baseline_eta += dot_product(X[s], col(covariate_effect, 1));
+
+    baseline_latent = natural_latent_location(
       baseline_eta,
       likelihood_id,
       has_lower_bound, outcome_lower_bound,
@@ -658,18 +647,23 @@ generated quantities {
       real elapsed = time_value[k] - time_value[1];
       real eta =
         population_model_location[g, k]
-        + male[s] * gender_effect[k]
-        + age_above_threshold[s] * age_threshold_effect[k]
         + b_subject[1, s]
         + b_subject[2, s] * elapsed;
-      real latent_outcome = natural_latent_location(
+      real latent_outcome;
+      real latent_change;
+      real directional_change;
+
+      if (P > 0)
+        eta += dot_product(X[s], col(covariate_effect, k));
+
+      latent_outcome = natural_latent_location(
         eta,
         likelihood_id,
         has_lower_bound, outcome_lower_bound,
         has_upper_bound, outcome_upper_bound
       );
-      real latent_change = latent_outcome - baseline_latent;
-      real directional_change = direction * latent_change;
+      latent_change = latent_outcome - baseline_latent;
+      directional_change = direction * latent_change;
 
       individual_change_from_baseline[k, s] = latent_change;
       individual_directional_change[k, s] = directional_change;
@@ -680,7 +674,7 @@ generated quantities {
     }
   }
 
-  // Treatment effects at a common baseline (arm imbalance excluded).
+  // Treatment effects at a common baseline and X = 0 (arm imbalance excluded).
   // Absolute differences are primary; ratio-of-ratios is also returned for
   // the log-link model.
   for (g in 1:(G - 1)) {
@@ -739,10 +733,11 @@ generated quantities {
     if (g > 1)
       eta += arm_baseline_offset[g - 1] + treatment_change[g - 1, k];
 
+    if (P > 0)
+      eta += dot_product(X[s], col(covariate_effect, k));
+
     eta +=
-      male[s] * gender_effect[k]
-      + age_above_threshold[s] * age_threshold_effect[k]
-      + b_subject[1, s]
+      b_subject[1, s]
       + b_subject[2, s] * (time_value[k] - time_value[1]);
 
     if (likelihood_id == 1) {

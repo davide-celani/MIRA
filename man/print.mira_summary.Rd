@@ -29,7 +29,8 @@
 
 \item{treatment}{Print treatment effects versus the reference arm.}
 
-\item{covariates}{Print time-specific gender and age-threshold contrasts.}
+\item{covariates}{Print time-specific effects for selected encoded
+covariate terms.}
 
 \item{responders}{Print responder summaries.}
 

@@ -39,8 +39,8 @@ the summary object is created.}
 \value{
 A list containing population trajectories, changes, new-subject
 responder estimands, individual summaries, treatment contrasts,
-time-specific gender and age-threshold contrasts (with group sizes when
-\code{stan_data} is supplied), heterogeneity,
+time-specific effects for every selected encoded covariate term (with
+readable design-matrix metadata when available), heterogeneity,
 posterior predictive checks, log-likelihood information,
 MCMC diagnostics, model information and raw posterior draws.
 }

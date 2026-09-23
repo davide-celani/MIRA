@@ -10,7 +10,7 @@ mira_prior_stan_data(prior)
 \item{prior}{A \code{mira_prior} object or complete named list.}
 }
 \value{
-A list containing exactly the 19 prior fields declared in Stan.
+A list containing exactly the 16 prior fields declared in Stan.
 }
 \description{
 Convert MIRA priors to Stan data

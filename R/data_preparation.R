@@ -58,6 +58,459 @@
   n / ((n - 1) * (n - 2)) * sum(((x - mean(x)) / s)^3)
 }
 
+.mira_empty_covariate_map <- function() {
+  data.frame(
+    index = integer(0),
+    name = character(0),
+    label = character(0),
+    original_name = character(0),
+    original_label = character(0),
+    type = character(0),
+    encoding = character(0),
+    level = character(0),
+    reference_level = character(0),
+    center = numeric(0),
+    scale = numeric(0),
+    unit = character(0),
+    n_reference = integer(0),
+    n_comparison = integer(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mira_empty_covariate_variables <- function() {
+  data.frame(
+    name = character(0),
+    label = character(0),
+    type = character(0),
+    encoding = character(0),
+    reference_level = character(0),
+    center = numeric(0),
+    scale = numeric(0),
+    n_columns = integer(0),
+    column_start = integer(0),
+    column_end = integer(0),
+    levels = I(list()),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mira_covariate_label <- function(x, fallback) {
+  label <- attr(x, "label", exact = TRUE)
+  if (is.null(label) || length(label) != 1L || is.na(label) ||
+      !nzchar(as.character(label))) {
+    return(fallback)
+  }
+  as.character(label)
+}
+
+.mira_normalize_reference_levels <- function(reference_levels) {
+  if (is.null(reference_levels)) return(list())
+
+  if (is.atomic(reference_levels) && !is.list(reference_levels)) {
+    reference_levels <- as.list(reference_levels)
+  }
+
+  if (!is.list(reference_levels) || is.null(names(reference_levels)) ||
+      anyNA(names(reference_levels)) || any(!nzchar(names(reference_levels))) ||
+      anyDuplicated(names(reference_levels))) {
+    stop(
+      "`covariate_reference_levels` must be NULL or a uniquely named list/vector.",
+      call. = FALSE
+    )
+  }
+
+  bad <- vapply(
+    reference_levels,
+    function(x) length(x) != 1L || is.na(x) || !nzchar(as.character(x)),
+    logical(1L)
+  )
+  if (any(bad)) {
+    stop(
+      "Every `covariate_reference_levels` entry must contain one non-missing value.",
+      call. = FALSE
+    )
+  }
+
+  lapply(reference_levels, as.character)
+}
+
+.mira_covariate_problem <- function(x) {
+  if (is.matrix(x) || is.data.frame(x) || is.list(x)) {
+    return("unsupported matrix/data-frame/list column")
+  }
+  if (!(is.numeric(x) || is.logical(x) || is.factor(x) || is.character(x))) {
+    return(paste0("unsupported class `", paste(class(x), collapse = "/"), "`"))
+  }
+  if (anyNA(x)) return("contains missing values")
+  if (is.character(x) && any(!nzchar(trimws(x)))) {
+    return("contains empty categorical values")
+  }
+  if (is.numeric(x) && any(!is.finite(x))) {
+    return("contains non-finite numeric values")
+  }
+  if (length(unique(x)) < 2L) return("has fewer than two observed values")
+  NULL
+}
+
+.mira_prepare_covariates <- function(
+    data,
+    covariates,
+    excluded_names,
+    reference_levels,
+    subject_labels
+) {
+  S <- nrow(data)
+  reference_levels <- .mira_normalize_reference_levels(reference_levels)
+  request_was_null <- is.null(covariates)
+
+  if (is.null(covariates) || length(covariates) == 0L) {
+    mode <- "none"
+    requested <- character(0)
+  } else {
+    if (!is.character(covariates) || anyNA(covariates) ||
+        any(!nzchar(covariates))) {
+      stop(
+        "`covariates` must be NULL, \"auto\", character(0), or a character vector of column names.",
+        call. = FALSE
+      )
+    }
+    if (anyDuplicated(covariates)) {
+      stop("`covariates` contains duplicate column names.", call. = FALSE)
+    }
+    if (length(covariates) == 1L && identical(covariates, "auto")) {
+      mode <- "auto"
+      requested <- "auto"
+    } else {
+      if ("auto" %in% covariates) {
+        stop("`\"auto\"` cannot be combined with explicit covariate names.", call. = FALSE)
+      }
+      mode <- "explicit"
+      requested <- covariates
+    }
+  }
+
+  all_names <- names(data)
+  internal_names <- c(
+    "subject", "time", "time_value", "time_index", "time_label",
+    "patient_factor", "time_factor", "arm_factor", "value"
+  )
+  id_like <- grepl(
+    "(^id$|^id[._]|[._]id$|[._]id[._]|identifier|^(subject|participant|patient)[._]?id$)",
+    tolower(all_names),
+    perl = TRUE
+  )
+  technical <- startsWith(all_names, ".") |
+    startsWith(all_names, "_") |
+    tolower(all_names) %in% internal_names |
+    id_like
+  reserved <- unique(c(excluded_names, all_names[technical]))
+
+  excluded <- data.frame(
+    name = character(0), reason = character(0), stringsAsFactors = FALSE
+  )
+  add_excluded <- function(name, reason) {
+    excluded <<- rbind(
+      excluded,
+      data.frame(name = name, reason = reason, stringsAsFactors = FALSE)
+    )
+  }
+
+  if (mode == "explicit") {
+    absent <- setdiff(requested, all_names)
+    if (length(absent) > 0L) {
+      stop(
+        "Covariates not found in `data`: ", paste(absent, collapse = ", "), ".",
+        call. = FALSE
+      )
+    }
+    overlap <- intersect(requested, reserved)
+    if (length(overlap) > 0L) {
+      stop(
+        "Reserved ID, treatment, outcome, time, or internal columns cannot be covariates: ",
+        paste(overlap, collapse = ", "), ".",
+        call. = FALSE
+      )
+    }
+    selected <- requested
+  } else if (mode == "auto") {
+    selected <- character(0)
+    candidates <- setdiff(all_names, reserved)
+    for (name in candidates) {
+      problem <- .mira_covariate_problem(data[[name]])
+      if (is.null(problem)) {
+        selected <- c(selected, name)
+      } else {
+        add_excluded(name, problem)
+      }
+    }
+  } else {
+    selected <- character(0)
+  }
+
+  if (length(reference_levels) > 0L) {
+    unknown_references <- setdiff(names(reference_levels), selected)
+    if (length(unknown_references) > 0L) {
+      stop(
+        "Reference levels were supplied for inactive covariates: ",
+        paste(unknown_references, collapse = ", "), ".",
+        call. = FALSE
+      )
+    }
+  }
+
+  x_columns <- list()
+  column_rows <- list()
+  variable_rows <- list()
+  eligible <- character(0)
+  next_index <- 1L
+
+  for (name in selected) {
+    x <- data[[name]]
+    problem <- .mira_covariate_problem(x)
+    if (!is.null(problem)) {
+      if (mode == "explicit") {
+        stop("Covariate `", name, "` ", problem, ".", call. = FALSE)
+      }
+      add_excluded(name, problem)
+      next
+    }
+
+    original_label <- .mira_covariate_label(x, name)
+    start_index <- next_index
+    variable_levels <- character(0)
+    reference_level <- NA_character_
+    center <- 0
+    scale <- 1
+
+    is_binary_numeric <- is.numeric(x) &&
+      identical(sort(unique(as.numeric(x))), c(0, 1))
+
+    if (is_binary_numeric) {
+      if (name %in% names(reference_levels) &&
+          !identical(reference_levels[[name]], "0")) {
+        stop(
+          "Binary numeric covariate `", name,
+          "` uses 0 as its reference; an alternative reference is not supported.",
+          call. = FALSE
+        )
+      }
+      type <- "binary_numeric"
+      encoding <- "identity_binary"
+      reference_level <- "0"
+      variable_levels <- c("0", "1")
+      x_columns[[length(x_columns) + 1L]] <- as.numeric(x)
+      column_rows[[length(column_rows) + 1L]] <- data.frame(
+        index = next_index,
+        name = make.names(name),
+        label = paste0(original_label, ": 1 vs 0"),
+        original_name = name,
+        original_label = original_label,
+        type = type,
+        encoding = encoding,
+        level = "1",
+        reference_level = reference_level,
+        center = 0,
+        scale = 1,
+        unit = "1 vs 0",
+        n_reference = as.integer(sum(x == 0)),
+        n_comparison = as.integer(sum(x == 1)),
+        stringsAsFactors = FALSE
+      )
+      next_index <- next_index + 1L
+    } else if (is.numeric(x)) {
+      if (name %in% names(reference_levels)) {
+        stop(
+          "A reference level cannot be supplied for continuous covariate `",
+          name, "`.",
+          call. = FALSE
+        )
+      }
+      type <- if (is.integer(x)) "integer" else "numeric"
+      encoding <- "center_scale"
+      center <- mean(as.numeric(x))
+      scale <- stats::sd(as.numeric(x))
+      if (!is.finite(scale) || scale <= 0) {
+        stop("Covariate `", name, "` has no finite positive scale.", call. = FALSE)
+      }
+      x_columns[[length(x_columns) + 1L]] <- (as.numeric(x) - center) / scale
+      column_rows[[length(column_rows) + 1L]] <- data.frame(
+        index = next_index,
+        name = make.names(name),
+        label = paste0(original_label, " (+1 SD)"),
+        original_name = name,
+        original_label = original_label,
+        type = type,
+        encoding = encoding,
+        level = NA_character_,
+        reference_level = NA_character_,
+        center = center,
+        scale = scale,
+        unit = paste0("+1 SD (", format(scale, digits = 7L), " original units)"),
+        n_reference = NA_integer_,
+        n_comparison = NA_integer_,
+        stringsAsFactors = FALSE
+      )
+      next_index <- next_index + 1L
+    } else {
+      type <- if (is.logical(x)) {
+        "logical"
+      } else if (is.factor(x)) {
+        "factor"
+      } else {
+        "character"
+      }
+
+      if (is.logical(x)) {
+        values <- ifelse(x, "TRUE", "FALSE")
+        observed_levels <- c("FALSE", "TRUE")
+      } else if (is.factor(x)) {
+        values <- as.character(x)
+        observed_levels <- levels(droplevels(x))
+      } else {
+        values <- as.character(x)
+        observed_levels <- sort(unique(values), method = "radix")
+      }
+
+      reference_level <- if (name %in% names(reference_levels)) {
+        reference_levels[[name]]
+      } else {
+        observed_levels[[1L]]
+      }
+      if (!reference_level %in% observed_levels) {
+        stop(
+          "Reference level `", reference_level, "` was not observed for covariate `",
+          name, "`. Observed levels: ", paste(observed_levels, collapse = ", "), ".",
+          call. = FALSE
+        )
+      }
+      variable_levels <- c(reference_level, setdiff(observed_levels, reference_level))
+      comparison_levels <- variable_levels[-1L]
+      encoding <- "treatment"
+
+      for (level in comparison_levels) {
+        encoded <- as.numeric(values == level)
+        x_columns[[length(x_columns) + 1L]] <- encoded
+        level_suffix <- if (identical(type, "logical")) {
+          level
+        } else {
+          make.names(level)
+        }
+        term_name <- paste0(make.names(name), level_suffix)
+        column_rows[[length(column_rows) + 1L]] <- data.frame(
+          index = next_index,
+          name = term_name,
+          label = paste0(
+            original_label, ": ", level, " vs ", reference_level
+          ),
+          original_name = name,
+          original_label = original_label,
+          type = type,
+          encoding = encoding,
+          level = level,
+          reference_level = reference_level,
+          center = 0,
+          scale = 1,
+          unit = paste0(level, " vs ", reference_level),
+          n_reference = as.integer(sum(values == reference_level)),
+          n_comparison = as.integer(sum(values == level)),
+          stringsAsFactors = FALSE
+        )
+        next_index <- next_index + 1L
+      }
+    }
+
+    n_columns <- next_index - start_index
+    variable_rows[[length(variable_rows) + 1L]] <- data.frame(
+      name = name,
+      label = original_label,
+      type = type,
+      encoding = encoding,
+      reference_level = reference_level,
+      center = center,
+      scale = scale,
+      n_columns = as.integer(n_columns),
+      column_start = as.integer(start_index),
+      column_end = as.integer(next_index - 1L),
+      levels = I(list(variable_levels)),
+      stringsAsFactors = FALSE
+    )
+    eligible <- c(eligible, name)
+  }
+
+  columns <- if (length(column_rows) > 0L) {
+    do.call(rbind, column_rows)
+  } else {
+    .mira_empty_covariate_map()
+  }
+  variables <- if (length(variable_rows) > 0L) {
+    do.call(rbind, variable_rows)
+  } else {
+    .mira_empty_covariate_variables()
+  }
+
+  if (nrow(columns) > 0L) {
+    columns$name <- make.unique(columns$name, sep = "__")
+    X <- do.call(cbind, x_columns)
+    storage.mode(X) <- "double"
+    colnames(X) <- columns$name
+    rownames(X) <- subject_labels
+  } else {
+    X <- matrix(
+      numeric(0), nrow = S, ncol = 0L,
+      dimnames = list(subject_labels, character(0))
+    )
+  }
+
+  P <- ncol(X)
+  if (nrow(X) != S || P != nrow(columns) || any(!is.finite(X))) {
+    stop("Internal error while constructing the covariate design matrix.", call. = FALSE)
+  }
+
+  selected <- eligible
+  reference_description <- if (P == 0L) {
+    "No active covariates."
+  } else {
+    paste0(
+      "X = 0 denotes the mean for centered/scaled numeric covariates, ",
+      "the reference category for treatment-coded covariates, and 0 for ",
+      "binary numeric covariates."
+    )
+  }
+
+  list(
+    P = as.integer(P),
+    X = X,
+    requested = requested,
+    selected = selected,
+    names = columns$name,
+    original_names = columns$original_name,
+    labels = columns$label,
+    types = columns$type,
+    reference_levels = stats::setNames(columns$reference_level, columns$name),
+    centers = stats::setNames(columns$center, columns$name),
+    scales = stats::setNames(columns$scale, columns$name),
+    map = columns,
+    metadata = list(
+      schema_version = "1.0.0",
+      selection = list(
+        mode = mode,
+        request_was_null = request_was_null,
+        requested = requested,
+        selected = selected,
+        eligible = eligible,
+        excluded = excluded
+      ),
+      variables = variables,
+      columns = columns,
+      reference_profile = list(
+        design_values = stats::setNames(rep(0, P), columns$name),
+        description = reference_description
+      )
+    )
+  )
+}
+
 #' Prepare longitudinal data for the MIRA treatment model
 #'
 #' Prepares and validates longitudinal data for the outcome-adaptive MIRA
@@ -105,14 +558,18 @@
 #' @param arm_column Name of the treatment-arm column in `data`.
 #' @param reference_arm Value identifying the reference arm. If NULL, the
 #'   first observed arm is used and a warning is emitted.
-#' @param gender_column Name of the sex/gender column in `data`.
-#' @param female_label Value identifying the Female reference category.
-#' @param male_label Value identifying the Male category. The Stan model
-#'   estimates the Male - Female difference at each measurement occasion.
-#' @param age_column Name of the age column in `data`.
-#' @param age_threshold Numeric age threshold used to define two groups.
-#'   Subjects with age > `age_threshold` are coded as the older group;
-#'   subjects with age <= `age_threshold` are the reference group.
+#' @param gender_column,female_label,male_label,age_column,age_threshold
+#'   Deprecated compatibility arguments. They are ignored; gender and age are
+#'   handled through the generic `covariates` interface and continuous age is
+#'   never dichotomized automatically.
+#' @param covariates Covariate selection. `"auto"` uses every eligible
+#'   subject-level column after excluding identifiers, treatment, longitudinal
+#'   outcomes, time variables, and internal columns. `NULL` or `character(0)`
+#'   selects no covariates. A character vector selects exactly those columns.
+#' @param covariate_reference_levels Optional uniquely named list or vector of
+#'   reference levels for active factor, character, or logical covariates.
+#'   Factors otherwise use their first observed declared level, characters use
+#'   their first level in lexical order, and logical variables use `FALSE`.
 #'
 #' @return A named list containing the variables required by Stan plus
 #'   outcome-family metadata and empirical diagnostics. All clinical changes
@@ -136,8 +593,26 @@ mira_prepare_data <- function(
     female_label = "Female",
     male_label = "Male",
     age_column = "age",
-    age_threshold = 60
+    age_threshold = 60,
+    covariates = "auto",
+    covariate_reference_levels = NULL
 ) {
+
+  legacy_supplied <- c(
+    gender_column = !missing(gender_column),
+    female_label = !missing(female_label),
+    male_label = !missing(male_label),
+    age_column = !missing(age_column),
+    age_threshold = !missing(age_threshold)
+  )
+  if (any(legacy_supplied)) {
+    warning(
+      "Deprecated gender/age-specific arguments are ignored. Select these ",
+      "variables through `covariates` and use `covariate_reference_levels` ",
+      "for categorical reference levels.",
+      call. = FALSE
+    )
+  }
 
   # ============================================================
   # BASIC VALIDATION
@@ -151,14 +626,6 @@ mira_prepare_data <- function(
     stop("`arm_column` must be one non-empty character string.", call. = FALSE)
   }
 
-  if (!is.character(gender_column) || length(gender_column) != 1 || !nzchar(gender_column)) {
-    stop("`gender_column` must be one non-empty character string.", call. = FALSE)
-  }
-
-  if (!is.character(age_column) || length(age_column) != 1 || !nzchar(age_column)) {
-    stop("`age_column` must be one non-empty character string.", call. = FALSE)
-  }
-
   if (!"patient" %in% names(data)) {
     stop("The data frame must contain a `patient` column.", call. = FALSE)
   }
@@ -167,24 +634,6 @@ mira_prepare_data <- function(
     stop(
       "The data frame must contain the treatment-arm column `",
       arm_column,
-      "`.",
-      call. = FALSE
-    )
-  }
-
-  if (!gender_column %in% names(data)) {
-    stop(
-      "The data frame must contain the gender column `",
-      gender_column,
-      "`.",
-      call. = FALSE
-    )
-  }
-
-  if (!age_column %in% names(data)) {
-    stop(
-      "The data frame must contain the age column `",
-      age_column,
       "`.",
       call. = FALSE
     )
@@ -277,102 +726,6 @@ mira_prepare_data <- function(
 
   if (anyNA(arm) || any(arm < 1L) || any(arm > G)) {
     stop("Internal error while encoding treatment arms.", call. = FALSE)
-  }
-
-  # ============================================================
-  # GENDER: FEMALE REFERENCE, MALE INDICATOR
-  # ============================================================
-
-  if (
-    length(female_label) != 1 ||
-    is.na(female_label) ||
-    !nzchar(as.character(female_label))
-  ) {
-    stop("`female_label` must identify one non-missing category.", call. = FALSE)
-  }
-
-  if (
-    length(male_label) != 1 ||
-    is.na(male_label) ||
-    !nzchar(as.character(male_label))
-  ) {
-    stop("`male_label` must identify one non-missing category.", call. = FALSE)
-  }
-
-  female_label_chr <- as.character(female_label)
-  male_label_chr <- as.character(male_label)
-
-  if (identical(female_label_chr, male_label_chr)) {
-    stop("`female_label` and `male_label` must be different.", call. = FALSE)
-  }
-
-  gender_raw <- data[[gender_column]]
-
-  if (anyNA(gender_raw)) {
-    stop("`", gender_column, "` contains missing values.", call. = FALSE)
-  }
-
-  gender_chr <- as.character(gender_raw)
-  allowed_gender <- c(female_label_chr, male_label_chr)
-
-  if (any(!gender_chr %in% allowed_gender)) {
-    bad_gender <- unique(gender_chr[!gender_chr %in% allowed_gender])
-
-    stop(
-      paste0(
-        "`", gender_column, "` contains unsupported categories: ",
-        paste(bad_gender, collapse = ", "),
-        ". Expected only `", female_label_chr, "` and `", male_label_chr, "`."
-      ),
-      call. = FALSE
-    )
-  }
-
-  if (!all(allowed_gender %in% unique(gender_chr))) {
-    stop(
-      paste0(
-        "Both gender categories are required to estimate the Male - Female ",
-        "difference. Expected `", female_label_chr, "` and `", male_label_chr, "`."
-      ),
-      call. = FALSE
-    )
-  }
-
-  male <- as.integer(gender_chr == male_label_chr)
-
-  # ============================================================
-  # AGE THRESHOLD GROUP
-  # ============================================================
-
-  age_raw <- data[[age_column]]
-
-  if (!is.numeric(age_raw)) {
-    stop("`", age_column, "` must be numeric.", call. = FALSE)
-  }
-
-  if (anyNA(age_raw) || any(!is.finite(age_raw))) {
-    stop("`", age_column, "` must contain only finite non-missing values.", call. = FALSE)
-  }
-
-  if (
-    length(age_threshold) != 1 ||
-    !is.numeric(age_threshold) ||
-    !is.finite(age_threshold)
-  ) {
-    stop("`age_threshold` must be one finite numeric value.", call. = FALSE)
-  }
-
-  age_above_threshold <- as.integer(age_raw > age_threshold)
-
-  if (length(unique(age_above_threshold)) < 2) {
-    stop(
-      paste0(
-        "`age_threshold` = ", age_threshold,
-        " does not create two observed age groups. Choose a threshold with ",
-        "at least one subject on each side."
-      ),
-      call. = FALSE
-    )
   }
 
   # ============================================================
@@ -575,6 +928,22 @@ mira_prepare_data <- function(
   }
 
   # ============================================================
+  # GENERIC SUBJECT-LEVEL COVARIATE DESIGN MATRIX
+  # ============================================================
+
+  covariate_design <- .mira_prepare_covariates(
+    data = data,
+    covariates = covariates,
+    excluded_names = unique(c(
+      "patient", arm_column, all_measurement_columns
+    )),
+    reference_levels = covariate_reference_levels,
+    subject_labels = as.character(data$patient)
+  )
+  P <- covariate_design$P
+  X <- covariate_design$X
+
+  # ============================================================
   # DIRECTION OF IMPROVEMENT
   # ============================================================
 
@@ -742,7 +1111,7 @@ mira_prepare_data <- function(
     )
   }
 
-  if (anyNA(data[c("patient", arm_column, gender_column, age_column, measurement_columns)])) {
+  if (anyNA(data[c("patient", arm_column, measurement_columns)])) {
     stop(
       "Missing values are not currently supported in the MIRA model.",
       call. = FALSE
@@ -926,6 +1295,8 @@ mira_prepare_data <- function(
     S = as.integer(S),
     K = as.integer(K),
     G = as.integer(G),
+    P = as.integer(P),
+    X = X,
     likelihood_id = as.integer(likelihood_id),
     has_lower_bound = as.integer(has_lower_bound),
     outcome_lower_bound = as.numeric(outcome_lower_bound),
@@ -935,8 +1306,6 @@ mira_prepare_data <- function(
     subject = as.integer(subject),
     time = as.integer(time),
     arm = as.integer(arm),
-    male = as.integer(male),
-    age_above_threshold = as.integer(age_above_threshold),
     time_value = as.numeric(time_value),
     direction = as.integer(direction),
     mcid_prior_mean = as.numeric(meaningful_change),
@@ -953,22 +1322,17 @@ mira_prepare_data <- function(
     meaningful_change = as.numeric(meaningful_change),
     arm_labels = arm_labels,
     reference_arm = reference_arm_chr,
-    gender_column = gender_column,
-    gender_labels = c(reference = female_label_chr, comparison = male_label_chr),
-    gender_counts = stats::setNames(
-      c(sum(male == 0L), sum(male == 1L)),
-      c(female_label_chr, male_label_chr)
-    ),
-    age_column = age_column,
-    age_threshold = as.numeric(age_threshold),
-    age_group_labels = c(
-      reference = paste0("<=", age_threshold),
-      comparison = paste0(">", age_threshold)
-    ),
-    age_group_counts = stats::setNames(
-      c(sum(age_above_threshold == 0L), sum(age_above_threshold == 1L)),
-      c(paste0("<=", age_threshold), paste0(">", age_threshold))
-    ),
+    covariates_requested = covariate_design$requested,
+    covariates_selected = covariate_design$selected,
+    covariate_names = covariate_design$names,
+    covariate_original_names = covariate_design$original_names,
+    covariate_labels = covariate_design$labels,
+    covariate_types = covariate_design$types,
+    covariate_reference_levels = covariate_design$reference_levels,
+    covariate_centers = covariate_design$centers,
+    covariate_scales = covariate_design$scales,
+    covariate_map = covariate_design$map,
+    covariate_metadata = covariate_design$metadata,
     subject_labels = as.character(data$patient),
     outcome_name = outcome_name,
     outcome = outcome_class,

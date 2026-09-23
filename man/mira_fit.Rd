@@ -28,15 +28,14 @@ mira_fit(
 }
 \arguments{
 \item{stan_data}{Data prepared for the MIRA Stan model. The list may
-contain additional R-side metadata (for example \code{mean_y}, \code{sd_y}, or
-\code{arm_labels}, gender labels, or the age threshold); only variables required
-by Stan are passed to CmdStan. The current model requires subject-level
-binary indicators \code{male} (0 = Female reference, 1 = Male) and
-\code{age_above_threshold} (0 = age <= threshold, 1 = age > threshold).}
+contain additional R-side metadata (for example \code{mean_y}, \code{sd_y},
+\code{arm_labels}, and \code{covariate_metadata}); only variables required by Stan
+are passed to CmdStan. Subject-level covariates are supplied through \code{P}
+and the \code{S} by \code{P} design matrix \code{X}. \code{P = 0} is supported.}
 
 \item{prior}{A \code{mira_prior} object, or a named list containing the Stan
-prior fields required by the selected model, including dedicated priors
-for gender- and age-threshold trajectories. If \code{NULL}, \code{mira_prior()}
+prior fields required by the selected model, including prior vectors for
+the active encoded covariate terms. If \code{NULL}, \code{mira_prior()}
 automatically selects the outcome and uses standard priors, unless all
 prior fields are already present in \code{stan_data}. A non-NULL \code{prior} takes
 precedence over prior fields embedded in \code{stan_data}.}
@@ -71,8 +70,7 @@ non-centred hierarchical model.}
 messages, including rejected warmup proposals.}
 
 \item{stan_file}{Optional path to the Stan file. If \code{NULL}, MIRA first
-looks for \code{inst/stan/gaussian_longitudinal.stan}, then legacy MIRA Stan
-filenames for backwards compatibility.}
+looks for \code{inst/stan/gaussian_longitudinal.stan}.}
 
 \item{verbose}{Logical. If TRUE (default), print a compact MIRA fit report
 automatically after successful sampling. The fitted CmdStanMCMC object is
@@ -95,7 +93,7 @@ A CmdStanMCMC object.
 }
 \description{
 Fits the outcome-adaptive MIRA longitudinal mixed-effects model with
-treatment-, gender-, and age-threshold-specific trajectories using CmdStan.
+treatment- and user-selected covariate-specific trajectories using CmdStan.
 The likelihood and link are selected by \code{\link[=mira_prepare_data]{mira_prepare_data()}}: censored
 Student-t/Gaussian identity models and a positive log-normal/log-link model
 share a coherent natural-scale clinical output interface.

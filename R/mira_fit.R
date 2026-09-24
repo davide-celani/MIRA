@@ -832,9 +832,12 @@ mira_fit <- function(
       )
     )
 
-    # The Stan parameter has dimension zero for non-Student-t families.
-    if (stan_data$likelihood_id == 1L) {
-      initial_values$nu <- array(10, dim = 1L)
+    # Name nu in every init list so CmdStanR does not report the inactive
+    # vector[0] as missing for Gaussian and log-normal models.
+    initial_values$nu <- if (stan_data$likelihood_id == 1L) {
+      array(10, dim = 1L)
+    } else {
+      numeric(0)
     }
     initial_values
   }

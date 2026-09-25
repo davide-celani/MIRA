@@ -70,7 +70,7 @@ non-centred hierarchical model.}
 messages, including rejected warmup proposals.}
 
 \item{stan_file}{Optional path to the Stan file. If \code{NULL}, MIRA first
-looks for \code{inst/stan/gaussian_longitudinal.stan}.}
+looks for \code{inst/stan/mira_longitudinal.stan}.}
 
 \item{verbose}{Logical. If TRUE (default), print a compact MIRA fit report
 automatically after successful sampling. The fitted CmdStanMCMC object is

@@ -51,11 +51,11 @@ prepare_dynamic_covariates <- function(covariates = "auto", ...) {
 
 dynamic_covariate_stan_file <- function() {
   installed <- system.file(
-    "stan", "gaussian_longitudinal.stan", package = "MIRA"
+    "stan", "mira_longitudinal.stan", package = "MIRA"
   )
   if (nzchar(installed)) return(installed)
 
-  testthat::test_path("..", "..", "inst", "stan", "gaussian_longitudinal.stan")
+  testthat::test_path("..", "..", "inst", "stan", "mira_longitudinal.stan")
 }
 
 

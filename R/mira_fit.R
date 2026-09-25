@@ -69,7 +69,7 @@
 #'   automatically after successful sampling. The fitted CmdStanMCMC object is
 #'   still returned invisibly and can be assigned normally.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
-#'   looks for `inst/stan/gaussian_longitudinal.stan`.
+#'   looks for `inst/stan/mira_longitudinal.stan`.
 #'
 #' @return A CmdStanMCMC object.
 #'
@@ -699,7 +699,7 @@ mira_fit <- function(
 
   if (is.null(stan_file)) {
 
-    candidates <- "gaussian_longitudinal.stan"
+    candidates <- "mira_longitudinal.stan"
 
     candidate_paths <- vapply(
       candidates,
@@ -719,7 +719,7 @@ mira_fit <- function(
     if (length(existing) == 0) {
       stop(
         "Could not find the MIRA Stan model in `inst/stan`. Expected ",
-        "`gaussian_longitudinal.stan`.",
+        "`mira_longitudinal.stan`.",
         call. = FALSE
       )
     }

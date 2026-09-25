@@ -540,33 +540,34 @@ A typical MIRA workflow is:
 library(MIRA)
 ```
 
-Prepare the longitudinal dataset:
+Prepare a wide longitudinal dataset containing `patient`, `arm`, and
+`outcome_t0`, ..., `outcome_tK` columns:
 
 ```r
-stan_data <- mira_prepare(
-  data = data,
-  id = "subject",
-  time = "time",
+stan_data <- mira_data_long(
+  data = wide_data,
+  time_value = c(0, 3, 6, 12),
   outcome = "outcome",
-  meaningful_change = 5
+  direction = "higher",
+  meaningful_change = 5,
+  meaningful_change_sd = 1
 )
 ```
 
 Fit the Bayesian longitudinal model:
 
 ```r
-fit <- mira_fit(
-  data = stan_data
+fit <- mira_fit_long(
+  stan_data = stan_data
 )
 ```
 
 Create the comprehensive model summary:
 
 ```r
-summary_mira <- mira_summary(
+summary_mira <- mira_summary_long(
   fit = fit,
-  meaningful_change = stan_data$meaningful_change,
-  y = stan_data$y
+  stan_data = stan_data
 )
 ```
 

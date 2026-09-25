@@ -207,7 +207,7 @@ mira_create_ophthalmology_data <- function(
 #' @param data A data frame created by [mira_create_ophthalmology_data()].
 #' @param outcome Either `"BCVA"` or `"CMT"`.
 #'
-#' @return A data frame ready for `mira_info()` or `mira_prepare_data()`.
+#' @return A data frame ready for `mira_info_long()` or `mira_data_long()`.
 #'
 #' @export
 mira_select_ophthalmology_outcome <- function(

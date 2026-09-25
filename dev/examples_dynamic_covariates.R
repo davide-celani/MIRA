@@ -8,11 +8,11 @@
 #
 # Ogni scenario usa direttamente il flusso pubblico del package:
 #
-#   mira_prepare_data()
-#   mira_prior()
-#   mira_fit()
+#   mira_data_long()
+#   mira_prior_long()
+#   mira_fit_long()
 #   diagnostica CmdStan
-#   mira_summary()
+#   mira_summary_long()
 #
 # Non ci sono funzioni wrapper. Lo script esegue otto fit completi; per
 # provare un solo scenario, eseguire interattivamente il relativo blocco.
@@ -53,7 +53,7 @@ data_bcva_01 <- data[c(
   bcva_visits
 )]
 
-stan_data_bcva_01 <- mira_prepare_data(
+stan_data_bcva_01 <- mira_data_long(
   data = data_bcva_01,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "BCVA",
@@ -64,14 +64,14 @@ stan_data_bcva_01 <- mira_prepare_data(
   covariates = character(0)
 )
 
-prior_bcva_01 <- mira_prior(
+prior_bcva_01 <- mira_prior_long(
   stan_data_bcva_01,
   outcome = "BCVA"
 )
 
 print(prior_bcva_01)
 
-fit_bcva_01 <- mira_fit(
+fit_bcva_01 <- mira_fit_long(
   stan_data = stan_data_bcva_01,
   prior = prior_bcva_01,
   chains = 4,
@@ -86,7 +86,7 @@ fit_bcva_01 <- mira_fit(
 print(fit_bcva_01$diagnostic_summary())
 fit_bcva_01$cmdstan_diagnose()
 
-mira_res_bcva_01 <- mira_summary(
+mira_res_bcva_01 <- mira_summary_long(
   fit = fit_bcva_01,
   stan_data = stan_data_bcva_01,
   verbose = TRUE
@@ -106,7 +106,7 @@ data_bcva_02 <- data[c(
   bcva_visits
 )]
 
-stan_data_bcva_02 <- mira_prepare_data(
+stan_data_bcva_02 <- mira_data_long(
   data = data_bcva_02,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "BCVA",
@@ -117,14 +117,14 @@ stan_data_bcva_02 <- mira_prepare_data(
   covariates = "age"
 )
 
-prior_bcva_02 <- mira_prior(
+prior_bcva_02 <- mira_prior_long(
   stan_data_bcva_02,
   outcome = "BCVA"
 )
 
 print(prior_bcva_02)
 
-fit_bcva_02 <- mira_fit(
+fit_bcva_02 <- mira_fit_long(
   stan_data = stan_data_bcva_02,
   prior = prior_bcva_02,
   chains = 4,
@@ -139,7 +139,7 @@ fit_bcva_02 <- mira_fit(
 print(fit_bcva_02$diagnostic_summary())
 fit_bcva_02$cmdstan_diagnose()
 
-mira_res_bcva_02 <- mira_summary(
+mira_res_bcva_02 <- mira_summary_long(
   fit = fit_bcva_02,
   stan_data = stan_data_bcva_02,
   verbose = TRUE
@@ -158,7 +158,7 @@ data_bcva_03 <- data[c(
   bcva_visits
 )]
 
-stan_data_bcva_03 <- mira_prepare_data(
+stan_data_bcva_03 <- mira_data_long(
   data = data_bcva_03,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "BCVA",
@@ -172,14 +172,14 @@ stan_data_bcva_03 <- mira_prepare_data(
   )
 )
 
-prior_bcva_03 <- mira_prior(
+prior_bcva_03 <- mira_prior_long(
   stan_data_bcva_03,
   outcome = "BCVA"
 )
 
 print(prior_bcva_03)
 
-fit_bcva_03 <- mira_fit(
+fit_bcva_03 <- mira_fit_long(
   stan_data = stan_data_bcva_03,
   prior = prior_bcva_03,
   chains = 4,
@@ -194,7 +194,7 @@ fit_bcva_03 <- mira_fit(
 print(fit_bcva_03$diagnostic_summary())
 fit_bcva_03$cmdstan_diagnose()
 
-mira_res_bcva_03 <- mira_summary(
+mira_res_bcva_03 <- mira_summary_long(
   fit = fit_bcva_03,
   stan_data = stan_data_bcva_03,
   verbose = TRUE
@@ -216,7 +216,7 @@ data_bcva_04 <- data[c(
   bcva_visits
 )]
 
-stan_data_bcva_04 <- mira_prepare_data(
+stan_data_bcva_04 <- mira_data_long(
   data = data_bcva_04,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "BCVA",
@@ -231,14 +231,14 @@ stan_data_bcva_04 <- mira_prepare_data(
   )
 )
 
-prior_bcva_04 <- mira_prior(
+prior_bcva_04 <- mira_prior_long(
   stan_data_bcva_04,
   outcome = "BCVA"
 )
 
 print(prior_bcva_04)
 
-fit_bcva_04 <- mira_fit(
+fit_bcva_04 <- mira_fit_long(
   stan_data = stan_data_bcva_04,
   prior = prior_bcva_04,
   chains = 4,
@@ -253,7 +253,7 @@ fit_bcva_04 <- mira_fit(
 print(fit_bcva_04$diagnostic_summary())
 fit_bcva_04$cmdstan_diagnose()
 
-mira_res_bcva_04 <- mira_summary(
+mira_res_bcva_04 <- mira_summary_long(
   fit = fit_bcva_04,
   stan_data = stan_data_bcva_04,
   verbose = TRUE
@@ -270,7 +270,7 @@ data_cmt_01 <- data[c(
   cmt_visits
 )]
 
-stan_data_cmt_01 <- mira_prepare_data(
+stan_data_cmt_01 <- mira_data_long(
   data = data_cmt_01,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "CMT",
@@ -281,14 +281,14 @@ stan_data_cmt_01 <- mira_prepare_data(
   covariates = character(0)
 )
 
-prior_cmt_01 <- mira_prior(
+prior_cmt_01 <- mira_prior_long(
   stan_data_cmt_01,
   outcome = "CMT"
 )
 
 print(prior_cmt_01)
 
-fit_cmt_01 <- mira_fit(
+fit_cmt_01 <- mira_fit_long(
   stan_data = stan_data_cmt_01,
   prior = prior_cmt_01,
   chains = 4,
@@ -303,7 +303,7 @@ fit_cmt_01 <- mira_fit(
 print(fit_cmt_01$diagnostic_summary())
 fit_cmt_01$cmdstan_diagnose()
 
-mira_res_cmt_01 <- mira_summary(
+mira_res_cmt_01 <- mira_summary_long(
   fit = fit_cmt_01,
   stan_data = stan_data_cmt_01,
   verbose = TRUE
@@ -321,7 +321,7 @@ data_cmt_02 <- data[c(
   cmt_visits
 )]
 
-stan_data_cmt_02 <- mira_prepare_data(
+stan_data_cmt_02 <- mira_data_long(
   data = data_cmt_02,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "CMT",
@@ -332,14 +332,14 @@ stan_data_cmt_02 <- mira_prepare_data(
   covariates = "hba1c_percent"
 )
 
-prior_cmt_02 <- mira_prior(
+prior_cmt_02 <- mira_prior_long(
   stan_data_cmt_02,
   outcome = "CMT"
 )
 
 print(prior_cmt_02)
 
-fit_cmt_02 <- mira_fit(
+fit_cmt_02 <- mira_fit_long(
   stan_data = stan_data_cmt_02,
   prior = prior_cmt_02,
   chains = 4,
@@ -354,7 +354,7 @@ fit_cmt_02 <- mira_fit(
 print(fit_cmt_02$diagnostic_summary())
 fit_cmt_02$cmdstan_diagnose()
 
-mira_res_cmt_02 <- mira_summary(
+mira_res_cmt_02 <- mira_summary_long(
   fit = fit_cmt_02,
   stan_data = stan_data_cmt_02,
   verbose = TRUE
@@ -373,7 +373,7 @@ data_cmt_03 <- data[c(
   cmt_visits
 )]
 
-stan_data_cmt_03 <- mira_prepare_data(
+stan_data_cmt_03 <- mira_data_long(
   data = data_cmt_03,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "CMT",
@@ -387,14 +387,14 @@ stan_data_cmt_03 <- mira_prepare_data(
   )
 )
 
-prior_cmt_03 <- mira_prior(
+prior_cmt_03 <- mira_prior_long(
   stan_data_cmt_03,
   outcome = "CMT"
 )
 
 print(prior_cmt_03)
 
-fit_cmt_03 <- mira_fit(
+fit_cmt_03 <- mira_fit_long(
   stan_data = stan_data_cmt_03,
   prior = prior_cmt_03,
   chains = 4,
@@ -409,7 +409,7 @@ fit_cmt_03 <- mira_fit(
 print(fit_cmt_03$diagnostic_summary())
 fit_cmt_03$cmdstan_diagnose()
 
-mira_res_cmt_03 <- mira_summary(
+mira_res_cmt_03 <- mira_summary_long(
   fit = fit_cmt_03,
   stan_data = stan_data_cmt_03,
   verbose = TRUE
@@ -431,7 +431,7 @@ data_cmt_04 <- data[c(
   cmt_visits
 )]
 
-stan_data_cmt_04 <- mira_prepare_data(
+stan_data_cmt_04 <- mira_data_long(
   data = data_cmt_04,
   time_value = c(0, 3, 5, 12, 15),
   outcome = "CMT",
@@ -446,14 +446,14 @@ stan_data_cmt_04 <- mira_prepare_data(
   )
 )
 
-prior_cmt_04 <- mira_prior(
+prior_cmt_04 <- mira_prior_long(
   stan_data_cmt_04,
   outcome = "CMT"
 )
 
 print(prior_cmt_04)
 
-fit_cmt_04 <- mira_fit(
+fit_cmt_04 <- mira_fit_long(
   stan_data = stan_data_cmt_04,
   prior = prior_cmt_04,
   chains = 4,
@@ -468,7 +468,7 @@ fit_cmt_04 <- mira_fit(
 print(fit_cmt_04$diagnostic_summary())
 fit_cmt_04$cmdstan_diagnose()
 
-mira_res_cmt_04 <- mira_summary(
+mira_res_cmt_04 <- mira_summary_long(
   fit = fit_cmt_04,
   stan_data = stan_data_cmt_04,
   verbose = TRUE

@@ -93,11 +93,13 @@ mira_res_bcva_01 <- mira_summary_long(
 )
 
 
+
 # ============================================================
 # BCVA 2 - Tempo, trattamento ed età continua
 # ============================================================
 # `age_threshold` non è usato: nell'API corrente è deprecato e ignorato.
 # Qui l'età entra direttamente come covariata continua.
+
 
 data_bcva_02 <- data[c(
   "patient",

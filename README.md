@@ -1,5 +1,7 @@
 # MIRA
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23120183.svg)](https://doi.org/10.5281/zenodo.23120183)
+
 **Bayesian Multilevel Inference for Longitudinal Data**
 
 MIRA (**Multilevel Inference and Regression Analysis**) is an R package for
@@ -8,8 +10,9 @@ measurements, treatment-arm contrasts, subject-level covariates, and
 probabilities of meaningful change through an inspectable Stan model.
 The package also provides frequentist exploration and Quarto report generation.
 
-Version `0.0.1` is being prepared for its first release. MIRA is under active
-development; no Zenodo DOI has been assigned yet.
+Version `0.0.1` was released on 2026-10-03 and is archived on
+[Zenodo](https://doi.org/10.5281/zenodo.23120184). MIRA remains under active
+development.
 
 ## What MIRA does
 
@@ -47,9 +50,8 @@ install.packages("remotes")
 remotes::install_github("davide-celani/MIRA")
 ```
 
-The development branch may change. After a tagged release is published,
-install that release with `remotes::install_github("davide-celani/MIRA@v0.0.1")`.
-This tag is a planned release identifier until it is published.
+The development branch may change. Install the archived release with
+`remotes::install_github("davide-celani/MIRA@v0.0.1")`.
 
 Bayesian fitting also requires a C++ toolchain and CmdStan. On Windows, install
 the Rtools version that matches your R installation. Then run the following
@@ -261,9 +263,21 @@ toBibtex(citation("MIRA"))
 ```
 
 GitHub uses [CITATION.cff](CITATION.cff); R uses [inst/CITATION](inst/CITATION).
-For an analysis that uses a specific archived release, cite its version DOI
-once Zenodo assigns it. The general concept DOI identifies the project across
-versions. Until the archive exists, the citation points to the source repository.
+The citation for the archived `v0.0.1` release is:
+
+> Celani, D. (2026). *MIRA: Bayesian Multilevel Inference for Longitudinal Data*
+> (v0.0.1) [Computer software]. Zenodo.
+> https://doi.org/10.5281/zenodo.23120184
+
+- Version DOI for `v0.0.1`:
+  [10.5281/zenodo.23120184](https://doi.org/10.5281/zenodo.23120184).
+- Concept DOI for MIRA across versions:
+  [10.5281/zenodo.23120183](https://doi.org/10.5281/zenodo.23120183).
+
+For an analysis that uses a specific archived release, cite the DOI of the
+version actually used. The concept DOI identifies MIRA across versions.
+Citation files in the development branch can be updated after publication;
+the archived release remains the snapshot associated with its version DOI.
 
 ## Contributing and support
 

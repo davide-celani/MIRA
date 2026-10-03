@@ -1,7 +1,9 @@
-# MIRA 0.0.1 (unreleased)
+# MIRA 0.0.1 (2026-10-03)
 
-Initial release preparation. The release date and archive DOI will be recorded
-after publication; neither has been assigned in this file.
+Initial release, archived on Zenodo with version DOI
+[10.5281/zenodo.23120184](https://doi.org/10.5281/zenodo.23120184).
+The concept DOI for all MIRA versions is
+[10.5281/zenodo.23120183](https://doi.org/10.5281/zenodo.23120183).
 
 ## Initial capabilities
 
@@ -50,6 +52,7 @@ after publication; neither has been assigned in this file.
 - Exclude repository governance, CI, citation metadata, and developer scripts
   from the built R package while retaining them in the source repository.
 
-This inventory describes the implementation being prepared for the initial
-release. It does not assert completed statistical validation, JOSS acceptance,
-or successful checks on every supported platform.
+This inventory describes the initial release. R CMD check passed on Windows,
+Linux, and macOS; citation validation and CmdStan execution smoke tests passed.
+These checks do not establish completed statistical validation or JOSS
+acceptance.

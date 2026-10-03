@@ -17,6 +17,9 @@ tests, expansion of the existing opt-in smoke test to all three likelihoods,
 and package namespace/import cleanup. Follow-up assistance corrected the
 R CMD check workflow input quoting, normalized accented report filenames for
 macOS, and allowed machine-precision rounding in a correlation test.
+After publication, Codex verified the public Zenodo record and both DOIs,
+then updated citation metadata, DOI links, and release documentation in a
+follow-up source commit.
 Existing tests, examples, documentation
 generation, and R package checks were executed and their results reviewed by
 Codex. The maintainer should update this scope to match the final changes

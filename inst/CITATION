@@ -6,5 +6,6 @@ bibentry(
   author = person(given = "Davide", family = "Celani"),
   year = "2026",
   note = sprintf("R package version %s", meta$Version),
+  doi = "10.5281/zenodo.23120184",
   url = "https://github.com/davide-celani/MIRA"
 )

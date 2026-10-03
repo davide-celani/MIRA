@@ -3,6 +3,8 @@ message: "If you use MIRA in your research, please cite this software."
 type: software
 title: "MIRA: Bayesian Multilevel Inference for Longitudinal Data"
 version: 0.0.1
+date-released: "2026-10-03"
+doi: "10.5281/zenodo.23120184"
 authors:
   - family-names: Celani
     given-names: Davide

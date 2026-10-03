@@ -1,8 +1,30 @@
-# Preparing a citable MIRA release
+# Maintaining citable MIRA releases
 
-This guide prepares version `0.0.1`; the tag and Zenodo record do not yet exist.
+Version `0.0.1` was published on 2026-10-03 as tag `v0.0.1`, targeting commit
+`40ad4af0ed13bbd0fedd2efd4fd583fdaeaf0fac`, and is archived on
+[Zenodo](https://zenodo.org/records/23120184).
+Its version DOI is `10.5281/zenodo.23120184`; the concept DOI for all MIRA
+versions is `10.5281/zenodo.23120183`.
 The software title is **MIRA: Bayesian Multilevel Inference for Longitudinal
 Data**, authored by Davide Celani and licensed under MIT.
+
+New commits on `main` continue development without changing the published
+tag or the archived snapshot. Adding DOI links and citation metadata in a
+follow-up commit does not require another release.
+
+## Prepare the next software version
+
+Update `DESCRIPTION`, `CITATION.cff`, and `NEWS.md` together when preparing a
+new version. Remove the previous release date and version DOI from the CFF,
+and remove the previous version DOI from the R citation
+in `inst/CITATION`; use the repository URL while the new archive is pending.
+Do not pair a new version number with an older archive's DOI. Keep the concept
+DOI for the general README link or badge. After publication, add the new
+verified version DOI in a follow-up commit and preserve the published tag.
+
+The steps below describe the release workflow; replace `0.0.1` and `v0.0.1`
+with the version being prepared. The first release's identifiers above remain
+its historical record.
 
 ## Validate the release candidate
 

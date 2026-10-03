@@ -1,947 +1,283 @@
 # MIRA
 
-<!-- badges: start -->
-<!-- badges: end -->
+**Bayesian Multilevel Inference for Longitudinal Data**
 
-# MIRA: Bayesian Modeling for Longitudinal Clinical Data
+MIRA (**Multilevel Inference and Regression Analysis**) is an R package for
+Bayesian modeling of continuous longitudinal outcomes. It connects repeated
+measurements, treatment-arm contrasts, subject-level covariates, and
+probabilities of meaningful change through an inspectable Stan model.
+The package also provides frequentist exploration and Quarto report generation.
 
-## Overview
+Version `0.0.1` is being prepared for its first release. MIRA is under active
+development; no Zenodo DOI has been assigned yet.
 
-**MIRA** is an R package for Bayesian analysis of longitudinal clinical data, with particular emphasis on studies characterized by:
+## What MIRA does
 
-- repeated measurements within the same subject;
-- small to moderate sample sizes;
-- multiple follow-up time points;
-- clinically meaningful thresholds;
-- individual-level and population-level inference;
-- heterogeneous treatment responses.
+- Fits longitudinal multilevel models with correlated subject-specific
+  random intercepts and slopes, a common time trajectory, and treatment-
+  and covariate-specific trajectories.
+- Supports two or more measurement occasions and two or more treatment arms.
+- Offers Student-t and Gaussian identity-link models and a log-normal
+  log-link model, with optional observation bounds handled by censoring.
+- Encodes numeric, categorical, and logical subject-level covariates and
+  records their scaling and reference levels.
+- Exposes configurable priors, posterior contrasts, uncertainty intervals,
+  directional probabilities, and clinically meaningful change thresholds.
+- Summarizes existing-subject responses and new-subject latent and predictive
+  responder probabilities separately.
+- Provides posterior predictive checks, pointwise log-likelihood values,
+  and MCMC diagnostics.
+- Explores longitudinal datasets through `mira_info_long()` and writes
+  frequentist report bundles through `mira_report_freq_long()`.
 
-MIRA was developed from a practical methodological problem frequently encountered in clinical research: longitudinal outcomes are often analyzed using repeated pairwise hypothesis tests, such as the Wilcoxon signed-rank test, followed by a frequentist effect size.
+These are implemented features. See [NEWS.md](NEWS.md) for the release inventory.
 
-Although this approach can provide evidence regarding statistical differences between time points, it does not directly describe the full uncertainty surrounding the estimated effect, the probability and magnitude of clinically meaningful improvement, individual treatment trajectories, or heterogeneity between subjects.
+## Installation
 
-MIRA provides a Bayesian hierarchical framework designed to extend longitudinal clinical inference beyond the question:
-
-> "Is there a statistically significant difference?"
-
-toward questions such as:
-
-- How large is the estimated change?
-- What is the uncertainty around that change?
-- What is the posterior probability of improvement?
-- What is the posterior probability that the change exceeds a clinically meaningful threshold?
-- How heterogeneous are individual responses?
-- How does each individual trajectory compare with the population trajectory?
-- Is the observed effect clinically meaningful, rather than only statistically distinguishable from zero?
-
-The package is intended as a practical interface for Bayesian longitudinal modeling using **Stan** and posterior simulation.
-
----
-
-# Why MIRA?
-
-A conventional longitudinal analysis based only on repeated Wilcoxon tests and effect sizes may provide a limited representation of the data.
-
-For example, an analysis might report:
-
-- a p-value for the comparison between baseline and follow-up;
-- a second p-value for another follow-up comparison;
-- an effect size such as `r`.
-
-These quantities can be useful, but they do not directly provide a unified probabilistic description of the longitudinal process.
-
-MIRA instead models the repeated observations jointly.
-
-The resulting posterior distribution can be used to estimate:
-
-1. population-level changes;
-2. uncertainty around each estimated change;
-3. standardized effect magnitude;
-4. posterior probabilities of directional improvement;
-5. posterior probabilities of clinically meaningful improvement;
-6. individual-level changes;
-7. subject-level response probabilities;
-8. between-subject heterogeneity;
-9. posterior predictive distributions;
-10. model diagnostics;
-11. predictive performance using approximate leave-one-out cross-validation.
-
-The objective is not simply to replace a p-value with a Bayesian quantity. The objective is to extract substantially more clinically interpretable information from longitudinal data.
-
----
-
-# Statistical framework
-
-MIRA currently uses Bayesian hierarchical longitudinal models implemented in **Stan**.
-
-A simplified version of the model can be represented as:
-
-\[
-y_{ij} \sim \text{Student-t}(\nu, \mu_{ij}, \sigma)
-\]
-
-where:
-
-- \(y_{ij}\) is the observed outcome for subject \(i\) at measurement \(j\);
-- \(\mu_{ij}\) is the expected value;
-- \(\sigma\) represents residual variability;
-- \(\nu\) controls the degrees of freedom of the Student-t distribution.
-
-The use of a Student-t likelihood allows increased robustness to potentially influential observations compared with a purely Gaussian likelihood.
-
-The longitudinal structure is represented using population-level effects together with subject-specific random effects.
-
-A simplified formulation is:
-
-\[
-\mu_{ij} =
-\alpha +
-\beta_{\text{population}} \cdot t_j +
-u_{0i} +
-u_{1i} \cdot t_j
-\]
-
-where:
-
-- \(\alpha\) is the population-level intercept;
-- \(\beta_{\text{population}}\) is the population-level longitudinal slope;
-- \(u_{0i}\) is the subject-specific random intercept;
-- \(u_{1i}\) is the subject-specific random slope;
-- \(t_j\) represents the measurement time.
-
-This hierarchical structure allows MIRA to simultaneously estimate the overall population trajectory and individual deviations from that trajectory.
-
----
-
-# Population-level inference
-
-MIRA estimates posterior distributions for clinically relevant longitudinal contrasts.
-
-Depending on the study design, these may include quantities such as:
-
-- change from baseline to T1;
-- change from baseline to T2;
-- change from baseline to later follow-up times;
-- change between consecutive follow-up visits;
-- population-level longitudinal slope.
-
-For each estimated parameter, MIRA can summarize:
-
-- posterior mean;
-- posterior median;
-- posterior standard deviation;
-- median absolute deviation;
-- lower credible interval bound;
-- upper credible interval bound;
-- credible interval width;
-- posterior probability of positive change;
-- posterior probability of negative change.
-
-For example:
+MIRA requires R 4.2 or later. It is installed from GitHub and is not currently
+distributed through CRAN. Install CmdStanR from the Stan R-universe repository
+before installing MIRA:
 
 ```r
-summary_mira$population
+install.packages(
+  "cmdstanr",
+  repos = c("https://stan-dev.r-universe.dev", getOption("repos"))
+)
+install.packages("remotes")
+remotes::install_github("davide-celani/MIRA")
 ```
 
-may return estimates such as:
+The development branch may change. After a tagged release is published,
+install that release with `remotes::install_github("davide-celani/MIRA@v0.0.1")`.
+This tag is a planned release identifier until it is published.
 
-| Parameter | Interpretation |
-|---|---|
-| `change_T1` | Population-level change at T1 |
-| `change_T2` | Population-level change at T2 |
-| `change_T2_vs_T1` | Additional change between T1 and T2 |
-| `population_slope` | Overall longitudinal population slope |
-| `sigma_intercept` | Between-subject intercept heterogeneity |
-| `sigma_slope` | Between-subject slope heterogeneity |
-| `rho_subject` | Correlation between individual intercepts and slopes |
-| `sigma` | Residual variability |
-| `nu` | Student-t degrees of freedom |
-
-The primary interpretation is based on the estimated magnitude of change and its uncertainty rather than on dichotomous significance testing alone.
-
----
-
-# Clinical meaningfulness and MCID
-
-One of the central objectives of MIRA is to distinguish between:
-
-1. evidence of any improvement;
-2. evidence of clinically meaningful improvement.
-
-A statistically detectable change is not necessarily clinically meaningful.
-
-MIRA therefore allows the user to define a clinically meaningful change threshold, such as a **Minimal Clinically Important Difference (MCID)**.
-
-If the clinically meaningful threshold is denoted by \(M\), MIRA evaluates:
-
-\[
-P(\Delta > M \mid \text{data})
-\]
-
-where \(\Delta\) represents the posterior distribution of the estimated change.
-
-This allows direct estimation of quantities such as:
-
-```text
-P(population change > 0)
-```
-
-and:
-
-```text
-P(population change >= MCID)
-```
-
-For example:
+Bayesian fitting also requires a C++ toolchain and CmdStan. On Windows, install
+the Rtools version that matches your R installation. Then run the following
+one-time setup from R:
 
 ```r
-summary_mira$clinical
+cmdstanr::check_cmdstan_toolchain()
+cmdstanr::install_cmdstan()
+cmdstanr::cmdstan_version()
 ```
 
-can provide:
-
-```r
-# A tibble containing:
-# - MCID
-# - P(population change T2 > 0)
-# - P(population change T2 >= MCID)
-# - P(population change T2 < MCID)
-# - Mean population distance from MCID
-# - P(population distance from MCID >= 0)
-# - Standardized population change
-```
-
-This distinction is particularly important in clinical research.
-
-A result may show overwhelming posterior evidence of improvement while simultaneously showing essentially no probability of reaching the predefined clinically meaningful threshold.
-
-For example:
-
-\[
-P(\Delta > 0 \mid data) \approx 1
-\]
-
-does not imply:
-
-\[
-P(\Delta \geq MCID \mid data) \approx 1
-\]
-
-MIRA explicitly separates these two concepts.
-
----
-
-# Individual-level inference
-
-Population averages may conceal substantial differences between subjects.
-
-A treatment may produce:
-
-- substantial improvement in some patients;
-- small improvement in others;
-- no meaningful improvement in a subgroup;
-- highly heterogeneous trajectories.
-
-MIRA therefore estimates subject-specific posterior changes.
-
-For each subject, the model can summarize quantities including:
-
-- posterior mean change;
-- posterior median change;
-- posterior standard deviation;
-- posterior credible interval;
-- credible interval width;
-- posterior change relative to the MCID;
-- posterior probability of any improvement;
-- posterior probability of clinically meaningful improvement.
-
-These results are available through:
-
-```r
-summary_mira$individual
-```
-
-This allows the analysis to move beyond the statement:
-
-> "The average patient improved."
-
-toward:
-
-> "How did individual patients respond, and with what posterior certainty?"
-
----
-
-# Responder analysis
-
-MIRA provides a posterior probability-based approach to responder classification.
-
-A subject may be considered a responder when the posterior probability of clinically meaningful improvement exceeds a predefined threshold.
-
-For example:
-
-\[
-P(\Delta_i \geq MCID \mid data) > 0.95
-\]
-
-could define a high-certainty responder.
-
-The user can evaluate different probability thresholds, for example:
-
-```text
-0.50
-0.80
-0.95
-```
-
-through:
-
-```r
-summary_mira$responders
-```
-
-This approach avoids classifying subjects solely according to a single observed difference.
-
-Instead, responder classification incorporates posterior uncertainty.
-
----
-
-# Between-subject heterogeneity
-
-MIRA explicitly models heterogeneity between individuals.
-
-Important quantities include:
-
-```r
-summary_mira$heterogeneity
-```
-
-which may summarize:
-
-- `sigma_intercept`;
-- `sigma_slope`;
-- `rho_subject`.
-
-These parameters quantify whether subjects differ in:
-
-1. their baseline levels;
-2. their longitudinal trajectories;
-3. the relationship between baseline level and longitudinal change.
-
-For example, a larger `sigma_slope` suggests greater variability in treatment response trajectories between subjects.
-
-This information is generally not available from a series of independent Wilcoxon tests.
-
----
-
-# Posterior draws
-
-All primary quantities are estimated as posterior distributions rather than as single deterministic values.
-
-Posterior draws are accessible through:
-
-```r
-summary_mira$draws
-```
-
-These draws may include:
-
-- population means at each time point;
-- longitudinal contrasts;
-- population slope;
-- residual variability;
-- random-effect parameters;
-- Student-t degrees of freedom;
-- population probabilities of improvement;
-- population probabilities of meaningful improvement;
-- individual-level posterior changes;
-- individual-level responder indicators;
-- pointwise log-likelihood values;
-- posterior predictive replicated observations.
-
-Access to posterior draws allows users to perform additional analyses beyond the standard MIRA summaries.
-
-For example, users may calculate:
-
-- custom posterior probabilities;
-- alternative clinical thresholds;
-- custom responder definitions;
-- decision-oriented summaries;
-- posterior risk differences;
-- secondary standardized effects.
-
----
-
-# Standardized population change
-
-MIRA can quantify the magnitude of population-level change relative to model-estimated variability.
-
-A standardized posterior change can be expressed conceptually as:
-
-\[
-d = \frac{\Delta}{\sigma}
-\]
-
-where:
-
-- \(\Delta\) is the posterior longitudinal contrast;
-- \(\sigma\) is the residual standard deviation.
-
-Unlike a conventional single-value effect size, this quantity can itself be represented as a posterior distribution.
-
-The resulting inference can therefore include:
-
-- posterior mean or median standardized change;
-- uncertainty around the standardized change;
-- credible intervals;
-- posterior directional probabilities.
-
-This provides a probabilistic representation of effect magnitude rather than a single point estimate alone.
-
----
-
-# Robust likelihood
-
-Clinical datasets, particularly small datasets, may contain observations that have a disproportionate influence on Gaussian models.
-
-MIRA uses a Student-t likelihood in the current hierarchical framework.
-
-The degrees of freedom parameter:
-
-\[
-\nu
-\]
-
-is estimated from the data.
-
-Lower values of \(\nu\) correspond to heavier tails, allowing increased robustness to potentially influential observations.
-
-As \(\nu\) increases, the Student-t distribution increasingly resembles a Gaussian distribution.
-
-This provides a flexible model that can adapt to departures from strict normality.
-
----
-
-# Posterior predictive checks
-
-MIRA includes posterior predictive replicated data.
-
-These can be accessed through:
-
-```r
-summary_mira$ppc
-```
-
-and through posterior draws containing:
-
-```text
-y_rep
-```
-
-Posterior predictive checking evaluates whether observations simulated from the fitted model are compatible with important features of the observed data.
-
-This is a central part of Bayesian workflow.
-
-The objective is not only to estimate parameters but also to evaluate whether the fitted model can reasonably reproduce the observed data-generating structure.
-
----
-
-# Predictive model assessment
-
-MIRA provides approximate leave-one-out cross-validation information through:
-
-```r
-summary_mira$loo
-```
-
-This allows predictive assessment of the fitted model and can support comparisons between competing model specifications.
-
-Possible future applications include comparison of:
-
-- alternative random-effects structures;
-- Gaussian versus robust likelihoods;
-- models with and without specific covariates;
-- different longitudinal formulations.
-
-Predictive model comparison should complement, rather than replace, substantive and clinical model evaluation.
-
----
-
-# MCMC diagnostics
-
-Bayesian inference requires careful assessment of computational convergence.
-
-MIRA provides diagnostic information through:
-
-```r
-summary_mira$diagnostics
-```
-
-Important diagnostics may include:
-
-- R-hat;
-- effective sample size;
-- Monte Carlo error;
-- divergent transitions;
-- other sampling quality indicators.
-
-A fitted model should not be interpreted solely because it returns numerical posterior estimates.
-
-Reliable Bayesian inference requires adequate sampling diagnostics and convergence assessment.
-
----
-
-# Quality flags
-
-MIRA includes a dedicated output:
-
-```r
-summary_mira$quality_flags
-```
-
-designed to identify potential issues requiring attention before substantive interpretation.
-
-Quality checks may include warnings related to:
-
-- convergence;
-- sampling diagnostics;
-- effective sample size;
-- posterior predictive performance;
-- influential observations;
-- approximate LOO diagnostics.
-
-The purpose of this component is to encourage a workflow in which model adequacy is evaluated before final conclusions are drawn.
-
----
-
-# Model information
-
-General information about the fitted model is available through:
-
-```r
-summary_mira$model_information
-```
-
-This can be used to document the model specification and important analytical settings.
-
-Such information is particularly useful for:
-
-- reproducibility;
-- reporting;
-- supplementary materials;
-- comparison of different analyses.
-
----
-
-# Basic workflow
-
-A typical MIRA workflow is:
+CmdStan is separate from the `cmdstanr` R package. Installing MIRA alone does
+not install CmdStan. See the
+[CmdStanR setup instructions](https://mc-stan.org/cmdstanr/articles/cmdstanr.html)
+for operating-system requirements and existing installations.
+
+HTML/PDF report rendering additionally requires the
+[Quarto CLI](https://quarto.org/docs/get-started/). PDF rendering requires a
+working TeX installation. The R package `quarto` alone does not install the
+CLI. Report source files can be generated with `render = FALSE`.
+
+## Reproducible example
+
+This example uses simulated observations, not participant data. It runs data
+preparation without a CmdStan installation:
 
 ```r
 library(MIRA)
-```
 
-Prepare a wide longitudinal dataset containing `patient`, `arm`, and
-`outcome_t0`, ..., `outcome_tK` columns:
+set.seed(20261003)
+n <- 24L
+arm <- rep(c("Control", "Treatment"), each = n / 2L)
+baseline <- round(rnorm(n, mean = 60, sd = 7))
+wide_data <- data.frame(
+  patient = sprintf("P%02d", seq_len(n)),
+  arm = arm,
+  age = sample(45:80, n, replace = TRUE),
+  BCVA_t0 = baseline,
+  BCVA_t1 = pmin(100, pmax(0, round(
+    baseline + 1 + 2 * (arm == "Treatment") + rnorm(n, 0, 2)
+  ))),
+  BCVA_t2 = pmin(100, pmax(0, round(
+    baseline + 2 + 4 * (arm == "Treatment") + rnorm(n, 0, 2)
+  )))
+)
 
-```r
 stan_data <- mira_data_long(
   data = wide_data,
-  time_value = c(0, 3, 6, 12),
-  outcome = "outcome",
+  time_value = c(0, 3, 6),
+  outcome = "BCVA",
+  likelihood = "student_t",
   direction = "higher",
   meaningful_change = 5,
-  meaningful_change_sd = 1
+  meaningful_change_sd = 1,
+  reference_arm = "Control",
+  covariates = "age"
 )
+
+prior <- mira_prior_long(stan_data)
+print(prior)
 ```
 
-Fit the Bayesian longitudinal model:
+With CmdStan configured, fit the model and summarize the posterior:
 
 ```r
 fit <- mira_fit_long(
-  stan_data = stan_data
+  stan_data = stan_data,
+  prior = prior,
+  chains = 4,
+  parallel_chains = 4,
+  iter_warmup = 2000,
+  iter_sampling = 3000,
+  seed = 20261003
 )
-```
 
-Create the comprehensive model summary:
-
-```r
 summary_mira <- mira_summary_long(
   fit = fit,
-  stan_data = stan_data
+  stan_data = stan_data,
+  credible_level = 0.95
 )
-```
 
-Inspect population-level inference:
-
-```r
-summary_mira$population
-```
-
-Inspect clinical interpretation:
-
-```r
-summary_mira$clinical
-```
-
-Inspect individual trajectories:
-
-```r
-summary_mira$individual
-```
-
-Inspect responder probabilities:
-
-```r
+summary_mira$change_from_baseline
+summary_mira$treatment$from_baseline
+summary_mira$covariates$from_baseline
+summary_mira$individual_change
 summary_mira$responders
-```
-
-Inspect between-subject heterogeneity:
-
-```r
-summary_mira$heterogeneity
-```
-
-Inspect posterior draws:
-
-```r
-summary_mira$draws
-```
-
-Inspect posterior predictive checks:
-
-```r
-summary_mira$ppc
-```
-
-Inspect predictive model assessment:
-
-```r
-summary_mira$loo
-```
-
-Inspect MCMC diagnostics:
-
-```r
+summary_mira$population_clinical
 summary_mira$diagnostics
-```
-
-Inspect quality flags:
-
-```r
 summary_mira$quality_flags
 ```
 
-Inspect model information:
+The summary defaults to 90% credible intervals; the example explicitly requests
+95%. Inspect convergence, divergences, effective sample sizes, and posterior
+predictive adequacy before interpreting results. Adequate iteration counts and
+prior sensitivity checks depend on the analysis.
+
+For frequentist exploration of the same data:
 
 ```r
-summary_mira$model_information
+exploration <- mira_info_long(
+  data = wide_data,
+  id = "patient",
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  arm = "arm",
+  reference_arm = "Control",
+  plots = FALSE,
+  model = FALSE,
+  verbose = FALSE
+)
+
+report <- mira_report_freq_long(
+  x = exploration,
+  output_dir = file.path(tempdir(), "mira-example-report"),
+  render = FALSE,
+  open = FALSE
+)
 ```
 
----
+## Data and model assumptions
 
-# Example of interpretation
+The Bayesian interface expects wide data with one row and one unique `patient`
+identifier per subject. Measurement columns use `<outcome>_t0`,
+`<outcome>_t1`, and subsequent integer suffixes. Actual time values must be
+finite and strictly increasing. Select one outcome per Bayesian fit and
+explicitly choose the reference arm and covariates.
 
-Suppose a model estimates:
+`likelihood = "auto"` selects Student-t for BCVA, log-normal for CMT, and a
+Student-t fallback with a warning for other continuous outcomes. Check the
+measurement scale and use an explicit family when appropriate. BCVA defaults
+to bounds of 0 and 100; confirm these match the instrument used. Log-normal
+models require strictly positive measurements.
 
-```text
-Population change at T2 = 1.95
-95% CrI = 1.77 to 2.13
+The MCID has a Gamma prior informed by `meaningful_change` and
+`meaningful_change_sd`, both in natural outcome units. Specify these from
+external clinical justification. The present model does not learn clinical
+importance from the outcome observations. For a fixed-threshold sensitivity
+analysis, review the summary API and the underlying posterior draws carefully.
 
-P(change > 0) = 1.00
+## Interpretation and current limits
 
-MCID = 5
+Posterior probabilities are conditional on the data, likelihood, model
+structure, and priors. Treatment contrasts alone do not establish a causal
+effect. Small samples still require appropriate design and sensitivity checks.
 
-P(change >= MCID) = 0.00
+The bundled Bayesian model has one subject grouping level. It does not
+implement eyes nested within patients, an explicit crossover/carryover model,
+or time-varying covariates. Modeling these designs requires additional model
+development and validation. A fixed `study_eye` covariate does not create a
+patient/eye random-effects hierarchy.
+
+For bounded outcomes, quantities called `population_mean` in the Stan output
+use a bounded latent-location transformation for identity-link models and a
+bounded uncensored-mean transformation for log-normal models. They are not
+exact marginal expectations of the censored observed distribution. Related
+change and contrast summaries inherit this interpretation. Predictive draws
+include observation noise and censoring. This distinction needs to be retained
+in reporting and evaluated in future statistical validation.
+
+The Student-t scale parameter is not its residual standard deviation. MIRA's
+generated `residual_sd` uses the degrees-of-freedom correction. On the log-normal
+branch, `sigma` is on the log scale; do not interpret it as an outcome-unit SD.
+
+The current summary exposes pointwise log-likelihood information through
+`$loo`; this does not automatically perform a complete PSIS-LOO analysis.
+Choose a validation unit consistent with the scientific prediction task,
+especially when observations are clustered within subjects.
+
+## Documentation and tests
+
+Function documentation is available in R, for example:
+
+```r
+?mira_data_long
+?mira_prior_long
+?mira_fit_long
+?mira_summary_long
+?mira_info_long
+?mira_report_freq_long
 ```
 
-These results support two distinct conclusions.
-
-First:
-
-> There is overwhelming posterior evidence of improvement.
-
-Second:
-
-> The estimated improvement is substantially below the predefined threshold for clinical meaningfulness.
-
-The appropriate interpretation is therefore not simply:
-
-> "The treatment worked."
-
-A more informative interpretation is:
-
-> "The model estimated a highly probable improvement, but the magnitude of the improvement did not reach the predefined threshold for clinical meaningfulness."
-
-This distinction represents one of the main motivations for MIRA.
-
----
-
-# From statistical significance to clinical interpretation
-
-MIRA is designed around the principle that statistical evidence and clinical importance are different concepts.
-
-A conventional analysis may answer:
-
-> Is the observed difference statistically distinguishable from zero?
-
-MIRA additionally asks:
-
-> What is the estimated magnitude of the change?
-
-> How uncertain is this estimate?
-
-> What is the probability that the change is beneficial?
-
-> What is the probability that the change is clinically meaningful?
-
-> How much do individual responses vary?
-
-> Does the population average conceal clinically relevant heterogeneity?
-
-The package is therefore intended to support richer interpretation of longitudinal clinical data.
-
----
-
-# Current model capabilities
-
-The current MIRA framework includes:
-
-- Bayesian longitudinal hierarchical modeling;
-- repeated measurements within subjects;
-- population-level temporal effects;
-- subject-specific random intercepts;
-- subject-specific random slopes;
-- correlation between random intercepts and slopes;
-- robust Student-t likelihood;
-- posterior longitudinal contrasts;
-- posterior credible intervals;
-- posterior directional probabilities;
-- clinically meaningful change thresholds;
-- MCID-based inference;
-- population-level clinical interpretation;
-- individual-level posterior estimates;
-- posterior responder probabilities;
-- heterogeneity assessment;
-- standardized posterior effect estimates;
-- posterior predictive replicated data;
-- posterior predictive checks;
-- pointwise log-likelihood extraction;
-- approximate leave-one-out cross-validation;
-- MCMC diagnostics;
-- automated quality flags;
-- comprehensive model summaries.
-
----
-
-# Planned development
-
-MIRA is under active development.
-
-Future development is expected to focus on increasing model flexibility while maintaining a practical workflow for clinical researchers.
-
-Potential areas of development include:
-
-## Flexible number of time points
-
-Support for longitudinal studies with different numbers of assessments, including:
-
-- 2 time points;
-- 3 time points;
-- 4 time points;
-- 5 time points;
-- 6 or more time points.
-
-The aim is to allow the model structure to adapt to the available longitudinal design rather than requiring a separate manually rewritten model for each number of assessments.
-
-## Covariate extension
-
-Future versions may allow incorporation of additional covariates, such as:
-
-- age;
-- sex;
-- treatment;
-- baseline clinical characteristics;
-- other user-specified predictors.
-
-These covariates may be incorporated into both population-level and longitudinal components of the model where appropriate.
-
-## Personalized priors
-
-Future development may allow greater control over prior specification.
-
-Potential functionality may include:
-
-- default weakly informative priors;
-- user-defined priors;
-- prior sensitivity analysis;
-- standardized prior templates.
-
-The goal is to allow users to incorporate justified prior information while maintaining transparent and reproducible model specifications.
-
-## Expanded model comparison
-
-Future versions may support structured comparison between alternative model formulations using:
-
-- predictive performance;
-- posterior predictive checks;
-- LOO diagnostics;
-- sensitivity analyses.
-
-## Extended clinical decision metrics
-
-Potential future development includes additional clinically oriented posterior summaries and responder definitions.
-
----
-
-# Intended use
-
-MIRA is particularly relevant for clinical and biomedical studies involving repeated measurements.
-
-Potential applications include:
-
-- ophthalmology;
-- longitudinal treatment studies;
-- pilot studies;
-- rare diseases;
-- retrospective cohorts;
-- small clinical samples;
-- early-phase clinical research;
-- studies with heterogeneous individual responses.
-
-The framework may be particularly useful when conventional statistical workflows are limited to repeated pairwise tests and single-number effect sizes.
-
-MIRA does not assume that Bayesian analysis automatically makes a study more reliable.
-
-The quality of inference still depends on:
-
-- study design;
-- data quality;
-- sample size;
-- measurement quality;
-- model assumptions;
-- prior specification;
-- model diagnostics;
-- posterior predictive adequacy.
-
-The purpose of MIRA is to provide a richer analytical framework for these data, not to compensate for poor study design.
-
----
-
-# Reproducibility
-
-MIRA is built around reproducible Bayesian analysis.
-
-Users should report:
-
-- the R version;
-- the MIRA version;
-- the Stan/CmdStan configuration where applicable;
-- model specification;
-- prior distributions;
-- number of chains;
-- warm-up iterations;
-- sampling iterations;
-- convergence diagnostics;
-- posterior predictive checks;
-- clinical thresholds used;
-- sensitivity analyses where relevant.
-
-Clinical conclusions should be based on the complete posterior evidence rather than on a single threshold alone.
-
----
-
-# Interpretation philosophy
-
-MIRA emphasizes:
-
-```text
-Effect magnitude
-        +
-Uncertainty
-        +
-Posterior probability
-        +
-Clinical meaningfulness
-        +
-Individual heterogeneity
-        +
-Model adequacy
+From the repository root, run:
+
+```r
+devtools::test()
+devtools::check(args = "--no-manual")
 ```
 
-rather than relying exclusively on:
+The ordinary suite tests data preparation, covariate encoding, exploration,
+statistical reference calculations, summaries, and report bundles. Actual
+CmdStan compilation and sampling are opt-in:
 
-```text
-p-value
-        +
-single effect size
+```r
+Sys.setenv(MIRA_RUN_CMDSTAN_TESTS = "true")
+devtools::test(filter = "dynamic-covariates_long")
 ```
 
-The central question is therefore not only:
+The CmdStan smoke test checks software execution; its deliberately short chains
+do not establish inferential accuracy or convergence. Quarto integration tests
+require the CLI and are skipped when it is unavailable.
 
-> "Is there evidence of a difference?"
+## Citation
 
-but also:
-
-> "How large is the change, how certain are we, is it clinically meaningful, and how consistently does it occur across individuals?"
-
----
-
-# Limitations
-
-MIRA is a statistical modeling framework and should not be interpreted as providing causal evidence by itself.
-
-Posterior probabilities describe uncertainty conditional on:
-
-- the observed data;
-- the specified likelihood;
-- the model structure;
-- the prior distributions.
-
-Results remain dependent on model assumptions and study design.
-
-Small samples can benefit from hierarchical modeling and regularization, but Bayesian methods do not create information that is absent from the data.
-
-Users should perform appropriate diagnostic and sensitivity analyses before drawing substantive conclusions.
-
----
-
-# Citation
-
-If you use MIRA in academic work, please cite the package according to the citation information provided by:
+The software citation title is **MIRA: Bayesian Multilevel Inference for
+Longitudinal Data**. The author is Davide Celani. Retrieve the R citation with:
 
 ```r
 citation("MIRA")
+toBibtex(citation("MIRA"))
 ```
 
-Additional citation information will be added as the package and associated methodological work develop.
+GitHub uses [CITATION.cff](CITATION.cff); R uses [inst/CITATION](inst/CITATION).
+For an analysis that uses a specific archived release, cite its version DOI
+once Zenodo assigns it. The general concept DOI identifies the project across
+versions. Until the archive exists, the citation points to the source repository.
 
----
+## Contributing and support
 
-# Contributing
+Open [an issue](https://github.com/davide-celani/MIRA/issues) for bugs or feature
+requests. Read [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing
+guidance and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
+MIRA is maintained by Davide Celani; response times depend on availability.
 
-Contributions, methodological discussion, bug reports, and feature suggestions are welcome.
+The [release guide](dev/RELEASE.md) describes preparation of a GitHub release
+and Zenodo archive. Future JOSS work is tracked in
+[dev/JOSS_READINESS.md](dev/JOSS_READINESS.md). AI assistance during this
+preparation is recorded in [dev/AI_USAGE.md](dev/AI_USAGE.md).
 
-Potential areas for contribution include:
+## License
 
-- Bayesian model development;
-- Stan optimization;
-- diagnostic tools;
-- visualization;
-- simulation studies;
-- documentation;
-- clinical validation;
-- reproducibility testing.
-
----
-
-# License
-
-License information will be provided with the package.
-
----
-
-# Acknowledgments
-
-MIRA was developed to address a practical problem in longitudinal clinical research: extracting clinically interpretable information from repeated measurements while explicitly representing uncertainty, individual heterogeneity, and the distinction between statistical change and clinically meaningful change.
-
-The package is based on Bayesian hierarchical modeling and is implemented using R and Stan.
+MIRA is distributed under the [MIT license](LICENSE.md).
+Copyright 2026 Davide Celani.

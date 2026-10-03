@@ -1,0 +1,10 @@
+citHeader("To cite MIRA in publications use:")
+
+bibentry(
+  bibtype = "Manual",
+  title = "MIRA: Bayesian Multilevel Inference for Longitudinal Data",
+  author = person(given = "Davide", family = "Celani"),
+  year = "2026",
+  note = sprintf("R package version %s", meta$Version),
+  url = "https://github.com/davide-celani/MIRA"
+)

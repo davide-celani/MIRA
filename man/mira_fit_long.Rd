@@ -70,7 +70,9 @@ non-centred hierarchical model.}
 messages, including rejected warmup proposals.}
 
 \item{stan_file}{Optional path to the Stan file. If \code{NULL}, MIRA first
-looks for \code{inst/stan/mira_longitudinal.stan}.}
+looks for \code{inst/stan/mira_longitudinal.stan}. Compiled executables are
+cached by source content in the R session's temporary directory, so the
+package installation and any custom Stan source can remain read-only.}
 
 \item{verbose}{Logical. If TRUE (default), print a compact MIRA fit report
 automatically after successful sampling. The fitted CmdStanMCMC object is

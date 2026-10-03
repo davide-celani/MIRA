@@ -10,21 +10,26 @@ Authors@R:
         role = c("aut", "cre")
     )
 Description:
-    A framework for accessible Bayesian multilevel, longitudinal, and
-    probabilistic inference. MIRA provides an explicit and inspectable
-    interface for hierarchical Bayesian models, posterior estimands,
-    contrasts, probabilities, and scientifically interpretable quantities.
-    The framework is designed to simplify the use of Bayesian models
-    without hiding their statistical structure.
+    Bayesian multilevel modeling of continuous longitudinal outcomes using
+    Stan, with Student-t, Gaussian, and log-normal observation models.
+    Supports multiple treatment arms, subject-level covariates, configurable
+    priors, posterior contrasts, and probabilities of meaningful change.
+    Also provides longitudinal data exploration, frequentist analyses,
+    and reproducible report generation.
 License: MIT + file LICENSE
 Encoding: UTF-8
+URL: https://github.com/davide-celani/MIRA
+BugReports: https://github.com/davide-celani/MIRA/issues
+Additional_repositories: https://stan-dev.r-universe.dev
 Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.2.0)
 Suggests:
     testthat (>= 3.2.0),
     withr,
-    yaml
+    yaml,
+    loo,
+    posterior
 Config/testthat/edition: 3
 Imports:
     afex,
@@ -33,11 +38,15 @@ Imports:
     emmeans,
     geepack,
     ggplot2,
+    grDevices,
+    grid,
     knitr,
     lme4,
     lmerTest,
     nlme,
     performance,
     quarto,
-    tibble
+    stats,
+    tools,
+    utils
 Config/roxygen2/version: 8.1.0

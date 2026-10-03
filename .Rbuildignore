@@ -1,3 +1,9 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^LICENSE\.md$
+^\.github$
+^CITATION\.cff$
+^CONTRIBUTING\.md$
+^CODE_OF_CONDUCT\.md$
+^dev$
+^paper$

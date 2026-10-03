@@ -5,3 +5,11 @@
 *.Rcheck
 *.tar.gz
 *.exe
+*.o
+*.hpp
+*.rds
+*.Rout
+*.Rout.fail
+inst/stan/mira_longitudinal
+_site/
+.quarto/

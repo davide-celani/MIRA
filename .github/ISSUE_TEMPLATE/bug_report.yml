@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem with MIRA.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve MIRA. Please search existing issues first.
+        Use synthetic or anonymized data and remove patient identifiers,
+        credentials, and private study files before posting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and expected behavior
+      description: Describe what happened and what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproducible example
+      description: Include a small runnable example with simulated or anonymized data.
+      render: R
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Error messages and diagnostic output
+      description: Paste the relevant console output or describe the incorrect result.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Versions and environment
+      description: Include packageVersion("MIRA") and sessionInfo().
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: external_tools
+    attributes:
+      label: CmdStan or Quarto details, if relevant
+      description: |
+        For Bayesian fitting: CmdStanR and CmdStan versions, seed, sampling
+        settings, and diagnostics. For reports: Quarto version, output format,
+        and LaTeX version if producing PDF.
+      render: text
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched for an existing issue covering this problem.
+          required: true
+        - label: I removed private data and credentials from this report.
+          required: true

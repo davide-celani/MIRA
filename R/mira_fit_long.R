@@ -69,7 +69,9 @@
 #'   automatically after successful sampling. The fitted CmdStanMCMC object is
 #'   still returned invisibly and can be assigned normally.
 #' @param stan_file Optional path to the Stan file. If `NULL`, MIRA first
-#'   looks for `inst/stan/mira_longitudinal.stan`.
+#'   looks for `inst/stan/mira_longitudinal.stan`. Compiled executables are
+#'   cached by source content in the R session's temporary directory, so the
+#'   package installation and any custom Stan source can remain read-only.
 #'
 #' @return A CmdStanMCMC object.
 #'
@@ -752,9 +754,29 @@ mira_fit_long <- function(
 
   compile_started <- Sys.time()
 
+  # Installed package libraries and caller-supplied model directories can be
+  # read-only. Keep the source in place for relative Stan includes, and let
+  # CmdStanR place the executable in a writable session cache instead.
+  source_hash <- unname(tools::md5sum(stan_file))
+  if (length(source_hash) != 1L || is.na(source_hash)) {
+    stop("Could not read the Stan model source: ", stan_file, call. = FALSE)
+  }
+  compile_dir <- file.path(tempdir(), "MIRA", "cmdstan", source_hash)
+  if (!dir.exists(compile_dir)) {
+    dir.create(compile_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!dir.exists(compile_dir) || file.access(compile_dir, 2L) != 0L) {
+    stop(
+      "Could not create a writable Stan compilation directory: ",
+      compile_dir,
+      call. = FALSE
+    )
+  }
+
   model <- cmdstanr::cmdstan_model(
     stan_file,
-    quiet = TRUE
+    quiet = TRUE,
+    dir = compile_dir
   )
 
   compile_elapsed_seconds <- as.numeric(

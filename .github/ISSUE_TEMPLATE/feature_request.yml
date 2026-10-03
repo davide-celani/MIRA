@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose an improvement to MIRA.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the research question or workflow this feature would support.
+        Discuss substantial model or API changes before starting implementation.
+        Do not include private study data or patient identifiers.
+  - type: textarea
+    id: need
+    attributes:
+      label: Research question or workflow
+      description: What is difficult or unavailable in the current package?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the intended result; a short example API is helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe existing workarounds or related approaches.
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Statistical rationale and references, if relevant
+      description: Include assumptions, implications for existing analyses, and supporting references.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Suggested verification
+      description: How could the behavior be checked with examples, simulations, or tests?

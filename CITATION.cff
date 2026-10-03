@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use MIRA in your research, please cite this software."
+type: software
+title: "MIRA: Bayesian Multilevel Inference for Longitudinal Data"
+version: 0.0.1
+authors:
+  - family-names: Celani
+    given-names: Davide
+    email: davide.celani.00@gmail.com
+repository-code: "https://github.com/davide-celani/MIRA"
+url: "https://github.com/davide-celani/MIRA"
+license: MIT
+abstract: >-
+  MIRA is an R package for Bayesian multilevel modeling of continuous
+  longitudinal outcomes using Stan. It supports Student-t, Gaussian,
+  and log-normal observation models, multiple treatment arms, subject-level
+  covariates, configurable priors, and posterior probabilities of meaningful
+  change. The package also provides longitudinal data exploration,
+  frequentist analyses, and reproducible report generation.
+keywords:
+  - R
+  - Stan
+  - Bayesian inference
+  - multilevel modeling
+  - longitudinal data
+  - repeated measures
+  - clinical research

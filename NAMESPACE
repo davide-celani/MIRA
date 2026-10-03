@@ -26,3 +26,8 @@ export(mira_prior_stan_data_long)
 export(mira_report_freq_long)
 export(mira_summary_long)
 export(mira_validate_prior_long)
+importFrom(stats,
+  coef,
+  p.adjust.methods
+)
+importFrom(utils,tail)

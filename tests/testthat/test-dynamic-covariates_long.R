@@ -457,7 +457,7 @@ test_that("H and I: Stan is generic, legacy-free, and statically P = 0 safe", {
 })
 
 
-test_that("H: opt-in mira_fit_long smoke test accepts P = 0 and P > 0", {
+test_that("H: opt-in smoke test fits all three likelihoods with P = 0 and P = 1", {
   run_smoke <- tolower(Sys.getenv("MIRA_RUN_CMDSTAN_TESTS", unset = "false")) %in%
     c("1", "true", "yes")
   skip_if_not(run_smoke, "Set MIRA_RUN_CMDSTAN_TESTS=true for CmdStan smoke tests")
@@ -487,20 +487,36 @@ test_that("H: opt-in mira_fit_long smoke test accepts P = 0 and P > 0", {
     dynamic_covariate_stan_file(), temporary_stan, overwrite = TRUE
   ))
 
-  cases <- list(
-    no_covariates = prepare_dynamic_covariates(character(0)),
-    age = prepare_dynamic_covariates("age")
+  # Generic positive scores allow the same data to exercise all observation
+  # families without imposing BCVA-specific family restrictions. Thresholds
+  # here are test inputs, not proposed clinical thresholds.
+  positive_data <- dynamic_covariate_fixture()
+  names(positive_data) <- sub("^BCVA_", "score_", names(positive_data))
+  case_grid <- expand.grid(
+    likelihood = c("student_t", "gaussian", "lognormal"),
+    P = c(0L, 1L),
+    stringsAsFactors = FALSE
   )
-
-  expect_identical(cases$no_covariates$P, 0L)
-  expect_identical(
-    dim(cases$no_covariates$X),
-    c(cases$no_covariates$S, 0L)
-  )
-  expect_identical(cases$age$P, 1L)
+  cases <- lapply(seq_len(nrow(case_grid)), function(i) {
+    mira_data_long(
+      data = positive_data,
+      time_value = c(0, 1, 3),
+      outcome = "generic",
+      likelihood = case_grid$likelihood[[i]],
+      meaningful_change = 5,
+      meaningful_change_sd = 1,
+      direction = "higher",
+      meaningful_between_arm_difference = 5,
+      reference_arm = "Control",
+      covariates = if (case_grid$P[[i]] == 0L) character(0) else "age"
+    )
+  })
+  names(cases) <- paste0(case_grid$likelihood, "_P", case_grid$P)
 
   for (i in seq_along(cases)) {
     stan_data <- cases[[i]]
+    expect_identical(stan_data$P, case_grid$P[[i]])
+    expect_identical(dim(stan_data$X), c(stan_data$S, case_grid$P[[i]]))
     prior <- mira_prior_long(stan_data)
     fit <- mira_fit_long(
       stan_data = stan_data,
@@ -509,7 +525,7 @@ test_that("H: opt-in mira_fit_long smoke test accepts P = 0 and P > 0", {
       chains = 1,
       parallel_chains = 1,
       iter_warmup = 20,
-      iter_sampling = 1,
+      iter_sampling = 20,
       refresh = 0,
       show_messages = FALSE,
       stan_file = temporary_stan,
@@ -517,6 +533,11 @@ test_that("H: opt-in mira_fit_long smoke test accepts P = 0 and P > 0", {
     )
 
     expect_s3_class(fit, "CmdStanMCMC")
-    expect_true(all(fit$return_codes() == 0L))
+    expect_true(all(fit$return_codes() == 0L), info = names(cases)[[i]])
+    key_draws <- fit$draws(
+      variables = c("mcid", "nu_value", "population_mean", "log_lik", "y_rep"),
+      format = "draws_matrix"
+    )
+    expect_true(all(is.finite(key_draws)), info = names(cases)[[i]])
   }
 })

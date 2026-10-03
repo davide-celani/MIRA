@@ -118,7 +118,8 @@ test_that("correlations require two variable timepoints with two observations", 
                    c(score_t0 = 2L, score_t1 = 2L))
   expect_identical(adaptation$variable_timepoints, 2L)
   expect_identical(adaptation$disabled, character(0))
-  expect_identical(exact$correlations$pearson, expected_correlation)
+  expect_equal(exact$correlations$pearson, expected_correlation,
+               tolerance = 1e-15)
   expect_equal(exact$correlations$spearman, expected_correlation,
                tolerance = 1e-15)
   expect_identical(exact$correlations$pairwise_n, expected_n)

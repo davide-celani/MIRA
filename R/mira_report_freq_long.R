@@ -1034,8 +1034,27 @@
   entries
 }
 
+.mira_report_slug_ascii_long <- function(x) {
+  x <- enc2utf8(as.character(x)[1L])
+  if (is.na(x) || !nzchar(x)) return(x)
+  # macOS iconv can express accents as punctuation (accented e becomes 'e).
+  # Convert letters separately so that accent markers can be removed without
+  # losing real punctuation that should remain a filename separator.
+  x <- gsub("[\u0300-\u036f]", "", x, perl = TRUE)
+  characters <- strsplit(x, "", fixed = TRUE)[[1L]]
+  letters <- utf8ToInt(x) > 127L & grepl("\\p{L}", characters, perl = TRUE)
+  if (any(letters)) {
+    converted <- iconv(characters[letters], from = "UTF-8",
+                       to = "ASCII//TRANSLIT", sub = "")
+    converted[is.na(converted)] <- ""
+    characters[letters] <- gsub("[^A-Za-z0-9]", "", converted)
+  }
+  iconv(paste0(characters, collapse = ""), from = "UTF-8",
+        to = "ASCII//TRANSLIT", sub = "")
+}
+
 .mira_report_file_slug_long <- function(x) {
-  x <- iconv(enc2utf8(as.character(x)[1L]), to = "ASCII//TRANSLIT", sub = "")
+  x <- .mira_report_slug_ascii_long(x)
   x <- tolower(gsub("[^A-Za-z0-9]+", "_", x))
   x <- gsub("(^_+|_+$)", "", x)
   if (is.na(x) || !nzchar(x)) x <- "item"
@@ -1165,7 +1184,7 @@
     ".mira_report_html_style_long")
 }
 .mira_report_slug_long <- function(x) {
-  x <- iconv(enc2utf8(as.character(x)[1L]), to = "ASCII//TRANSLIT", sub = "")
+  x <- .mira_report_slug_ascii_long(x)
   x <- tolower(gsub("[^A-Za-z0-9]+", "_", x))
   x <- gsub("(^_+|_+$)", "", x)
   if (is.na(x) || !nzchar(x)) x <- "mira_report"

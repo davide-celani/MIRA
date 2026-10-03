@@ -368,6 +368,11 @@ test_that("filename and quoting helpers are portable and reversible", {
   expect_identical(.mira_report_file_slug_long("My analysis"), "my_analysis")
   expect_identical(.mira_report_file_slug_long("a/b:c"), "a_b_c")
   expect_identical(.mira_report_file_slug_long("résumé"), "resume")
+  for (slug in list(.mira_report_file_slug_long, .mira_report_slug_long)) {
+    expect_identical(slug("r\u00e9sum\u00e9"), "resume")
+    expect_identical(slug("re\u0301sume\u0301"), "resume")
+    expect_identical(slug("O'Brien r\u00e9sum\u00e9"), "o_brien_resume")
+  }
   expect_identical(.mira_report_file_slug_long("___"), "item")
   expect_identical(.mira_report_file_slug_long(""), "item")
   expect_identical(.mira_report_slug_long("___"), "mira_report")
@@ -401,6 +406,24 @@ test_that("filename and quoting helpers are portable and reversible", {
   expect_true(all(c("    theme: cosmo", "    documentclass: article",
                     "    papersize: a4", "    geometry: margin=25mm") %in%
                   format_lines))
+})
+
+test_that("accent punctuation from macOS iconv does not become a separator", {
+  original_iconv <- base::iconv
+  testthat::local_mocked_bindings(
+    iconv = function(x, ...) {
+      converted <- original_iconv(x, ...)
+      accented <- !is.na(x) & grepl("\u00e9", x, fixed = TRUE)
+      converted[accented] <- gsub("\u00e9", "'e", x[accented], fixed = TRUE)
+      converted
+    },
+    .package = "base"
+  )
+
+  for (slug in list(.mira_report_file_slug_long, .mira_report_slug_long)) {
+    expect_identical(slug("r\u00e9sum\u00e9"), "resume")
+    expect_identical(slug("O'Brien r\u00e9sum\u00e9"), "o_brien_resume")
+  }
 })
 
 test_that("plot and model recognition covers base and optional display classes", {

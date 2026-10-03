@@ -36,6 +36,9 @@ after publication; neither has been assigned in this file.
 
 ## Installation and verification fixes
 
+- Normalize accented report filenames consistently across operating systems.
+- Allow machine-precision rounding differences in the correlation boundary
+  test, matching the tolerance already used for Spearman correlations.
 - Compile Stan executables in a writable session cache, allowing package
   installations and custom source directories to remain read-only.
 - Added regression coverage for compilation-directory handling and expanded

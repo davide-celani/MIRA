@@ -14,7 +14,10 @@ and citation information, rewriting the README, drafting release and JOSS
 preparation guides, and creating GitHub workflows. Code assistance comprised
 a writable temporary compilation cache in `mira_fit_long()`, its regression
 tests, expansion of the existing opt-in smoke test to all three likelihoods,
-and package namespace/import cleanup. Existing tests, examples, documentation
+and package namespace/import cleanup. Follow-up assistance corrected the
+R CMD check workflow input quoting, normalized accented report filenames for
+macOS, and allowed machine-precision rounding in a correlation test.
+Existing tests, examples, documentation
 generation, and R package checks were executed and their results reviewed by
 Codex. The maintainer should update this scope to match the final changes
 accepted for publication.

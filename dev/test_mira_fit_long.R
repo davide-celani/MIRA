@@ -40,7 +40,7 @@ devtools::load_all()
 
 mira_outcome_registry_long()
 
-
+      s
 # Usa "BCVA" oppure "CMT"
 
 

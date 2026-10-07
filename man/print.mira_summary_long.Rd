@@ -15,7 +15,8 @@
   heterogeneity = TRUE,
   ppc = TRUE,
   diagnostics = TRUE,
-  ...
+  ...,
+  qte = TRUE
 )
 }
 \arguments{
@@ -41,6 +42,10 @@ covariate terms.}
 \item{diagnostics}{Print MCMC diagnostics.}
 
 \item{...}{Unused.}
+
+\item{qte}{Print a compact native quantile-estimand section (default TRUE).
+The section shows at most six rows per selected treatment table even
+when max_rows = Inf.}
 }
 \value{
 Invisibly returns \code{x}.

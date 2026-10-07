@@ -18,6 +18,31 @@
 #' @param credible_level Width of posterior credible intervals.
 #' @param responder_thresholds Posterior probability thresholds used for
 #'   existing-subject responder classification.
+#' @param qte_probs Quantile probabilities. NULL uses all 199 probabilities
+#'   from 0.005 to 0.995 in steps of 0.005. User values must be unique, finite
+#'   and strictly inside (0, 1); they are sorted without adding probabilities.
+#' @param qte_distribution Compute latent, predictive, or both distributions
+#'   (default). Latent includes Gaussian subject effects; predictive also
+#'   includes observation error. Both use the natural outcome scale and the
+#'   model's endpoint censoring.
+#' @param qte_standardization Reference X = 0, empirical joint X mixture, or
+#'   both (default). Empirical standardization with P > 0 needs stan_data$X;
+#'   whole subject rows are sampled and the quantile is computed after mixing.
+#' @param qte_arm_contrasts All unique arm pairs (default), or each non-reference
+#'   arm against arm 1. Raw contrasts always subtract arm_b from arm_a.
+#' @param qte_covariates Include profiles for each original covariate separately,
+#'   with all others fixed at X = 0 (default TRUE). Continuous profiles use
+#'   observed Q25/median/Q75 and preserve original units; categorical profiles
+#'   reuse grouped dummy encodings and the original reference level.
+#' @param qte_n_sim Number of new subjects per posterior draw (default 2000).
+#'   Extreme quantiles trigger an informative warning if fewer than 20
+#'   expected simulated observations support the smaller tail.
+#' @param qte_max_draws Maximum posterior draws for nested Monte Carlo (default
+#'   1000), sampled across the entire ordered posterior sample.
+#' @param qte_seed Non-negative integer seed. QTE simulation is reproducible
+#'   and restores the caller's RNG kind and .Random.seed.
+#' @param qte_keep_draws Keep draw-level quantiles and contrasts (default FALSE);
+#'   individual new-subject simulations are never saved.
 #' @param verbose Logical. If TRUE, print the compact Bayesian report when
 #'   the summary object is created.
 #'
@@ -26,7 +51,31 @@
 #'   time-specific effects for every selected encoded covariate term (with
 #'   readable design-matrix metadata when available), heterogeneity,
 #'   posterior predictive checks, log-likelihood information,
-#'   MCMC diagnostics, model information and raw posterior draws.
+#'   MCMC diagnostics, model information and raw posterior draws. The native
+#'   $qte family adds outcome quantiles, temporal quantile shifts, quantiles
+#'   of individual changes, treatment level QTE, change-QTE and quantile DiD
+#'   for every forward time pair, plus standardized and covariate-specific
+#'   quantile distributions and conditional covariate quantile contrasts.
+#'
+#' @details Q_tau(Y_to) - Q_tau(Y_from) and Q_tau(Y_to - Y_from) are distinct
+#'   estimands. Changes use the same subject effects and covariate row at all
+#'   times, with independent conditional residual errors. Contrasts and
+#'   quantiles are computed within each posterior draw before posterior
+#'   summaries. Common random numbers across arms/profiles reduce numerical
+#'   noise and do not identify cross-arm potential-outcome dependence.
+#'   P_benefit uses direction times the raw contrast without changing its sign.
+#'   P_benefit_meaningful is calculated only for change-QTE using the supplied
+#'   meaningful_between_arm_difference; this is not an individual responder
+#'   probability or a validated quantile-specific MCID. Level QTE and quantile
+#'   DiD receive no automatic clinical threshold. Causal interpretation needs
+#'   appropriate design and model assumptions. Covariate contrasts are
+#'   conditional distributional comparisons, and the model has no explicit
+#'   treatment-by-covariate interaction. Posterior uncertainty includes finite
+#'   Monte Carlo error; increase qte_n_sim to assess numerical stability.
+#'   Missing indispensable metadata/parameters in legacy fits yield an explicit
+#'   unavailable QTE component with a warning, while retaining other summaries.
+#'   Fit-only empirical standardization is skipped with a warning when X is
+#'   unavailable. The existing positional verbose argument remains seventh.
 #'
 #' @export
 mira_summary_long <- function(
@@ -36,7 +85,16 @@ mira_summary_long <- function(
     y = NULL,
     credible_level = 0.90,
     responder_thresholds = c(0.50, 0.80, 0.95),
-    verbose = TRUE
+    verbose = TRUE,
+    qte_probs = NULL,
+    qte_distribution = c("both", "predictive", "latent"),
+    qte_standardization = c("both", "reference", "empirical"),
+    qte_arm_contrasts = c("all", "reference"),
+    qte_covariates = TRUE,
+    qte_n_sim = 2000L,
+    qte_max_draws = 1000L,
+    qte_seed = 123,
+    qte_keep_draws = FALSE
 ) {
 
   # ============================================================
@@ -69,6 +127,11 @@ mira_summary_long <- function(
   if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
     stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
   }
+
+  qte_options <- .mira_qte_validate_long(
+    qte_probs, qte_distribution, qte_standardization, qte_arm_contrasts,
+    qte_covariates, qte_n_sim, qte_max_draws, qte_seed, qte_keep_draws
+  )
 
   fit_info <- attr(fit, "mira_fit_info", exact = TRUE)
   if (!is.null(fit_info) && !is.list(fit_info)) {
@@ -2364,7 +2427,22 @@ mira_summary_long <- function(
   # RETURN
   # ============================================================
 
+  # Native quantile estimands reconstructed from existing posterior parameters.
+  qte_summary <- .mira_qte_long(
+    draws = draws, stan_data = stan_data, fit_info = fit_info,
+    model_information = model_information, time_pairs = time_pairs,
+    probs = qte_options$probs, distribution = qte_options$distribution,
+    standardization = qte_options$standardization,
+    arm_contrasts = qte_options$arm_contrasts, covariates = qte_options$covariates,
+    n_sim = qte_options$n_sim, max_draws = qte_options$max_draws,
+    seed = qte_options$seed, keep_draws = qte_options$keep_draws,
+    credible_level = credible_level
+  )
+  variable_inventory$qte_sources <- qte_summary$metadata$source_posterior_variables
+  variable_inventory$qte_derived_in_R <- names(qte_summary$metadata$definitions)
+
   result <- list(
+    qte = qte_summary,
     # Core population parameters
     population = population_summary,
     beta_treatment = beta_treatment_summary,
@@ -2506,6 +2584,9 @@ mira_summary_long <- function(
 #' @param heterogeneity Print random-effect / heterogeneity parameters.
 #' @param ppc Print posterior predictive checks.
 #' @param diagnostics Print MCMC diagnostics.
+#' @param qte Print a compact native quantile-estimand section (default TRUE).
+#'   The section shows at most six rows per selected treatment table even
+#'   when max_rows = Inf.
 #' @param ... Unused.
 #'
 #' @return Invisibly returns `x`.
@@ -2521,7 +2602,8 @@ print.mira_summary_long <- function(
     heterogeneity = TRUE,
     ppc = TRUE,
     diagnostics = TRUE,
-    ...
+    ...,
+    qte = TRUE
 ) {
 
   if (!is.numeric(digits) || length(digits) != 1L || is.na(digits) || digits < 0) {
@@ -2540,7 +2622,8 @@ print.mira_summary_long <- function(
     responders = responders,
     heterogeneity = heterogeneity,
     ppc = ppc,
-    diagnostics = diagnostics
+    diagnostics = diagnostics,
+    qte = qte
   )
   if (anyNA(flags) || !all(vapply(as.list(flags), is.logical, logical(1L)))) {
     stop("Section switches must be TRUE or FALSE.", call. = FALSE)
@@ -3028,6 +3111,50 @@ print.mira_summary_long <- function(
   }
 
   # ------------------------------------------------------------
+  # QUANTILE-DERIVED ESTIMANDS
+  # ------------------------------------------------------------
+  if (qte && !is.null(x$qte)) {
+    section_long("QUANTILE TREATMENT EFFECTS / QUANTILE ESTIMANDS")
+    z <- x$qte
+    mc <- z$monte_carlo
+    if (identical(z$metadata$status, "unavailable")) {
+      cat("Unavailable: ", z$metadata$reason, "\n", sep = "")
+    } else {
+      cat("Quantiles: ", format(min(z$probs)), " to ", format(max(z$probs)),
+          if (is.finite(mc$tau_step)) paste0(" by ", format(mc$tau_step)) else " (custom grid)",
+          " | ", length(z$probs), " quantiles\n", sep = "")
+      cat("Distributions: ", paste(z$metadata$distribution, collapse = ", "), "\n", sep = "")
+      cat("Standardization: ", paste(z$metadata$standardization, collapse = ", "), "\n", sep = "")
+      cat("Time pairs: ", mc$number_of_time_pairs, " | Arm pairs: ", mc$number_of_arm_pairs,
+          " | Covariate profiles: ", mc$number_of_covariate_profiles, "\n", sep = "")
+      cat("Monte Carlo: ", mc$n_sim, " subjects per posterior draw; ",
+          mc$posterior_draws_used, " of ", mc$posterior_draws_available, " posterior draws used\n", sep = "")
+      cat("Raw contrasts: arm_a - arm_b; direction is reported separately.\n")
+      cat("Temporal quantile shift, quantile of individual change, Change-QTE and quantile DiD are distinct.\n")
+      for (nm in c("level", "change", "did")) {
+        tab <- z$treatment[[nm]]
+        if (!is.data.frame(tab) || !nrow(tab)) next
+        # Select the available central tau by numeric position, never string matching.
+        central <- z$probs[which.min(abs(z$probs - 0.5))]
+        tab <- tab[tab$tau == central, , drop = FALSE]
+        cols <- intersect(c("estimand", "distribution", "standardization", "arm_a_label",
+          "arm_b_label", "time_label", "from_label", "to_label", "tau",
+          "mean", "lower", "upper", "P_benefit"), names(tab))
+        cap <- if (is.finite(max_rows)) min(6L, as.integer(max_rows)) else 6L
+        tab <- utils::head(tab[, cols, drop = FALSE], cap)
+        numeric_cols <- vapply(tab, is.numeric, logical(1L))
+        tab[numeric_cols] <- lapply(tab[numeric_cols], round, digits = digits)
+        cat("\nRepresentative ", nm, " contrasts at tau = ", format(central), ":\n", sep = "")
+        print(tab, row.names = FALSE)
+      }
+      if (length(z$metadata$skipped_standardization)) {
+        cat("Skipped standardization: ", paste(z$metadata$skipped_standardization, collapse = ", "), " (X unavailable)\n", sep = "")
+      }
+      cat("Full tables are available in object$qte; simulation error is reduced by increasing qte_n_sim.\n")
+    }
+  }
+
+  # ------------------------------------------------------------
   # POSTERIOR PREDICTIVE CHECKS
   # ------------------------------------------------------------
   if (ppc) {
@@ -3134,6 +3261,17 @@ print.mira_summary_long <- function(
   cat("For example, if you used `res <- mira_summary_long(...)`, read `$treatment_effects` as `res$treatment_effects`.\n\n")
 
   guide <- c(
+    "$qte" = "Native posterior-derived quantile distributions and contrasts",
+    "$qte$outcome" = "Natural-scale new-subject outcome quantiles",
+    "$qte$time" = "Temporal differences of marginal outcome quantiles",
+    "$qte$change" = "Quantiles of same-subject longitudinal changes",
+    "$qte$treatment$level" = "All requested arm-pair QTE at each time",
+    "$qte$treatment$change" = "Differences between arm-specific quantiles of changes",
+    "$qte$treatment$did" = "Differences between arm-specific temporal quantile shifts",
+    "$qte$covariates" = "Original covariate profiles, quantiles and conditional contrasts",
+    "$qte$monte_carlo" = "Simulation settings, posterior indices and tail support",
+    "$qte$metadata" = "Estimand definitions, assumptions and source posterior variables",
+    "$qte$draws" = "Optional draw-level arrays with documented dimension order",
     "$change" = "ALL unique population time-to-time changes for every arm (t0->t1, t0->t2, ...)",
     "$change_from_baseline" = "Population changes restricted to baseline -> each follow-up",
     "$change_consecutive" = "Population changes restricted to consecutive visits",
@@ -3181,7 +3319,7 @@ print.mira_summary_long <- function(
     "$diagnostics" = "MCMC diagnostic summary",
     "$diagnostics$parameters" = "R-hat, bulk ESS and tail ESS for every monitored parameter",
     "$quality_flags" = "Quick diagnostic pass/fail flags",
-    "$variable_inventory" = "Names of Stan generated quantities grouped by purpose",
+    "$variable_inventory" = "Stan quantities by purpose, QTE source variables, and separately labeled R-derived estimands",
     "$draws" = "Complete posterior draws; use only when a custom posterior calculation is needed"
   )
 
@@ -3205,6 +3343,15 @@ print.mira_summary_long <- function(
 
   cat("\nUseful commands:\n")
   cat("  names(object)                         list all top-level components\n")
+  cat("  object$qte                            inspect all quantile estimands\n")
+  cat("  object$qte$outcome                    inspect outcome quantiles\n")
+  cat("  object$qte$time                       inspect temporal quantile shifts\n")
+  cat("  object$qte$change                     inspect quantiles of individual changes\n")
+  cat("  object$qte$treatment$level            inspect arm-pair level QTE\n")
+  cat("  object$qte$treatment$change           inspect longitudinal Change-QTE\n")
+  cat("  object$qte$treatment$did              inspect quantile difference-in-differences\n")
+  cat("  object$qte$covariates                 inspect covariate-specific quantile estimands\n")
+  cat("  print(object, qte = FALSE)            skip the compact QTE section\n")
   cat("  object$change                         inspect every population time-to-time change\n")
   cat("  object$treatment$change               inspect every pairwise treatment change contrast\n")
   cat("  object$covariate_effects               inspect all term-by-time covariate effects\n")
@@ -3218,4 +3365,852 @@ print.mira_summary_long <- function(
   line_long("=")
 
   invisible(x)
+}
+
+
+# ============================================================
+# INTERNAL QTE HELPERS (NOT EXPORTED)
+# ============================================================
+
+# Internal profile construction for the quantile-derived estimands.  X always
+# uses the encoding already established by mira_data_long(); no new design
+# matrix formula or Cartesian product of covariates is introduced here.
+.mira_qte_profiles_long <- function(stan_data, P, covariate_names) {
+  if (length(P) != 1L || !is.numeric(P) || !is.finite(P) ||
+      P < 0 || P != as.integer(P)) {
+    stop("`P` must be a non-negative integer.", call. = FALSE)
+  }
+  P <- as.integer(P)
+  covariate_names <- as.character(covariate_names)
+  if (length(covariate_names) != P || anyNA(covariate_names) ||
+      any(!nzchar(covariate_names)) || anyDuplicated(covariate_names)) {
+    stop("QTE profiles require exactly P unique encoded covariate names.",
+         call. = FALSE)
+  }
+  profiles <- data.frame(
+    profile_id = character(), original_covariate = character(),
+    covariate_label = character(), level = character(),
+    reference_level = character(), original_value = numeric(),
+    encoded_value = numeric(), center = numeric(), scale = numeric(),
+    encoding = character(), type = character(), encoded_term = character(),
+    profile_reference_id = character(), profile_label = character(),
+    metadata_source = character(), stringsAsFactors = FALSE
+  )
+  contrasts <- data.frame(
+    original_covariate = character(), covariate_label = character(),
+    profile_a = character(), profile_b = character(),
+    stringsAsFactors = FALSE
+  )
+  empty_result <- list(
+    profiles = profiles,
+    X = matrix(numeric(), nrow = 0L, ncol = P,
+               dimnames = list(character(), covariate_names)),
+    contrasts = contrasts, notes = character()
+  )
+  if (P == 0L) return(empty_result)
+  if (is.null(stan_data)) stan_data <- list()
+  if (!is.list(stan_data)) {
+    stop("QTE profile metadata must be supplied as a list.", call. = FALSE)
+  }
+  metadata <- stan_data$covariate_metadata
+  variables <- if (is.list(metadata)) metadata$variables else NULL
+  map <- stan_data$covariate_map
+  if ((!is.data.frame(map) || nrow(map) != P) && is.list(metadata)) {
+    map <- metadata$columns
+  }
+  has_map <- is.data.frame(map) && nrow(map) == P
+  if (!has_map) map <- data.frame(index = seq_len(P))
+  if ("name" %in% names(map)) {
+    if (anyNA(map$name) || anyDuplicated(map$name) ||
+        !setequal(as.character(map$name), covariate_names)) {
+      stop("Covariate-map names do not match the P encoded QTE columns.",
+           call. = FALSE)
+    }
+    map <- map[match(covariate_names, as.character(map$name)), , drop = FALSE]
+  }
+  informative_encoding <- "encoding" %in% names(map) &&
+    any(!is.na(map$encoding) & nzchar(as.character(map$encoding)) &
+        as.character(map$encoding) != "unspecified")
+  informative_levels <- "level" %in% names(map) &&
+    any(!is.na(map$level) & nzchar(as.character(map$level)))
+  map_needs_reconstruction <- !has_map ||
+    (!informative_encoding && !informative_levels)
+  used_variable_map <- FALSE
+  # The variable metadata can reconstruct the same column grouping when an
+  # older object retained variables but lost its columns table, including
+  # when the summary wrapper supplied a synthetic "unspecified" column map.
+  if (map_needs_reconstruction && is.data.frame(variables) &&
+      all(c("name", "column_start", "column_end") %in% names(variables))) {
+    ranges <- lapply(seq_len(nrow(variables)), function(i) {
+      start <- suppressWarnings(as.numeric(variables$column_start[i]))
+      end <- suppressWarnings(as.numeric(variables$column_end[i]))
+      if (length(start) != 1L || length(end) != 1L ||
+          !is.finite(start) || !is.finite(end) || start < 1 || end > P ||
+          start > end || start != as.integer(start) || end != as.integer(end)) {
+        return(integer())
+      }
+      seq.int(as.integer(start), as.integer(end))
+    })
+    all_columns <- unlist(ranges, use.names = FALSE)
+    if (all(lengths(ranges) > 0L) && length(all_columns) == P && !anyDuplicated(all_columns) &&
+        setequal(all_columns, seq_len(P))) {
+      used_variable_map <- TRUE
+      fields <- c(original_name = "name", original_label = "label", type = "type",
+                  encoding = "encoding", reference_level = "reference_level",
+                  center = "center", scale = "scale")
+      for (output_field in names(fields)) {
+        input_field <- fields[[output_field]]
+        if (!input_field %in% names(variables)) next
+        variable_values <- variables[[input_field]]
+        if (is.factor(variable_values)) variable_values <- as.character(variable_values)
+        column_values <- rep(NA, P)
+        for (i in seq_along(ranges)) {
+          column_values[ranges[[i]]] <- variable_values[i]
+        }
+        map[[output_field]] <- column_values
+      }
+      if (all(c("levels", "reference_level", "encoding") %in% names(variables))) {
+        map$level <- rep(NA_character_, P)
+        for (i in seq_along(ranges)) {
+          encoding_i <- as.character(variables$encoding[i])
+          comparison_levels <- setdiff(as.character(variables$levels[[i]]),
+                                       as.character(variables$reference_level[i]))
+          if (identical(encoding_i, "treatment") &&
+              length(comparison_levels) == length(ranges[[i]])) {
+            map$level[ranges[[i]]] <- comparison_levels
+          }
+        }
+      }
+    }
+  }
+  has_map_center <- "center" %in% names(map) ||
+    length(stan_data$covariate_centers) == P
+  has_map_scale <- "scale" %in% names(map) ||
+    length(stan_data$covariate_scales) == P
+  rownames(map) <- NULL
+  metadata_vector <- function(name, default) {
+    value <- stan_data[[name]]
+    if (is.null(value) || length(value) != P) return(default)
+    if (!is.null(names(value)) && all(covariate_names %in% names(value))) {
+      value <- value[covariate_names]
+    }
+    unname(value)
+  }
+  defaults <- list(
+    name = covariate_names,
+    original_name = metadata_vector("covariate_original_names", covariate_names),
+    original_label = metadata_vector("covariate_original_names", covariate_names),
+    label = metadata_vector("covariate_labels", covariate_names),
+    type = metadata_vector("covariate_types", rep("unspecified", P)),
+    encoding = rep("unspecified", P), level = rep(NA_character_, P),
+    reference_level = metadata_vector("covariate_reference_levels", rep(NA_character_, P)),
+    center = metadata_vector("covariate_centers", rep(0, P)),
+    scale = metadata_vector("covariate_scales", rep(1, P))
+  )
+  for (nm in names(defaults)) {
+    if (!nm %in% names(map)) map[[nm]] <- defaults[[nm]]
+  }
+  for (nm in c("name", "original_name", "original_label", "label", "type",
+               "encoding", "level", "reference_level")) {
+    map[[nm]] <- as.character(map[[nm]])
+  }
+  clean_text <- function(x) !is.na(x) & nzchar(x)
+  missing_original <- !clean_text(map$original_name)
+  map$original_name[missing_original] <- map$name[missing_original]
+  missing_label <- !clean_text(map$original_label)
+  map$original_label[missing_label] <- map$original_name[missing_label]
+  map$center <- suppressWarnings(as.numeric(map$center))
+  map$scale <- suppressWarnings(as.numeric(map$scale))
+  subject_X <- stan_data$X
+  if (!is.null(subject_X)) {
+    if (!is.matrix(subject_X) || !is.numeric(subject_X) ||
+        ncol(subject_X) != P || any(!is.finite(subject_X))) {
+      stop("QTE profile construction requires a finite numeric X with P columns.",
+           call. = FALSE)
+    }
+    if (!is.null(colnames(subject_X)) &&
+        setequal(colnames(subject_X), covariate_names)) {
+      subject_X <- subject_X[, covariate_names, drop = FALSE]
+    }
+  }
+  distributions <- stan_data$covariate_distributions
+  notes <- if (used_variable_map) {
+    "Original covariate groups reconstructed from covariate_metadata$variables because the column map was missing or uninformative."
+  } else character()
+  distribution_quartiles <- function(j) {
+    fields <- c("q25", "median", "q75")
+    values <- NULL
+    if (is.data.frame(distributions) && all(fields %in% names(distributions))) {
+      row <- if ("name" %in% names(distributions)) {
+        match(covariate_names[j], as.character(distributions$name))
+      } else if ("index" %in% names(distributions)) {
+        match(j, distributions$index)
+      } else if (nrow(distributions) == P) j else NA_integer_
+      if (!is.na(row)) {
+        supplied_values <- suppressWarnings(as.numeric(unlist(
+          distributions[row, fields, drop = FALSE], use.names = FALSE
+        )))
+        if (length(supplied_values) == 3L && all(is.finite(supplied_values)) &&
+            all(diff(supplied_values) >= 0)) values <- supplied_values
+      }
+    }
+    if (!is.null(subject_X) && nrow(subject_X) > 0L) {
+      observed_values <- as.numeric(stats::quantile(subject_X[, j], c(.25, .5, .75),
+                                                   names = FALSE, type = 7L))
+      if (!is.null(values) && !isTRUE(all.equal(values, observed_values, tolerance = 1e-10))) {
+        notes <<- c(notes, paste0("Encoded term `", covariate_names[j],
+          "`: observed X quartiles used because supplied covariate_distributions differed."))
+      }
+      return(observed_values)
+    }
+    values
+  }
+  design_rows <- list()
+  original_names <- unique(map$original_name)
+  add_profiles <- function(name, label, idx, levels, reference_index,
+                           original_values, encoded_values, design, center,
+                           scale, encoding, type, source) {
+    group_number <- match(name, original_names)
+    ids <- paste0("covariate_", group_number, "_", seq_along(levels))
+    reference_id <- ids[reference_index]
+    encoded_terms <- vapply(seq_along(levels), function(i) {
+      active <- idx[design[i, idx] != 0]
+      if (length(active)) paste(covariate_names[active], collapse = ";")
+      else paste(covariate_names[idx], collapse = ";")
+    }, character(1L))
+    profiles <<- rbind(profiles, data.frame(
+      profile_id = ids, original_covariate = name, covariate_label = label,
+      level = levels, reference_level = levels[reference_index],
+      original_value = original_values, encoded_value = encoded_values,
+      center = center, scale = scale, encoding = encoding, type = type,
+      encoded_term = encoded_terms, profile_reference_id = reference_id,
+      profile_label = paste0(label, ": ", levels), metadata_source = source,
+      stringsAsFactors = FALSE
+    ))
+    for (i in seq_along(ids)) design_rows[[length(design_rows) + 1L]] <<- design[i, ]
+    comparison_ids <- ids[-reference_index]
+    if (length(comparison_ids)) {
+      contrasts <<- rbind(contrasts, data.frame(
+        original_covariate = name, covariate_label = label,
+        profile_a = reference_id, profile_b = comparison_ids,
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
+  for (name in original_names) {
+    idx <- which(map$original_name == name)
+    label <- map$original_label[idx[1L]]
+    type <- map$type[idx[1L]]
+    encoding <- map$encoding[idx[1L]]
+    source <- if (used_variable_map) "covariate_metadata_variables"
+              else if (has_map) "covariate_map" else "legacy_metadata"
+    variable <- NULL
+    if (is.data.frame(variables) && "name" %in% names(variables)) {
+      vi <- match(name, as.character(variables$name))
+      if (!is.na(vi)) variable <- variables[vi, , drop = FALSE]
+    }
+    if (!is.null(variable)) {
+      for (field in c("encoding", "type", "label")) {
+        if (field %in% names(variable) && clean_text(as.character(variable[[field]][1L]))) {
+          if (field == "label") label <- as.character(variable[[field]][1L])
+          if (field == "encoding" && (!clean_text(encoding) || encoding == "unspecified")) {
+            encoding <- as.character(variable[[field]][1L])
+          }
+          if (field == "type" && (!clean_text(type) || type == "unspecified")) {
+            type <- as.character(variable[[field]][1L])
+          }
+        }
+      }
+    }
+    if (!clean_text(encoding)) encoding <- "unspecified"
+    if (!clean_text(type)) type <- "unspecified"
+    if (encoding == "unspecified") {
+      if (type == "binary_numeric") encoding <- "identity_binary"
+      else if (type %in% c("numeric", "integer", "continuous")) encoding <- "center_scale"
+      else if (type %in% c("factor", "character", "logical", "categorical")) encoding <- "treatment"
+      else if (length(idx) == 1L && !is.null(subject_X) && nrow(subject_X) > 0L &&
+               all(subject_X[, idx] %in% c(0, 1))) {
+        encoding <- "identity_binary"
+        notes <- c(notes, paste0("Covariate `", name,
+          "`: 0/1 profiles inferred from encoded X; original variable identity is not verified."))
+      }
+      else encoding <- "legacy_encoded"
+    }
+    center <- map$center[idx[1L]]
+    scale <- map$scale[idx[1L]]
+    if (!has_map_center && !is.null(variable) && "center" %in% names(variable)) {
+      center <- suppressWarnings(as.numeric(variable$center[1L]))
+    }
+    if (!has_map_scale && !is.null(variable) && "scale" %in% names(variable)) {
+      scale <- suppressWarnings(as.numeric(variable$scale[1L]))
+    }
+    if (!is.finite(center)) {
+      if (encoding == "center_scale") {
+        stop("Invalid center metadata for continuous covariate `", name, "`.",
+             call. = FALSE)
+      }
+      center <- 0
+    }
+    if (!is.finite(scale) || scale <= 0) {
+      if (encoding == "center_scale") {
+        stop("Invalid center/scale metadata for continuous covariate `", name, "`.",
+             call. = FALSE)
+      }
+      scale <- 1
+    }
+    if (encoding == "identity_binary" && length(idx) == 1L) {
+      design <- matrix(0, nrow = 2L, ncol = P)
+      design[2L, idx] <- 1
+      add_profiles(name, label, idx, c("0", "1"), 1L, c(0, 1), c(0, 1),
+                   design, 0, 1, encoding, type, source)
+    } else if (encoding == "treatment") {
+      reference <- map$reference_level[idx[1L]]
+      levels <- map$level[idx]
+      variable_levels <- if (!is.null(variable) && "levels" %in% names(variable)) {
+        as.character(variable$levels[[1L]])
+      } else character()
+      if (!clean_text(reference) && !is.null(variable) &&
+          "reference_level" %in% names(variable)) {
+        reference <- as.character(variable$reference_level[1L])
+      }
+      if (!clean_text(reference) && length(variable_levels)) reference <- variable_levels[1L]
+      if (any(!clean_text(levels)) && clean_text(reference)) {
+        alternatives <- setdiff(variable_levels, reference)
+        if (length(alternatives) == length(idx)) levels <- alternatives
+      }
+      if (!clean_text(reference) || any(!clean_text(levels)) ||
+          anyDuplicated(c(reference, levels))) {
+        notes <- c(notes, paste0("Covariate `", name,
+          "` omitted: original categorical levels/reference cannot be reconstructed."))
+        next
+      }
+      design <- matrix(0, nrow = length(idx) + 1L, ncol = P)
+      design[cbind(seq_along(idx) + 1L, idx)] <- 1
+      add_profiles(name, label, idx, c(reference, levels), 1L,
+                   rep(NA_real_, length(idx) + 1L), c(0, rep(1, length(idx))),
+                   design, 0, 1, encoding, type, source)
+    } else if (length(idx) == 1L) {
+      quartiles <- distribution_quartiles(idx)
+      if (!is.null(quartiles)) {
+        design <- matrix(0, nrow = 3L, ncol = P)
+        design[, idx] <- quartiles
+        original_values <- if (encoding == "center_scale") center + scale * quartiles
+                           else rep(NA_real_, 3L)
+        add_profiles(name, label, idx, c("Q25", "median", "Q75"), 2L,
+                     original_values, quartiles, design, center, scale,
+                     encoding, type, source)
+        if (encoding == "legacy_encoded") {
+          notes <- c(notes, paste0("Covariate `", name,
+            "`: quartiles refer to encoded X; original-scale metadata are unavailable."))
+        }
+      } else {
+        # Old fits without X/distributions can still show a design-unit
+        # contrast, explicitly marked as such; never invent observed quartiles.
+        design <- matrix(0, nrow = 2L, ncol = P)
+        design[2L, idx] <- 1
+        original_values <- if (encoding == "center_scale") c(center, center + scale)
+                           else c(NA_real_, NA_real_)
+        add_profiles(name, label, idx, c("design_0", "design_1"), 1L,
+                     original_values, c(0, 1), design, center, scale,
+                     encoding, type, "legacy_design_unit_fallback")
+        notes <- c(notes, paste0("Covariate `", name,
+          "`: X/distributions unavailable; using encoded 0/1 instead of observed quartiles."))
+      }
+    } else {
+      notes <- c(notes, paste0("Covariate `", name,
+        "` omitted: grouped encoded terms lack interpretable encoding metadata."))
+    }
+  }
+  design <- if (length(design_rows)) do.call(rbind, design_rows)
+            else matrix(numeric(), nrow = 0L, ncol = P)
+  storage.mode(design) <- "double"
+  dimnames(design) <- list(profiles$profile_id, covariate_names)
+  list(profiles = profiles, X = design, contrasts = contrasts,
+       notes = unique(notes))
+}
+
+
+# Internal posterior-derived estimands. These are computed in R, not Stan GQs.
+.mira_qte_validate_long <- function(probs, distribution, standardization,
+                                    arm_contrasts, covariates, n_sim,
+                                    max_draws, seed, keep_draws) {
+  if (is.null(probs)) probs <- round(seq(0.005, 0.995, by = 0.005), 12L)
+  if (!is.numeric(probs) || !is.null(dim(probs)) || !length(probs) ||
+      any(!is.finite(probs)) || any(probs <= 0 | probs >= 1) ||
+      anyDuplicated(probs)) {
+    stop("`qte_probs` must be unique finite probabilities strictly between 0 and 1.",
+         call. = FALSE)
+  }
+  integer_arg <- function(x, nm, minimum) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x) ||
+        x < minimum || x > .Machine$integer.max || x != floor(x)) {
+      stop("`", nm, "` must be one integer >= ", minimum, ".", call. = FALSE)
+    }
+    as.integer(x)
+  }
+  logical_arg <- function(x, nm) {
+    if (!is.logical(x) || length(x) != 1L || is.na(x)) {
+      stop("`", nm, "` must be TRUE or FALSE.", call. = FALSE)
+    }
+    x
+  }
+  list(probs = sort(as.numeric(probs)),
+       distribution = match.arg(distribution, c("both", "predictive", "latent")),
+       standardization = match.arg(standardization, c("both", "reference", "empirical")),
+       arm_contrasts = match.arg(arm_contrasts, c("all", "reference")),
+       covariates = logical_arg(covariates, "qte_covariates"),
+       n_sim = integer_arg(n_sim, "qte_n_sim", 2L),
+       max_draws = integer_arg(max_draws, "qte_max_draws", 1L),
+       seed = integer_arg(seed, "qte_seed", 0L),
+       keep_draws = logical_arg(keep_draws, "qte_keep_draws"))
+}
+
+.mira_qte_long <- function(draws, stan_data, fit_info, model_information,
+                           time_pairs, probs, distribution, standardization,
+                           arm_contrasts, covariates, n_sim, max_draws, seed,
+                           keep_draws, credible_level) {
+  opt <- .mira_qte_validate_long(probs, distribution, standardization,
+                                arm_contrasts, covariates, n_sim, max_draws,
+                                seed, keep_draws)
+  probs <- opt$probs
+  get_meta <- function(name, fallback = NULL) {
+    if (!is.null(stan_data[[name]])) return(stan_data[[name]])
+    if (!is.null(fit_info[[name]])) return(fit_info[[name]])
+    fallback
+  }
+  G <- model_information$n_arms
+  K <- model_information$n_time_points
+  P <- model_information$P
+  # Names used by old/current summary versions are supported without refitting.
+  if (is.null(G)) G <- model_information$G
+  if (is.null(K)) K <- model_information$K
+  arm_labels <- as.character(get_meta("arm_labels", model_information$arm_labels))
+  time_value <- get_meta("time_value")
+  time_labels <- as.character(get_meta("time_labels", paste0("t", seq_len(K) - 1L)))
+  if (length(time_labels) != K) time_labels <- paste0("t", seq_len(K) - 1L)
+  direction <- get_meta("direction", NA_integer_)
+  if (length(direction) != 1L || is.na(direction) || !direction %in% c(-1, 1)) {
+    direction <- NA_integer_
+  }
+  threshold <- get_meta("meaningful_between_arm_difference", NA_real_)
+  if (!is.numeric(threshold) || length(threshold) != 1L ||
+      !is.finite(threshold) || threshold < 0) threshold <- NA_real_
+  likelihood_id <- get_meta("likelihood_id", model_information$likelihood_id)
+  if (is.null(likelihood_id)) {
+    likelihood_id <- match(model_information$likelihood, c("student_t", "gaussian", "lognormal"))
+  }
+  bounds <- get_meta("outcome_bounds", c(NA_real_, NA_real_))
+  lower <- get_meta("outcome_lower_bound", bounds[1L])
+  upper <- get_meta("outcome_upper_bound", bounds[2L])
+  has_lower <- as.logical(get_meta("has_lower_bound", is.finite(bounds[1L])))
+  has_upper <- as.logical(get_meta("has_upper_bound", is.finite(bounds[2L])))
+  distributions <- if (opt$distribution == "both") c("latent", "predictive") else opt$distribution
+  standardizations <- if (opt$standardization == "both") c("reference", "empirical") else opt$standardization
+  empty_family <- function() list(outcome = data.frame(),
+    time = list(temporal_quantile_shift = data.frame()),
+    change = list(quantiles = data.frame()),
+    treatment = list(level = data.frame(), change = data.frame(), did = data.frame()))
+  unavailable <- function(reason) {
+    warning("QTE unavailable: ", reason, " Existing summary components are retained.", call. = FALSE)
+    c(list(probs = probs), empty_family(), list(covariates = NULL,
+      monte_carlo = list(n_sim = opt$n_sim, seed = opt$seed,
+        posterior_draws_available = nrow(draws), posterior_draws_used = 0L,
+        qte_max_draws = opt$max_draws, number_of_quantiles = length(probs),
+        number_of_time_pairs = choose(K, 2L),
+        number_of_arm_pairs = if (opt$arm_contrasts == "all") choose(G, 2L) else G - 1L,
+        number_of_covariate_profiles = 0L, min_tau = min(probs), max_tau = max(probs),
+        tau_step = if (length(probs) > 1L &&
+          max(abs(diff(probs) - diff(probs)[1L])) < 1e-12) diff(probs)[1L] else NA_real_,
+        draw_indices = integer()),
+      metadata = list(status = "unavailable", reason = reason,
+        explicit_treatment_covariate_interaction = FALSE), draws = NULL))
+  }
+  if (is.null(time_value)) {
+    return(unavailable("Actual `time_value` is needed in `stan_data` or `mira_fit_info` to reconstruct random slopes."))
+  }
+  if (!is.numeric(time_value) || length(time_value) != K ||
+      any(!is.finite(time_value)) || is.unsorted(time_value, strictly = TRUE) ||
+      anyDuplicated(time_value)) stop("Invalid QTE time metadata.", call. = FALSE)
+  if (length(likelihood_id) != 1L || is.na(likelihood_id) || !likelihood_id %in% 1:3) {
+    return(unavailable("The likelihood cannot be identified from the supplied metadata."))
+  }
+  if (length(has_lower) != 1L || is.na(has_lower) ||
+      length(has_upper) != 1L || is.na(has_upper) ||
+      (has_lower && (length(lower) != 1L || !is.finite(lower))) ||
+      (has_upper && (length(upper) != 1L || !is.finite(upper))) ||
+      (has_lower && has_upper && lower >= upper)) {
+    stop("Invalid QTE outcome bounds.", call. = FALSE)
+  }
+  # Reuse every forward pair used by the existing summary; order by visit lag.
+  pair_matrix <- do.call(rbind, time_pairs)
+  pair_matrix <- pair_matrix[order(pair_matrix[, 2L] - pair_matrix[, 1L],
+                                   pair_matrix[, 1L]), , drop = FALSE]
+  Tn <- nrow(pair_matrix)
+  arm_matrix <- if (opt$arm_contrasts == "all") {
+    t(utils::combn(seq_len(G), 2L))[ , 2:1, drop = FALSE]
+  } else cbind(seq.int(2L, G), 1L)
+  An <- nrow(arm_matrix)
+  Qn <- length(probs)
+  Ln <- length(distributions)
+  tail_support <- opt$n_sim * min(probs, 1 - probs)
+  if (tail_support < 20) warning(
+    "QTE extreme quantiles have only about ", signif(tail_support, 3L),
+    " simulated observations in the smaller tail per posterior draw; increase `qte_n_sim` for stability. All requested tau are retained.",
+    call. = FALSE)
+
+  # Save and restore both the caller's RNG kind and seed, including absence.
+  old_kind <- RNGkind()
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_seed) old_seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  on.exit({
+    do.call(RNGkind, as.list(old_kind))
+    if (had_seed) assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  }, add = TRUE)
+  RNGkind("Mersenne-Twister", "Inversion", "Rejection")
+  set.seed(opt$seed)
+  Dn <- min(nrow(draws), opt$max_draws)
+  draw_indices <- if (Dn == nrow(draws)) seq_len(Dn) else {
+    starts <- floor((seq_len(Dn) - 1) * nrow(draws) / Dn) + 1L
+    ends <- floor(seq_len(Dn) * nrow(draws) / Dn)
+    as.integer(starts + floor(stats::runif(Dn) * (ends - starts + 1L)))
+  }
+  draw_seeds <- sample.int(.Machine$integer.max, Dn, replace = FALSE)
+  normalized_names <- gsub("[[:space:]]", "", names(draws))
+  wanted <- function(prefix, i, j = NULL) {
+    paste0(prefix, "[", i, if (!is.null(j)) paste0(",", j), "]")
+  }
+  # Precompute column positions once, not in the subject or draw loops.
+  source_columns <- character()
+  extract <- function(nms) {
+    pos <- match(nms, normalized_names)
+    if (anyNA(pos)) stop("Missing QTE posterior variable(s): ",
+                         paste(nms[is.na(pos)], collapse = ", "), call. = FALSE)
+    source_columns <<- unique(c(source_columns, names(draws)[pos]))
+    mat <- as.matrix(draws[draw_indices, pos, drop = FALSE])
+    if (!is.numeric(mat) || any(!is.finite(mat))) {
+      stop("QTE source posterior draws must be finite.", call. = FALSE)
+    }
+    mat
+  }
+  pars <- tryCatch({
+    mu <- extract(wanted("mu_reference", seq_len(K)))
+    offsets <- extract(wanted("arm_baseline_offset", seq_len(G - 1L)))
+    treatment <- extract(as.vector(outer(seq_len(G - 1L), seq_len(K),
+                                         function(i, j) wanted("treatment_change", i, j))))
+    beta <- if (P) extract(as.vector(outer(seq_len(P), seq_len(K),
+                                          function(i, j) wanted("covariate_effect", i, j)))) else NULL
+    chol_names <- as.vector(outer(1:2, 1:2, function(i, j) wanted("subject_cholesky", i, j)))
+    chol <- if (all(chol_names %in% normalized_names)) extract(chol_names) else {
+      scales <- extract(wanted("sigma_subject", 1:2))
+      L <- extract(as.vector(outer(1:2, 1:2, function(i, j) wanted("L_subject", i, j))))
+      ans <- L
+      ans[, c(1L, 3L)] <- L[, c(1L, 3L), drop = FALSE] * scales[, 1L]
+      ans[, c(2L, 4L)] <- L[, c(2L, 4L), drop = FALSE] * scales[, 2L]
+      ans
+    }
+    sigma <- if ("predictive" %in% distributions) extract("sigma")[, 1L] else rep(0, Dn)
+    nu <- if (likelihood_id == 1L && "predictive" %in% distributions) {
+      nm <- c("nu_value", "nu[1]", "nu")
+      extract(nm[nm %in% normalized_names][1L])[, 1L]
+    } else rep(Inf, Dn)
+    if (any(sigma < 0) || any(nu <= 0)) stop("Invalid QTE residual scale or degrees of freedom.")
+    list(mu = mu, offsets = offsets, treatment = treatment, beta = beta,
+         chol = chol, sigma = sigma, nu = nu)
+  }, error = function(e) e)
+  if (inherits(pars, "error")) return(unavailable(conditionMessage(pars)))
+
+  X <- if (!is.null(stan_data$X)) stan_data$X else NULL
+  if (!is.null(X) && (!is.matrix(X) || !is.numeric(X) || ncol(X) != P ||
+                      nrow(X) < 1L || any(!is.finite(X)))) {
+    stop("QTE empirical standardization needs a finite subject-by-P matrix X.", call. = FALSE)
+  }
+  skipped <- character()
+  if (P > 0L && is.null(X) && "empirical" %in% standardizations) {
+    skipped <- "empirical"
+    standardizations <- setdiff(standardizations, skipped)
+    warning("QTE empirical standardization with P > 0 requires `stan_data$X`; joint covariate profiles cannot be recovered from marginal metadata. Available QTE components are retained.",
+            call. = FALSE)
+  }
+  profile_data <- model_information
+  profile_data$X <- X
+  profiles <- if (opt$covariates && P > 0L) {
+    .mira_qte_profiles_long(profile_data, P, model_information$covariate_names)
+  } else list(profiles = data.frame(), X = matrix(numeric(), 0L, P),
+              contrasts = data.frame())
+  has_estimands <- length(standardizations) > 0L || nrow(profiles$profiles) > 0L
+  bytes_per_stratum <- 8 * Dn * Qn * G * (K + Tn) * Ln
+  estimated_primitive_peak_bytes <- bytes_per_stratum *
+    if (!has_estimands) 0 else if (nrow(profiles$profiles)) 2 else 1
+  if (estimated_primitive_peak_bytes > 512 * 1024^2) warning(
+    "QTE draw-level quantile arrays require about ",
+    round(estimated_primitive_peak_bytes / 1024^2),
+    " MiB at peak, before summary tables or retained draws. Reduce `qte_max_draws` or use a smaller requested quantile grid if memory is limited.",
+    call. = FALSE)
+  natural <- function(eta) {
+    value <- if (likelihood_id == 3L) exp(eta) else eta
+    if (has_lower) value <- pmax(value, lower)
+    if (has_upper) value <- pmin(value, upper)
+    if (any(!is.finite(value))) stop(
+      "Non-finite natural-scale QTE simulation (possibly lognormal overflow). Inspect the posterior or use appropriate bounds; no draws were silently discarded.",
+      call. = FALSE)
+    value
+  }
+  time_relative <- time_value - time_value[1L]
+  # Only draw-level quantiles are retained; there is no subject x tau array.
+  simulate_stratum <- function(profile = numeric(P), empirical = FALSE) {
+    out <- array(NA_real_, c(Dn, Qn, G, K, Ln))
+    change <- array(NA_real_, c(Dn, Qn, G, Tn, Ln))
+    for (d in seq_len(Dn)) {
+      set.seed(draw_seeds[d])
+      Z <- matrix(stats::rnorm(opt$n_sim * 2L), opt$n_sim, 2L)
+      b <- Z %*% t(matrix(pars$chol[d, ], 2L, 2L))
+      random_location <- outer(b[, 2L], time_relative) + b[, 1L]
+      residual <- if ("predictive" %in% distributions) {
+        z <- if (likelihood_id == 1L) stats::rt(opt$n_sim * K, pars$nu[d]) else stats::rnorm(opt$n_sim * K)
+        matrix(pars$sigma[d] * z, opt$n_sim, K)
+      } else NULL
+      cov_location <- if (P > 0L) {
+        B <- matrix(pars$beta[d, ], P, K)
+        if (empirical) X[sample.int(nrow(X), opt$n_sim, replace = TRUE), , drop = FALSE] %*% B
+        else matrix(rep(as.numeric(profile %*% B), each = opt$n_sim), opt$n_sim, K)
+      } else 0
+      Tc <- matrix(pars$treatment[d, ], G - 1L, K)
+      for (g in seq_len(G)) {
+        fixed <- pars$mu[d, ]
+        if (g > 1L) fixed <- fixed + pars$offsets[d, g - 1L] + Tc[g - 1L, ]
+        eta <- sweep(random_location, 2L, fixed, "+") + cov_location
+        for (l in seq_len(Ln)) {
+          values <- natural(if (distributions[l] == "predictive") eta + residual else eta)
+          for (k in seq_len(K)) out[d, , g, k, l] <- stats::quantile(
+            values[, k], probs = probs, names = FALSE, type = 7L)
+          for (p in seq_len(Tn)) change[d, , g, p, l] <- stats::quantile(
+            values[, pair_matrix[p, 2L]] - values[, pair_matrix[p, 1L]],
+            probs = probs, names = FALSE, type = 7L)
+        }
+      }
+    }
+    dimnames(out) <- list(draw = as.character(draw_indices), tau = as.character(probs),
+      arm = arm_labels, time = time_labels, distribution = distributions)
+    dimnames(change) <- list(draw = as.character(draw_indices), tau = as.character(probs),
+      arm = arm_labels, time_pair = paste(pair_matrix[, 1L], pair_matrix[, 2L], sep = "->"),
+      distribution = distributions)
+    list(outcome = out, change = change)
+  }
+  alpha <- (1 - credible_level) / 2
+  summarize <- function(z, identifiers, estimand, clinical_threshold = FALSE) {
+    z <- matrix(z, Dn, Qn)
+    sm <- vapply(seq_len(Qn), function(j) {
+      v <- z[, j]
+      ci <- stats::quantile(v, c(alpha, 1 - alpha), names = FALSE, type = 7L)
+      directional <- !is.na(direction) && estimand != "outcome_quantile"
+      c(mean = mean(v), median = stats::median(v), sd = stats::sd(v),
+        mad = stats::mad(v), lower = ci[1L], upper = ci[2L],
+        CrI_width = ci[2L] - ci[1L], P_gt_0 = mean(v > 0), P_lt_0 = mean(v < 0),
+        mean_directional_effect = if (directional) direction * mean(v) else NA_real_,
+        P_benefit = if (directional) mean(direction * v > 0) else NA_real_,
+        P_benefit_meaningful = if (directional && clinical_threshold && is.finite(threshold)) {
+          mean(direction * v >= threshold)
+        } else NA_real_)
+    }, numeric(12L))
+    ans <- cbind(identifiers[rep(1L, Qn), , drop = FALSE],
+      data.frame(estimand = estimand, tau = probs, percentile = 100 * probs),
+      as.data.frame(t(sm)))
+    if (clinical_threshold) {
+      ans$meaningful_between_arm_difference <- threshold
+      ans$threshold_estimand <- "treatment_change_qte"
+    }
+    rownames(ans) <- NULL
+    ans
+  }
+  time_id <- function(k) data.frame(time = k, time_label = time_labels[k], time_value = time_value[k])
+  pair_id <- function(p) {
+    from <- pair_matrix[p, 1L]; to <- pair_matrix[p, 2L]
+    data.frame(from = from, from_label = time_labels[from], from_time_value = time_value[from],
+      to = to, to_label = time_labels[to], to_time_value = time_value[to],
+      elapsed = time_value[to] - time_value[from])
+  }
+  arm_id <- function(g) data.frame(arm = g, arm_label = arm_labels[g])
+  contrast_id <- function(a) data.frame(arm_a = arm_matrix[a, 1L],
+    arm_a_label = arm_labels[arm_matrix[a, 1L]], arm_b = arm_matrix[a, 2L],
+    arm_b_label = arm_labels[arm_matrix[a, 2L]])
+  bind <- function(rows) if (length(rows)) { z <- do.call(rbind, rows); rownames(z) <- NULL; z } else data.frame()
+  summarize_stratum <- function(raw, std, profile_id, info = NULL) {
+    rows <- list(outcome = list(), time = list(), change = list(),
+                 level = list(), treatment_change = list(), did = list())
+    for (l in seq_len(Ln)) {
+      base <- data.frame(distribution = distributions[l], standardization = std,
+                         profile_id = profile_id, stringsAsFactors = FALSE)
+      if (!is.null(info)) base <- cbind(base, info[, setdiff(names(info), "profile_id"), drop = FALSE])
+      for (g in seq_len(G)) {
+        for (k in seq_len(K)) rows$outcome[[length(rows$outcome) + 1L]] <- summarize(
+          raw$outcome[, , g, k, l], cbind(base, arm_id(g), time_id(k)), "outcome_quantile")
+        for (p in seq_len(Tn)) {
+          f <- pair_matrix[p, 1L]; t <- pair_matrix[p, 2L]
+          ids <- cbind(base, arm_id(g), pair_id(p))
+          rows$time[[length(rows$time) + 1L]] <- summarize(
+            raw$outcome[, , g, t, l] - raw$outcome[, , g, f, l], ids, "temporal_quantile_shift")
+          rows$change[[length(rows$change) + 1L]] <- summarize(
+            raw$change[, , g, p, l], ids, "change_quantile")
+        }
+      }
+      for (a in seq_len(An)) {
+        ga <- arm_matrix[a, 1L]; gb <- arm_matrix[a, 2L]
+        for (k in seq_len(K)) rows$level[[length(rows$level) + 1L]] <- summarize(
+          raw$outcome[, , ga, k, l] - raw$outcome[, , gb, k, l],
+          cbind(base, contrast_id(a), time_id(k)), "treatment_qte")
+        for (p in seq_len(Tn)) {
+          f <- pair_matrix[p, 1L]; t <- pair_matrix[p, 2L]
+          ids <- cbind(base, contrast_id(a), pair_id(p))
+          rows$treatment_change[[length(rows$treatment_change) + 1L]] <- summarize(
+            raw$change[, , ga, p, l] - raw$change[, , gb, p, l],
+            ids, "treatment_change_qte", TRUE)
+          rows$did[[length(rows$did) + 1L]] <- summarize(
+            (raw$outcome[, , ga, t, l] - raw$outcome[, , ga, f, l]) -
+              (raw$outcome[, , gb, t, l] - raw$outcome[, , gb, f, l]),
+            ids, "quantile_did")
+        }
+      }
+    }
+    list(outcome = bind(rows$outcome), time = list(temporal_quantile_shift = bind(rows$time)),
+         change = list(quantiles = bind(rows$change)),
+         treatment = list(level = bind(rows$level), change = bind(rows$treatment_change), did = bind(rows$did)))
+  }
+  keep_raw <- function(raw) {
+    level <- array(NA_real_, c(Dn, Qn, An, K, Ln))
+    change <- did <- array(NA_real_, c(Dn, Qn, An, Tn, Ln))
+    for (a in seq_len(An)) {
+      ga <- arm_matrix[a, 1L]; gb <- arm_matrix[a, 2L]
+      for (l in seq_len(Ln)) {
+        for (k in seq_len(K)) level[, , a, k, l] <- raw$outcome[, , ga, k, l] - raw$outcome[, , gb, k, l]
+        for (p in seq_len(Tn)) {
+          f <- pair_matrix[p, 1L]; t <- pair_matrix[p, 2L]
+          change[, , a, p, l] <- raw$change[, , ga, p, l] - raw$change[, , gb, p, l]
+          did[, , a, p, l] <- (raw$outcome[, , ga, t, l] - raw$outcome[, , ga, f, l]) -
+            (raw$outcome[, , gb, t, l] - raw$outcome[, , gb, f, l])
+        }
+      }
+    }
+    list(outcome = raw$outcome, change = raw$change,
+         treatment = list(level = level, change = change, did = did))
+  }
+  combine_families <- function(parts) {
+    if (!length(parts)) return(empty_family())
+    list(outcome = bind(lapply(parts, `[[`, "outcome")),
+      time = list(temporal_quantile_shift = bind(lapply(parts, function(z) z$time$temporal_quantile_shift))),
+      change = list(quantiles = bind(lapply(parts, function(z) z$change$quantiles))),
+      treatment = list(level = bind(lapply(parts, function(z) z$treatment$level)),
+        change = bind(lapply(parts, function(z) z$treatment$change)),
+        did = bind(lapply(parts, function(z) z$treatment$did))))
+  }
+  main_parts <- list(); cov_parts <- list(); kept <- list()
+  for (std in standardizations) {
+    raw <- simulate_stratum(empirical = std == "empirical")
+    main_parts[[std]] <- summarize_stratum(raw, std, std)
+    if (opt$keep_draws) kept[[std]] <- keep_raw(raw)
+    rm(raw)
+  }
+  cov_level <- list(); cov_change <- list(); kept_cov <- list()
+  if (nrow(profiles$profiles)) {
+    # Retain at most a reference profile and one comparison, even with many covariates.
+    for (variable in unique(profiles$profiles$original_covariate)) {
+      group <- which(profiles$profiles$original_covariate == variable)
+      ref_id <- unique(profiles$profiles$profile_reference_id[group])
+      ref_row <- match(ref_id, profiles$profiles$profile_id)
+      ref_raw <- simulate_stratum(profiles$X[ref_row, ])
+      for (i in c(ref_row, setdiff(group, ref_row))) {
+        info <- profiles$profiles[i, , drop = FALSE]
+        raw <- if (i == ref_row) ref_raw else simulate_stratum(profiles$X[i, ])
+        cov_parts[[info$profile_id]] <- summarize_stratum(raw, "reference", info$profile_id, info)
+        if (opt$keep_draws) kept[[info$profile_id]] <- keep_raw(raw)
+        if (i != ref_row) {
+          base_profile <- info[, setdiff(names(info), c("profile_id", "profile_reference_id")), drop = FALSE]
+          base_profile$profile_a <- ref_id
+          base_profile$profile_b <- info$profile_id
+          base_profile$profile_a_level <- profiles$profiles$level[ref_row]
+          base_profile$profile_b_level <- info$level
+          base_profile$profile_a_original_value <- profiles$profiles$original_value[ref_row]
+          base_profile$profile_b_original_value <- info$original_value
+          base_profile$profile_a_encoded_value <- profiles$profiles$encoded_value[ref_row]
+          base_profile$profile_b_encoded_value <- info$encoded_value
+          for (l in seq_len(Ln)) {
+            base <- cbind(data.frame(distribution = distributions[l], standardization = "reference"), base_profile)
+            for (g in seq_len(G)) {
+              for (k in seq_len(K)) cov_level[[length(cov_level) + 1L]] <- summarize(
+                raw$outcome[, , g, k, l] - ref_raw$outcome[, , g, k, l],
+                cbind(base, arm_id(g), time_id(k)), "covariate_quantile_contrast")
+              for (p in seq_len(Tn)) cov_change[[length(cov_change) + 1L]] <- summarize(
+                raw$change[, , g, p, l] - ref_raw$change[, , g, p, l],
+                cbind(base, arm_id(g), pair_id(p)), "covariate_change_quantile_contrast")
+            }
+          }
+          if (opt$keep_draws) kept_cov[[info$profile_id]] <- list(
+            profile_a = ref_id, profile_b = info$profile_id,
+            level = raw$outcome - ref_raw$outcome, change = raw$change - ref_raw$change)
+        }
+        rm(raw)
+      }
+      rm(ref_raw)
+    }
+  }
+  main <- combine_families(main_parts)
+  cov_result <- if (nrow(profiles$profiles)) c(list(profiles = profiles$profiles,
+    encoded_profiles = profiles$X, profile_contrasts = profiles$contrasts),
+    combine_families(cov_parts), list(covariate_quantile_contrast = bind(cov_level),
+      covariate_change_quantile_contrast = bind(cov_change))) else NULL
+  step <- if (Qn > 1L && max(abs(diff(probs) - diff(probs)[1L])) < 1e-12) diff(probs)[1L] else NA_real_
+  metadata <- list(status = if (!has_estimands) "unavailable" else if (length(skipped)) "partial" else "ok",
+    reason = if (!has_estimands) "The requested empirical standardization requires joint X; no reference standardization or covariate profiles were requested/available." else NULL,
+    distribution = distributions, standardization = standardizations,
+    requested_standardization = opt$standardization, skipped_standardization = skipped,
+    likelihood = c("student_t", "gaussian", "lognormal")[likelihood_id],
+    scale = "natural outcome scale", credible_level = credible_level,
+    direction = direction, raw_contrast_orientation = "arm_a - arm_b; covariates profile_b - profile_a",
+    time_value = time_value, time_labels = time_labels, arm_labels = arm_labels,
+    time_pairs = do.call(rbind, lapply(seq_len(Tn), pair_id)),
+    arm_pairs = do.call(rbind, lapply(seq_len(An), contrast_id)),
+    explicit_treatment_covariate_interaction = FALSE,
+    boundary_strategy = "endpoint censoring (clamping); applied to latent and predictive outcomes",
+    bounds = c(lower = if (has_lower) lower else NA_real_, upper = if (has_upper) upper else NA_real_),
+    residual_dependence = "independent between times conditional on shared subject effects and X",
+    common_random_numbers = "Shared subject effects and residual draws across arms/profiles for variance reduction; no identifying cross-arm potential-outcome dependence assumption.",
+    covariate_profile_strategy = "one covariate at a time; all other encoded terms fixed at zero",
+    covariate_profile_notes = profiles$notes,
+    clinical_threshold_application = "P_benefit_meaningful = P(direction * treatment_change_qte >= meaningful_between_arm_difference), only for treatment_change_qte; it is not an individual responder probability or a validated quantile-specific MCID. Level QTE and quantile DiD have no threshold applied.",
+    benefit_probability_definition = "P(direction * raw effect > 0); not defined for outcome quantiles. Covariate contrasts describe conditional distributions, not causal benefit.",
+    causal_interpretation = "Arm contrasts require design-specific exchangeability/randomization, positivity, consistency and model assumptions for causal interpretation; these assumptions are not verified by this code.",
+    source_posterior_variables = source_columns,
+    derived_in = "R posterior simulation; no QTE Stan generated quantities",
+    definitions = c(outcome_quantile = "Q_tau(Y_g,k)",
+      temporal_quantile_shift = "Q_tau(Y_g,to) - Q_tau(Y_g,from)",
+      change_quantile = "Q_tau(Y_g,to - Y_g,from), with the same subject across times",
+      treatment_qte = "Q_tau(Y_arm_a,k) - Q_tau(Y_arm_b,k)",
+      treatment_change_qte = "Q_tau(DeltaY_arm_a) - Q_tau(DeltaY_arm_b)",
+      quantile_did = "[Q_tau(Y_arm_a,to)-Q_tau(Y_arm_a,from)] - [Q_tau(Y_arm_b,to)-Q_tau(Y_arm_b,from)]",
+      covariate_quantile_contrast = "Q_tau(Y_profile_b) - Q_tau(Y_profile_a), within arm",
+      covariate_change_quantile_contrast = "Q_tau(DeltaY_profile_b) - Q_tau(DeltaY_profile_a), within arm"))
+  c(list(probs = probs), main, list(covariates = cov_result,
+    monte_carlo = list(n_sim = opt$n_sim, seed = opt$seed,
+      posterior_draws_available = nrow(draws), posterior_draws_used = if (has_estimands) Dn else 0L,
+      qte_max_draws = opt$max_draws,
+      draw_indices = if (has_estimands) draw_indices else integer(),
+      draw_seeds = if (has_estimands) draw_seeds else integer(),
+      number_of_quantiles = Qn, number_of_time_pairs = Tn, number_of_arm_pairs = An,
+      number_of_covariate_profiles = nrow(profiles$profiles),
+      min_tau = min(probs), max_tau = max(probs), tau_step = step,
+      expected_minimum_tail_count = tail_support, quantile_type = 7L,
+      primitive_bytes_per_stratum = bytes_per_stratum,
+      estimated_primitive_peak_bytes = estimated_primitive_peak_bytes,
+      subsampling = "one randomly selected draw per equal-width ordered-posterior stratum",
+      uncertainty = "Posterior variation includes finite nested Monte Carlo error; increase n_sim and max_draws to assess numerical stability."),
+    metadata = metadata,
+    draws = if (opt$keep_draws && has_estimands) list(draw_indices = draw_indices, probs = probs,
+      distributions = distributions, arm_pairs = metadata$arm_pairs,
+      time_pairs = metadata$time_pairs, strata = kept, covariate_contrasts = kept_cov,
+      dimensions = list(outcome = c("draw", "tau", "arm", "time", "distribution"),
+        change = c("draw", "tau", "arm", "time_pair", "distribution"),
+        treatment_level = c("draw", "tau", "arm_pair", "time", "distribution"),
+        treatment_change_and_did = c("draw", "tau", "arm_pair", "time_pair", "distribution"))) else NULL))
 }

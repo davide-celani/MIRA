@@ -11,7 +11,16 @@ mira_summary_long(
   y = NULL,
   credible_level = 0.9,
   responder_thresholds = c(0.5, 0.8, 0.95),
-  verbose = TRUE
+  verbose = TRUE,
+  qte_probs = NULL,
+  qte_distribution = c("both", "predictive", "latent"),
+  qte_standardization = c("both", "reference", "empirical"),
+  qte_arm_contrasts = c("all", "reference"),
+  qte_covariates = TRUE,
+  qte_n_sim = 2000L,
+  qte_max_draws = 1000L,
+  qte_seed = 123,
+  qte_keep_draws = FALSE
 )
 }
 \arguments{
@@ -35,6 +44,40 @@ existing-subject responder classification.}
 
 \item{verbose}{Logical. If TRUE, print the compact Bayesian report when
 the summary object is created.}
+
+\item{qte_probs}{Quantile probabilities. NULL uses all 199 probabilities
+from 0.005 to 0.995 in steps of 0.005. User values must be unique, finite
+and strictly inside (0, 1); they are sorted without adding probabilities.}
+
+\item{qte_distribution}{Compute latent, predictive, or both distributions
+(default). Latent includes Gaussian subject effects; predictive also
+includes observation error. Both use the natural outcome scale and the
+model's endpoint censoring.}
+
+\item{qte_standardization}{Reference X = 0, empirical joint X mixture, or
+both (default). Empirical standardization with P > 0 needs stan_data$X;
+whole subject rows are sampled and the quantile is computed after mixing.}
+
+\item{qte_arm_contrasts}{All unique arm pairs (default), or each non-reference
+arm against arm 1. Raw contrasts always subtract arm_b from arm_a.}
+
+\item{qte_covariates}{Include profiles for each original covariate separately,
+with all others fixed at X = 0 (default TRUE). Continuous profiles use
+observed Q25/median/Q75 and preserve original units; categorical profiles
+reuse grouped dummy encodings and the original reference level.}
+
+\item{qte_n_sim}{Number of new subjects per posterior draw (default 2000).
+Extreme quantiles trigger an informative warning if fewer than 20
+expected simulated observations support the smaller tail.}
+
+\item{qte_max_draws}{Maximum posterior draws for nested Monte Carlo (default
+1000), sampled across the entire ordered posterior sample.}
+
+\item{qte_seed}{Non-negative integer seed. QTE simulation is reproducible
+and restores the caller's RNG kind and .Random.seed.}
+
+\item{qte_keep_draws}{Keep draw-level quantiles and contrasts (default FALSE);
+individual new-subject simulations are never saved.}
 }
 \value{
 A list containing population trajectories, changes, new-subject
@@ -42,7 +85,11 @@ responder estimands, individual summaries, treatment contrasts,
 time-specific effects for every selected encoded covariate term (with
 readable design-matrix metadata when available), heterogeneity,
 posterior predictive checks, log-likelihood information,
-MCMC diagnostics, model information and raw posterior draws.
+MCMC diagnostics, model information and raw posterior draws. The native
+$qte family adds outcome quantiles, temporal quantile shifts, quantiles
+of individual changes, treatment level QTE, change-QTE and quantile DiD
+for every forward time pair, plus standardized and covariate-specific
+quantile distributions and conditional covariate quantile contrasts.
 }
 \description{
 Summarizes the outcome-adaptive multi-arm MIRA longitudinal model. The
@@ -50,4 +97,25 @@ function is dynamic in likelihood/link, treatment arms G, measurement
 occasions K and subjects S. Natural-scale outcomes and clinical changes are
 reported for every family; log-scale and ratio estimands are additionally
 exposed for log-normal CMT fits.
+}
+\details{
+Q_tau(Y_to) - Q_tau(Y_from) and Q_tau(Y_to - Y_from) are distinct
+estimands. Changes use the same subject effects and covariate row at all
+times, with independent conditional residual errors. Contrasts and
+quantiles are computed within each posterior draw before posterior
+summaries. Common random numbers across arms/profiles reduce numerical
+noise and do not identify cross-arm potential-outcome dependence.
+P_benefit uses direction times the raw contrast without changing its sign.
+P_benefit_meaningful is calculated only for change-QTE using the supplied
+meaningful_between_arm_difference; this is not an individual responder
+probability or a validated quantile-specific MCID. Level QTE and quantile
+DiD receive no automatic clinical threshold. Causal interpretation needs
+appropriate design and model assumptions. Covariate contrasts are
+conditional distributional comparisons, and the model has no explicit
+treatment-by-covariate interaction. Posterior uncertainty includes finite
+Monte Carlo error; increase qte_n_sim to assess numerical stability.
+Missing indispensable metadata/parameters in legacy fits yield an explicit
+unavailable QTE component with a warning, while retaining other summaries.
+Fit-only empirical standardization is skipped with a warning when X is
+unavailable. The existing positional verbose argument remains seventh.
 }

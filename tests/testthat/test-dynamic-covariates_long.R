@@ -153,7 +153,14 @@ test_that("A: covariate initial values are omitted for P = 0", {
 test_that("A: the generic summary has a typed empty P = 0 result", {
   stan_data <- prepare_dynamic_covariates(character(0))
   fit <- mock_dynamic_covariate_fit(stan_data)
-  result <- mira_summary_long(fit, stan_data = stan_data, verbose = FALSE)
+  expect_warning(
+    result <- mira_summary_long(
+      fit, stan_data = stan_data, verbose = FALSE,
+      qte_probs = c(0.25, 0.50, 0.75)
+    ),
+    "QTE unavailable: Missing QTE posterior"
+  )
+  expect_identical(result$qte$metadata$status, "unavailable")
 
   expect_s3_class(result, "mira_summary_long")
   expect_true(is.data.frame(result$covariate_effects))
@@ -238,7 +245,14 @@ test_that("E: multilevel factors use treatment coding and retain metadata", {
 test_that("E and I: readable selected names survive the generic summary", {
   stan_data <- prepare_dynamic_covariates("smoking")
   fit <- mock_dynamic_covariate_fit(stan_data)
-  result <- mira_summary_long(fit, stan_data = stan_data, verbose = FALSE)
+  expect_warning(
+    result <- mira_summary_long(
+      fit, stan_data = stan_data, verbose = FALSE,
+      qte_probs = c(0.25, 0.50, 0.75)
+    ),
+    "QTE unavailable: Missing QTE posterior"
+  )
+  expect_identical(result$qte$metadata$status, "unavailable")
 
   expect_s3_class(result, "mira_summary_long")
   expect_true(is.data.frame(result$covariate_effects))

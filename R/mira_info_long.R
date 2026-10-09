@@ -2670,7 +2670,10 @@
       outcome_name <- if (length(inferred) == 1L) inferred[[1L]] else "outcome"
     }
 
-    clear_order <- all(is.finite(parsed_order)) && !anyDuplicated(parsed_order)
+    # The public wrapper has already resolved chronology, including a custom
+    # variable_pattern. Preserve that order instead of reparsing its suffixes.
+    clear_order <- is.null(.outcome_name) &&
+      all(is.finite(parsed_order)) && !anyDuplicated(parsed_order)
     ord <- if (clear_order) order(parsed_order, time_vars) else seq_along(time_vars)
     if (!is.null(time_labels)) {
       if (length(time_labels) != length(time_vars)) {
@@ -3053,11 +3056,13 @@
   missing_by_patient <- data.frame(
     patient = analysis_data[[id]],
     missing_n = rowSums(is.na(raw_data[time_vars])),
-    non_finite_n = rowSums(vapply(
+    # vapply simplifies one-row columns to a vector; retain the subject-by-time
+    # matrix required by rowSums for singleton data as well as larger samples.
+    non_finite_n = rowSums(matrix(vapply(
       raw_data[time_vars],
       function(x) !is.na(x) & !is.finite(x),
       logical(n_rows)
-    )),
+    ), nrow = n_rows, ncol = length(time_vars))),
     unavailable_n = rowSums(is.na(analysis_data[time_vars])),
     stringsAsFactors = FALSE
   )

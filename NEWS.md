@@ -1,3 +1,13 @@
+# MIRA (development version)
+
+- Preserve the chronology resolved by custom longitudinal-variable parsers in
+  analysis results, including baseline/final labels and change directions.
+- Support one-subject longitudinal data in the non-finite availability audit.
+- Preserve terminal escaped underscores and dollar signs in the report's
+  internal LaTeX wrapping helper.
+- Expand deterministic statistical-oracle, configuration, report-bundle,
+  publication-formatting, and rendering-failure regression tests.
+
 # MIRA 0.0.1 (2026-10-03)
 
 Initial release, archived on Zenodo with version DOI

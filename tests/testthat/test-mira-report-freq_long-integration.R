@@ -341,6 +341,11 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
 
     expect_true(unname(report$rendered[["html"]]))
     expect_true(file.exists(report$expected_files[["html"]]))
+    expect_gt(file.info(report$expected_files[["html"]])$size, 0)
+    html <- paste(readLines(report$expected_files[["html"]], warn = FALSE),
+                  collapse = "\n")
+    expect_match(html, "<!DOCTYPE html>|<html", ignore.case = TRUE)
+    expect_match(html, "MIRA: Longitudinal Analysis", fixed = TRUE)
     expect_identical(unname(report$files),
                      unname(report$expected_files[["html"]]))
     expect_true(is.na(report$render_errors[["html"]]))

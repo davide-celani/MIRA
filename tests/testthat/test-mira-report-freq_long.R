@@ -70,7 +70,7 @@ test_that("a report built from mira_info_long preserves the result and exports i
   fit <- mira_info_long(data, id = "patient", outcomes = "score",
                    time_vars = c("score_t0", "score_t1", "score_t2"),
                    analyses = "none", verbose = FALSE)
-  output <- tempfile("mira-report-")
+  output <- withr::local_tempdir(pattern = "mira-report-")
   capture.output(report <- mira_report_freq_long(
     fit, output_dir = output, format = "html", render = FALSE, open = FALSE
   ))

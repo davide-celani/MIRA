@@ -377,10 +377,9 @@
 
 .mira_report_latex_breaks_long <- function(x) {
   for (token in c("\\_", "\\$")) {
-    pieces <- strsplit(x, token, fixed = TRUE)[[1L]]
-    if (length(pieces) > 1L) {
-      x <- paste(pieces, collapse = paste0(token, "\\allowbreak{}"))
-    }
+    # Literal replacement preserves terminal escaped tokens, unlike splitting
+    # and rejoining, which drops trailing empty pieces.
+    x <- gsub(token, paste0(token, "\\allowbreak{}"), x, fixed = TRUE)
   }
   x
 }

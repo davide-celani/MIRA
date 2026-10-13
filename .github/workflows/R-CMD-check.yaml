@@ -24,7 +24,8 @@ jobs:
           # Matrix >= 1.7 requires R >= 4.4; 1.6-5 supports this minimum-R
           # profile and the Matrix >= 1.5 requirement of lme4. This is a
           # compatibility profile, not a test against all latest dependencies.
-          - {os: ubuntu-latest, r: '4.2.3', matrix-package: 'Matrix@1.6-5'}
+          # Deriv 4.3.5 requires R >= 4.5; 4.2.0 is the last pure-R release.
+          - {os: ubuntu-latest, r: '4.2.3', matrix-package: 'Matrix@1.6-5', deriv-package: 'Deriv@4.2.0'}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
@@ -48,6 +49,7 @@ jobs:
           extra-packages: |
             any::rcmdcheck
             ${{ matrix.config.matrix-package }}
+            ${{ matrix.config.deriv-package }}
           needs: check
       - uses: r-lib/actions/check-r-package@v2
         with:

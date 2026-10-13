@@ -42,6 +42,9 @@ jobs:
           extra-repositories: https://stan-dev.r-universe.dev
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          # Include every MIRA test dependency without following Enhances.
+          # Matrix 1.6-5 Enhances graph; graph is not required to check MIRA.
+          dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
           extra-packages: |
             any::rcmdcheck
             ${{ matrix.config.matrix-package }}

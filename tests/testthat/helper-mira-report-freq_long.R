@@ -173,22 +173,52 @@ report_test_require_quarto <- function(profile = "MIRA_RUN_QUARTO_TESTS") {
 
 # These parsers read published table cells, independently of the report's table
 # preparation helpers. They intentionally support the simple tables used here.
+report_test_html_text <- function(html) {
+  text <- gsub("(?s)<[^>]+>", "", html, perl = TRUE)
+  entities <- gregexpr("&(?:amp|lt|gt|quot|apos|nbsp|#[0-9]+|#[xX][0-9A-Fa-f]+);",
+                      text, perl = TRUE)
+  matched <- regmatches(text, entities)
+  replacements <- lapply(matched, function(values) {
+    vapply(values, function(entity) {
+      known <- c("&amp;" = "&", "&lt;" = "<", "&gt;" = ">", "&quot;" = '"',
+                 "&apos;" = "'", "&nbsp;" = " ")
+      if (entity %in% names(known)) return(unname(known[[entity]]))
+      code <- substr(entity, 3L, nchar(entity) - 1L)
+      value <- if (grepl("^[xX]", code)) {
+        strtoi(substring(code, 2L), base = 16L)
+      } else {
+        suppressWarnings(as.integer(code))
+      }
+      if (is.na(value) || value <= 0L || value > 1114111L ||
+          (value >= 55296L && value <= 57343L)) return(entity)
+      intToUtf8(value)
+    }, character(1L), USE.NAMES = FALSE)
+  })
+  # Replace matches from the original string once: &amp;lt; means literal &lt;.
+  regmatches(text, entities) <- replacements
+  text <- gsub("\u00a0", " ", text, fixed = TRUE)
+  trimws(gsub("[[:space:]]+", " ", text))
+}
+
 report_test_html_table <- function(html, caption) {
   tables <- regmatches(html, gregexpr("(?s)<table\\b.*?</table>", html, perl = TRUE))[[1L]]
-  selected <- tables[grepl(paste0("<caption>", caption, "</caption>"), tables, fixed = TRUE)]
-  testthat::expect_length(selected, 1L)
+  captions <- vapply(tables, function(table) {
+    element <- regmatches(table, regexpr("(?s)<caption\\b[^>]*>.*?</caption>",
+                                         table, perl = TRUE))
+    if (!length(element)) return(NA_character_)
+    report_test_html_text(element)
+  }, character(1L))
+  selected <- tables[!is.na(captions) & captions == caption]
+  if (length(selected) != 1L) {
+    stop(sprintf("Expected exactly one HTML table with caption '%s'; found %d.",
+                 caption, length(selected)), call. = FALSE)
+  }
   rows <- regmatches(selected, gregexpr("(?s)<tr\\b[^>]*>.*?</tr>", selected,
                                        perl = TRUE))[[1L]]
   cells <- lapply(rows, function(row) {
     values <- regmatches(row, gregexpr("(?s)<t[hd]\\b[^>]*>.*?</t[hd]>", row,
                                        perl = TRUE))[[1L]]
-    values <- trimws(gsub("<[^>]+>", "", values))
-    for (entity in c("&lt;", "&gt;", "&amp;", "&quot;", "&#39;")) {
-      replacement <- c("&lt;" = "<", "&gt;" = ">", "&amp;" = "&",
-                       "&quot;" = '"', "&#39;" = "'")[[entity]]
-      values <- gsub(entity, replacement, values, fixed = TRUE)
-    }
-    values
+    report_test_html_text(values)
   })
   headers <- cells[[1L]]
   result <- as.data.frame(do.call(rbind, cells[-1L]), stringsAsFactors = FALSE)

@@ -391,7 +391,7 @@ test_that("figure captions choose the most specific scientific description", {
   )
   expect_false(visible$visible)
   expect_false(visible$value)
-  expect_match(paste(failure, collapse = "\n"), "Figure could not be rendered: arm_mean_ci",
+  expect_match(paste(failure, collapse = "\n"), "Figure could not be rendered: arm\\_mean\\_ci",
                fixed = TRUE)
   expect_match(paste(failure, collapse = "\n"), "controlled drawing failure", fixed = TRUE)
   expect_false(any(grepl("**Figure.**", failure, fixed = TRUE)))

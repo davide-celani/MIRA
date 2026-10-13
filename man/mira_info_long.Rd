@@ -181,7 +181,8 @@ column names; \code{character(0)} explicitly selects none. Explicit columns must
 exist, be unique, and not overlap selected or detected longitudinal
 variables, the chosen ID or arm, retained ID/arm candidates, or reserved
 internal columns (\code{patient}, \code{outcome}, \code{time}, \code{time_index}, \code{time_label},
-\code{arm}, \code{value}, \code{patient_factor}, \code{time_factor}, and \code{arm_factor}). With
+\code{arm}, \code{value}, \code{patient_factor}, \code{time_factor}, \code{arm_factor},
+\code{patient_mean}, and \code{time_ordinal}). With
 \code{NULL} or \code{"auto"}, eligible numeric and low-cardinality categorical columns
 are detected after excluding ID-, arm-, and longitudinal-like variables.
 Every candidate needs at least two distinct non-missing values; factor,

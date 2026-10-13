@@ -5,6 +5,22 @@ the additional work for a software paper; it is not a submission or a claim of
 eligibility. Check the [current JOSS requirements](https://joss.readthedocs.io/en/latest/submitting.html)
 again when preparing the submission.
 
+## Requirements checked on 2026-10-12
+
+The official [submission guidance](https://joss.readthedocs.io/en/latest/submitting.html)
+requires sustained public development exceeding six months, demonstrated
+research use, open-source practices and iterative development. Public history,
+adoption, authorship and impact need evidence independent of software tests;
+this validation work does not establish eligibility.
+
+The [review criteria](https://joss.readthedocs.io/en/latest/review_criteria.html)
+call for installable, documented software and objective verification of core
+functionality. The independent statistical oracles, metamorphic checks,
+targeted mutation experiments and Monte Carlo studies requested for this
+session provide additional evidence; JOSS does not prescribe their counts or
+a coverage threshold. See the validation guide and recorded results for what
+was actually executed, including skipped integrations and remaining limits.
+
 ## Public development and research use
 
 - Maintain more than six months of public, active development, with meaningful
@@ -43,6 +59,18 @@ alternatives, design decisions, and demonstrated research impact. Use
 `dev/AI_USAGE.md` to assemble an accurate AI disclosure after human validation.
 Follow the [JOSS review criteria](https://joss.readthedocs.io/en/latest/review_criteria.html)
 and their current paper instructions.
+
+The current criteria require substantive sections for Statement of need,
+State of the field (including the reason to build rather than contribute to
+an alternative), Software design, Research impact statement and AI usage
+disclosure. These sections require the authors' verified scholarly evidence
+and design rationale; do not infer them from a passing test suite.
+
+The current AI policy requires disclosure of tools/models and versions where
+known, scope, and the authors' confirmation of human review and validation of
+AI-assisted material. Human review of this session remains pending. AI must
+not be used for conversational interactions with editors or reviewers except
+translation. No submission or editorial interaction is part of this work.
 
 Keep the software contribution separate from clinical findings. Reviewers will
 evaluate the implemented software and its evidence, not prospective promises.

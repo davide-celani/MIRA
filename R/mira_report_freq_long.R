@@ -36,8 +36,17 @@
   FALSE
 }
 
-.mira_report_heading_long <- function(text, level = 1L) {
+.mira_report_markdown_text_long <- function(text) {
   text <- gsub("[\r\n]+", " ", as.character(text)[1L])
+  characters <- strsplit(enc2utf8(text), "", fixed = TRUE)[[1L]]
+  escaped <- characters %in% c("\\", "`", "*", "_", "{", "}", "[", "]",
+                               "(", ")", "<", ">", "#", "$", "|", "~", "^", "&")
+  characters[escaped] <- paste0("\\", characters[escaped])
+  paste0(characters, collapse = "")
+}
+
+.mira_report_heading_long <- function(text, level = 1L) {
+  text <- .mira_report_markdown_text_long(text)
   level <- max(1L, min(6L, as.integer(level)[1L]))
   cat("\n", strrep("#", level), " ", text, "\n\n", sep = "")
 }
@@ -59,7 +68,7 @@
     change = "Within-participant changes",
     arm_analysis = "Arm-specific analyses",
     baseline_balance = "Baseline balance",
-    missingness = "Missing data by arm",
+    missingness = "Missing data",
     time_omnibus = "Omnibus arm comparisons by time point",
     time_pairwise = "Pairwise arm comparisons by time point",
     change_descriptives = "Change by arm",
@@ -531,7 +540,9 @@
         )
       }
       if (is_html) cat("<div class=\"mira-table-wrap\">\n")
-      cat(rendered_text, "\n", sep = "")
+      # Pipe tables are character vectors with one element per line. Preserve
+      # those boundaries so Pandoc receives a table rather than joined prose.
+      cat(paste(rendered_text, collapse = "\n"), "\n", sep = "")
       if (is_html) cat("</div>\n")
       cat("\n")
     }
@@ -587,7 +598,8 @@
   allowed <- c("note", "tip", "warning", "important", "caution")
   if (!type %in% allowed) type <- "note"
   cat(sprintf("::: {.callout-%s appearance=\"simple\"}\n", type))
-  cat("**", title, ".** ", text, "\n", sep = "")
+  cat("**", .mira_report_markdown_text_long(title), ".** ",
+      .mira_report_markdown_text_long(text), "\n", sep = "")
   cat(":::\n\n")
 }
 
@@ -868,6 +880,31 @@
     plot_error <- .mira_report_prune_long(outcome$plot_error, "figure_error",
                                      "outcome$plot_error", cfg)
     if (!is.null(plot_error)) diagnostic$children$figure_error <- plot_error
+    # Failed modules remain absent from result sections, but their recorded
+    # errors and non-estimability reasons must remain visible in diagnostics.
+    collect_failures <- function(component, path, depth = 0L) {
+      if (!is.list(component) || is.data.frame(component) ||
+          .mira_report_is_model_long(component) || depth > cfg$max_depth) return()
+      if (identical(component$performed, FALSE)) {
+        details <- component[intersect(c("error", "warnings"), names(component))]
+        details <- Filter(function(value) length(value) > 0L &&
+                            !all(is.na(value)), details)
+        if (length(details)) {
+          # Disabled modules with only a reason remain omitted. An actual
+          # failure also carries its recorded non-estimability explanation.
+          if (length(component$reason_skipped)) details$reason <- component$reason_skipped
+          node <- .mira_report_prune_long(details, path,
+                                         paste0("outcome$", path), cfg)
+          if (!is.null(node)) diagnostic$children[[path]] <<- node
+        }
+      }
+      for (name in names(component)) {
+        collect_failures(component[[name]], paste0(path, "$", name), depth + 1L)
+      }
+    }
+    for (key in c("advanced_tests", "advanced_models", "robustness", "multiplicity")) {
+      collect_failures(outcome[[key]], key)
+    }
     if (length(diagnostic$children)) nodes$diagnostics <- diagnostic
   }
   nodes
@@ -911,7 +948,9 @@
 .mira_report_render_node_long <- function(node, level, cfg) {
   label <- .mira_report_human_name_long(node$key)
   if (node$kind == "value") {
-    cat("**", label, ":** ", .mira_report_inline_long(node$value), "\n\n", sep = "")
+    cat("**", .mira_report_markdown_text_long(label), ":** ",
+        .mira_report_markdown_text_long(.mira_report_inline_long(node$value)),
+        "\n\n", sep = "")
     return(invisible(NULL))
   }
   .mira_report_heading_long(label, level)
@@ -953,7 +992,8 @@
   if (!length(available)) return(invisible(NULL))
   .mira_report_heading_long("Abstract", 1L)
   cat("This report presents the observed analytical results for ",
-      paste(available, collapse = ", "), ".\n\n", sep = "")
+      paste(vapply(available, .mira_report_markdown_text_long, character(1L)),
+            collapse = ", "), ".\n\n", sep = "")
   invisible(NULL)
 }
 
@@ -1165,7 +1205,8 @@
 
 .mira_report_runtime_names_long <- function() {
   c(".mira_report_or_long", ".mira_report_is_empty_long", ".mira_report_heading_long",
-    ".mira_report_human_name_long", ".mira_report_format_p_long",
+    ".mira_report_human_name_long", ".mira_report_markdown_text_long",
+    ".mira_report_format_p_long",
     ".mira_report_format_number_long", ".mira_report_inline_long",
     ".mira_report_prepare_table_long", ".mira_report_numeric_column_long",
     ".mira_report_column_widths_long", ".mira_report_partition_columns_long",
@@ -1471,7 +1512,11 @@
 #' analytical results while omitting machinery and source-data fields, disabled
 #' or unperformed modules, empty non-result structures, all-missing correlation
 #' matrices, duplicate equivalent model tables, and models without a fitted
-#' object. Model and plotting failures can instead appear under diagnostics.
+#' object. Primary-model, plotting, and failed advanced-module errors or
+#' warnings can instead appear under diagnostics, with recorded reasons when
+#' available. Disabled modules with only a skip reason remain omitted.
+#' Headings and inline metadata preserve labels as literal text, including
+#' characters with special meaning in Markdown or HTML.
 #' This presentation policy does not modify the original MIRA object and does
 #' not remove anything from the serialized payload.
 #'
@@ -1602,7 +1647,11 @@
 #' independently. A per-format failure is captured in \code{render_errors},
 #' contributes to one aggregate warning, and does not discard successful
 #' formats or any source files. A Quarto call that returns without creating its
-#' expected output is also treated as a failure. Because the bundle spans
+#' fresh temporary output is also treated as a failure: an older report at the
+#' public target cannot validate the current render. A successful temporary
+#' document replaces the public target only after rendering completes; a
+#' failed or partial render preserves the previous document. Temporary final
+#' documents are removed after each attempt. Because the bundle spans
 #' multiple files, writing is not transactional: an unexpected filesystem
 #' failure can leave a partial bundle for inspection or removal.
 #'
@@ -2116,23 +2165,35 @@ mira_report_freq_long <- function(
     }
 
     for (fmt in formats) {
-      target_name <- basename(output_paths[[fmt]])
+      # A fresh target distinguishes this invocation from an old report left
+      # on disk. Rendered formats are self-contained (embedded HTML, PDF,
+      # DOCX), so promotion does not invalidate resource references.
+      staged_path <- tempfile(paste0(stem, "-render-"), tmpdir = output_dir,
+                              fileext = unname(extensions[[fmt]]))
       error_message <- tryCatch({
+        if (dir.exists(output_paths[[fmt]])) {
+          stop("The expected rendered output path is a directory.", call. = FALSE)
+        }
         quarto::quarto_render(
           input = qmd_path,
           output_format = fmt,
-          output_file = target_name,
+          output_file = basename(staged_path),
           execute_dir = output_dir,
           quiet = quiet,
           as_job = FALSE
         )
+        if (!file.exists(staged_path) || dir.exists(staged_path)) {
+          stop(sprintf(
+            "Quarto returned without creating the expected %s file.", fmt
+          ), call. = FALSE)
+        }
+        if (!file.copy(staged_path, output_paths[[fmt]], overwrite = TRUE)) {
+          stop(sprintf("Could not place the rendered %s file at its expected path.",
+                       fmt), call. = FALSE)
+        }
         NULL
       }, error = function(e) conditionMessage(e))
-      if (is.null(error_message) && !file.exists(output_paths[[fmt]])) {
-        error_message <- sprintf(
-          "Quarto returned without creating the expected %s file.", fmt
-        )
-      }
+      if (file.exists(staged_path) && !dir.exists(staged_path)) unlink(staged_path)
       rendered[[fmt]] <- is.null(error_message) && file.exists(output_paths[[fmt]])
       if (!is.null(error_message)) render_errors[[fmt]] <- error_message
     }

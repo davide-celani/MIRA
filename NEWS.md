@@ -1,5 +1,18 @@
 # MIRA (development version)
 
+- Prevent response-derived and ordinal internal columns from being selected as
+  adjustment covariates; document the complete reserved-name contract.
+- Select GEE, CR2, and ANOVA sensitivity hypotheses by model terms rather than
+  substrings in covariate names. Preserve the existing joint hypotheses.
+- Use a relative covariance-rank threshold for measurement-unit invariant
+  Wald inference, including very small finite outcome scales.
+- Preserve Markdown pipe-table line breaks so DOCX renders scientific results
+  as tables with intact cells; correct the unstratified missingness heading.
+- Verify newly rendered report files before replacing previous outputs, escape
+  literal scientific labels, and expose failed advanced-module diagnostics.
+- Repair QTE argument-validation false positives and RNG cleanup; add independent
+  data/prior, Friedman, paired-inference and transformation oracles, bounded
+  generated cases, offline validation profiles and targeted mutation studies.
 - Preserve the chronology resolved by custom longitudinal-variable parsers in
   analysis results, including baseline/final labels and change directions.
 - Support one-subject longitudinal data in the non-finite availability audit.

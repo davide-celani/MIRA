@@ -315,17 +315,7 @@ test_that("a nested mira_info_error_long stays in the payload and only surfaces 
 })
 
 test_that("Quarto renders a minimal HTML report when its package and CLI are available", {
-  skip_if_not_installed("knitr")
-  skip_if_not_installed("quarto")
-  quarto_cli <- tryCatch(
-    suppressWarnings(quarto::quarto_path()),
-    error = function(e) NULL
-  )
-  skip_if(
-    is.null(quarto_cli) || length(quarto_cli) != 1L ||
-      is.na(quarto_cli) || !nzchar(quarto_cli),
-    "Quarto CLI is not available"
-  )
+  report_test_require_quarto()
 
   fit <- report_integration_fit()
   report_integration_with_dir(function(output_dir) {
@@ -336,7 +326,8 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
       format = "html",
       render = TRUE,
       open = FALSE,
-      quiet = TRUE
+      quiet = TRUE,
+      max_table_columns = 100L
     )
 
     expect_true(unname(report$rendered[["html"]]))
@@ -349,5 +340,76 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
     expect_identical(unname(report$files),
                      unname(report$expected_files[["html"]]))
     expect_true(is.na(report$render_errors[["html"]]))
+    descriptives <- report_test_html_table(html, "Descriptive statistics")
+    raw <- report_integration_data()[c("score_t0", "score_t1", "score_t2")]
+    # Published cells have three decimal places: a half-unit in the last
+    # displayed place is the rounding bound, distinct from numerical tolerance.
+    expect_identical(descriptives$time, names(raw))
+    expect_equal(as.numeric(descriptives$n), rep(6, 3), tolerance = 0)
+    expect_true(all(abs(as.numeric(descriptives$mean) - vapply(raw, mean, numeric(1L))) <=
+                      0.0005000001))
+    expect_true(all(abs(as.numeric(descriptives$sd) - vapply(raw, stats::sd, numeric(1L))) <=
+                      0.0005000001))
+    change <- report_test_html_table(html, "Within-participant changes")
+    for (i in seq_len(nrow(change))) {
+      differences <- raw[[change$to[[i]]]] - raw[[change$from[[i]]]]
+      statistic <- mean(differences) / (stats::sd(differences) / sqrt(length(differences)))
+      expected_p <- 2 * stats::pt(-abs(statistic), df = length(differences) - 1L)
+      expected_label <- if (expected_p < 0.001) "<0.001" else sprintf("%.3f", expected_p)
+      expect_identical(change[["paired t p"]][[i]], expected_label)
+      expect_lte(abs(as.numeric(change[["mean change"]][[i]]) - mean(differences)),
+                  0.0005000001)
+    }
+    references <- regmatches(html, gregexpr("(?:src|href)=[\"'][^\"']*[\"']", html,
+                                             perl = TRUE))[[1L]]
+    expect_false(any(grepl("quarto-html-integration-render-", references, fixed = TRUE)))
+    expect_length(list.files(output_dir, pattern = "quarto-html-integration-render-"), 0L)
+  })
+})
+
+test_that("Quarto DOCX output contains scientific table cells", {
+  report_test_require_quarto()
+  fit <- report_integration_fit()
+  report_integration_with_dir(function(output_dir) {
+    report <- report_test_run(
+      fit, output_dir = output_dir, format = "docx", sections = "descriptives",
+      render = TRUE, open = FALSE, date = "2025-01-15"
+    )
+    expect_identical(report$rendered, c(docx = TRUE))
+    entries <- utils::unzip(report$files[["docx"]], list = TRUE)$Name
+    expect_true("word/document.xml" %in% entries)
+    expanded <- file.path(output_dir, "docx-inspection")
+    utils::unzip(report$files[["docx"]], files = "word/document.xml", exdir = expanded)
+    xml <- paste(readLines(file.path(expanded, "word/document.xml"), warn = FALSE),
+                  collapse = "\n")
+    tables <- regmatches(xml, gregexpr("(?s)<w:tbl>.*?</w:tbl>", xml, perl = TRUE))[[1L]]
+    expect_gt(length(tables), 0L)
+    parsed <- lapply(tables, function(table) {
+      rows <- regmatches(table, gregexpr("(?s)<w:tr\\b.*?</w:tr>", table, perl = TRUE))[[1L]]
+      cells <- lapply(rows, function(row) {
+        pieces <- regmatches(row, gregexpr("(?s)<w:tc\\b.*?</w:tc>", row, perl = TRUE))[[1L]]
+        vapply(pieces, function(cell) {
+          text <- regmatches(cell, gregexpr("(?s)<w:t(?: [^>]*)?>.*?</w:t>", cell,
+                                            perl = TRUE))[[1L]]
+          paste(gsub("<[^>]+>", "", text), collapse = "")
+        }, character(1L))
+      })
+      if (length(cells) < 2L) return(NULL)
+      result <- as.data.frame(do.call(rbind, cells[-1L]), stringsAsFactors = FALSE)
+      names(result) <- cells[[1L]]
+      result
+    })
+    mean_tables <- Filter(function(table) all(c("time", "mean") %in% names(table)), parsed)
+    expect_length(mean_tables, 1L)
+    observed <- mean_tables[[1L]]
+    raw <- report_integration_data()[c("score_t0", "score_t1", "score_t2")]
+    expect_identical(observed$time, names(raw))
+    n_tables <- Filter(function(table) all(c("time", "n") %in% names(table)), parsed)
+    expect_length(n_tables, 1L)
+    expect_identical(n_tables[[1L]]$time, names(raw))
+    expect_equal(as.numeric(n_tables[[1L]]$n), rep(6, 3), tolerance = 0)
+    expect_true(all(abs(as.numeric(observed$mean) - vapply(raw, mean, numeric(1L))) <=
+                      0.0005000001))
+    expect_length(list.files(output_dir, pattern = "mira_report-render-"), 0L)
   })
 })

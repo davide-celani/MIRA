@@ -8,8 +8,21 @@ qte_expect_true <- function(condition, message) {
   expect_true(isTRUE(condition), info = message)
 }
 
-qte_expect_error <- function(expr, pattern = NULL) {
+qte_expect_error <- function(expr, pattern) {
   expect_error(force(expr), regexp = pattern)
+}
+
+qte_local_preserve_rng <- function(.local_envir = parent.frame()) {
+  original_kind <- RNGkind()
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_seed) original_seed <- get(".Random.seed", envir = .GlobalEnv)
+  withr::defer({
+    do.call(RNGkind, as.list(original_kind))
+    if (had_seed) assign(".Random.seed", original_seed, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  }, envir = .local_envir)
 }
 
 qte_expect_near <- function(actual, expected, tol, label) {
@@ -158,17 +171,20 @@ test_that("199 default probabilities; exact sorted custom grid; argument validat
   q <- qte_mock_summary(fx, qte_probs = custom)$qte
   qte_expect_true(identical(q$probs, sort(custom)), "Custom probabilities must be sorted without adding probabilities.")
   for (bad in list(numeric(), c(0, .5), c(.5, 1), c(.5, .5), c(NA, .5), Inf, "0.5", TRUE))
-    qte_expect_error(qte_mock_summary(fx, qte_probs = bad))
+    qte_expect_error(qte_mock_summary(fx, qte_probs = bad), "`qte_probs` must be unique finite probabilities")
   for (arg in c("qte_n_sim", "qte_max_draws")) for (bad in list(0, -1, 1.5, NA_real_, Inf, TRUE)) {
     options <- setNames(list(bad), arg)
-    qte_expect_error(do.call(summarize, c(list(fx), options)))
+    qte_expect_error(do.call(qte_mock_summary, c(list(fx), options)), paste0("`", arg, "` must be one integer"))
   }
   for (arg in c("qte_covariates", "qte_keep_draws")) for (bad in list(NA, 1, c(TRUE, FALSE)))
-    qte_expect_error(do.call(summarize, c(list(fx), setNames(list(bad), arg))))
-  for (arg in c("qte_distribution", "qte_standardization", "qte_arm_contrasts"))
-    qte_expect_error(do.call(summarize, c(list(fx), setNames(list("invalid"), arg))))
-  for (bad in list(-1, 1.5, NA_real_, Inf, TRUE, c(1, 2))) qte_expect_error(qte_mock_summary(fx, qte_seed = bad))
-  qte_expect_error(qte_mock_summary(fx, qte_probs = matrix(c(.1, .5), 1, 2)))
+    qte_expect_error(do.call(qte_mock_summary, c(list(fx), setNames(list(bad), arg))), paste0("`", arg, "` must be TRUE or FALSE"))
+  allowed <- list(qte_distribution = "both.*predictive.*latent",
+    qte_standardization = "both.*reference.*empirical", qte_arm_contrasts = "all.*reference")
+  for (arg in names(allowed))
+    qte_expect_error(do.call(qte_mock_summary, c(list(fx), setNames(list("invalid"), arg))), allowed[[arg]])
+  for (bad in list(-1, 1.5, NA_real_, Inf, TRUE, c(1, 2)))
+    qte_expect_error(qte_mock_summary(fx, qte_seed = bad), "`qte_seed` must be one integer")
+  qte_expect_error(qte_mock_summary(fx, qte_probs = matrix(c(.1, .5), 1, 2)), "`qte_probs` must be unique finite probabilities")
 })
 
 test_that("all K=2..5 and G=2..4 pairs, estimands, metadata, posterior columns", {
@@ -370,7 +386,10 @@ test_that("binary, continuous and categorical profiles reuse original encoding",
   qte_expect_true(all(recovered$metadata_source == "covariate_metadata_variables"),
     "Recovered profiles must identify their real metadata source.")
   no_X <- fx; no_X$data$X <- NULL
-  missing_X <- suppressWarnings(qte_mock_summary(no_X, qte_standardization = "empirical"))$qte
+  expect_warning(
+    missing_X <- qte_mock_summary(no_X, qte_standardization = "empirical")$qte,
+    "QTE empirical standardization with P > 0 requires `stan_data\\$X`"
+  )
   qte_expect_true("empirical" %in% missing_X$metadata$skipped_standardization && nrow(missing_X$outcome) == 0L,
     "Without joint X, empirical standardization must be explicitly unavailable rather than fabricated.")
   qte_expect_true(missing_X$metadata$status == "unavailable" &&
@@ -381,7 +400,7 @@ test_that("binary, continuous and categorical profiles reuse original encoding",
 
 test_that("reproducibility, seed restoration, thinning, posterior draws and direction", {
   fx <- qte_mock_fit_fixture(K = 2L, G = 2L, D = 9L, posterior_variation = .02)
-  original_rng_kind <- RNGkind()
+  qte_local_preserve_rng()
   RNGkind("L'Ecuyer-CMRG", "Inversion", "Rejection")
   set.seed(871)
   before <- .Random.seed
@@ -416,7 +435,6 @@ test_that("reproducibility, seed restoration, thinning, posterior draws and dire
   rm(".Random.seed", envir = .GlobalEnv)
   invisible(qte_mock_summary(fx))
   qte_expect_true(!exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE), "The helper introduced global RNG state when none existed before.")
-  do.call(RNGkind, as.list(original_rng_kind))
 })
 
 test_that("singleton posterior/probability dimensions and exact clinical threshold equality", {
@@ -438,8 +456,11 @@ test_that("integrated summary retains legacy components and positional APIs; com
   qte_expect_true(all(essential %in% names(result)), "A legacy component was removed.")
   qte_expect_true(identical(colnames(result$draws), colnames(fx$draws)), "Raw posterior draw columns changed.")
   qte_expect_near(as.numeric(as.matrix(result$draws)), as.numeric(fx$draws), 0, "Raw posterior values")
-  positional <- suppressWarnings(MIRA::mira_summary_long(fx$fit, fx$data, NULL, NULL, .9, c(.5, .8, .95), FALSE,
-    qte_n_sim = 40L, qte_max_draws = 4L))
+  expect_warning(
+    positional <- MIRA::mira_summary_long(fx$fit, fx$data, NULL, NULL, .9, c(.5, .8, .95), FALSE,
+      qte_n_sim = 40L, qte_max_draws = 4L),
+    "^QTE extreme quantiles have only about"
+  )
   qte_expect_true(inherits(positional, "mira_summary_long") && length(positional$qte$probs) == 199L, "The original seven-position signature is broken.")
   # Invoke the sourced print method explicitly, because source() uses a private environment.
   text <- capture.output(getS3method("print", "mira_summary_long", envir = asNamespace("MIRA"))(result))
@@ -487,6 +508,7 @@ test_that("fit-only metadata fallback, unavailable empirical standardization", {
 })
 
 test_that("missing generative posterior variables preserve legacy summary and RNG", {
+  qte_local_preserve_rng()
   fx <- qte_mock_fit_fixture(K = 3L, G = 3L)
   incomplete <- fx$draws[, !grepl("^mu_reference\\[", colnames(fx$draws)), drop = FALSE]
   fx$fit$draws <- function(format = "draws_matrix") incomplete

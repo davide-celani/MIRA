@@ -226,7 +226,11 @@ The visible renderer is deliberately selective. It presents meaningful
 analytical results while omitting machinery and source-data fields, disabled
 or unperformed modules, empty non-result structures, all-missing correlation
 matrices, duplicate equivalent model tables, and models without a fitted
-object. Model and plotting failures can instead appear under diagnostics.
+object. Primary-model, plotting, and failed advanced-module errors or
+warnings can instead appear under diagnostics, with recorded reasons when
+available. Disabled modules with only a skip reason remain omitted.
+Headings and inline metadata preserve labels as literal text, including
+characters with special meaning in Markdown or HTML.
 This presentation policy does not modify the original MIRA object and does
 not remove anything from the serialized payload.
 
@@ -365,7 +369,11 @@ written. Once Quarto rendering begins, each requested format is attempted
 independently. A per-format failure is captured in \code{render_errors},
 contributes to one aggregate warning, and does not discard successful
 formats or any source files. A Quarto call that returns without creating its
-expected output is also treated as a failure. Because the bundle spans
+fresh temporary output is also treated as a failure: an older report at the
+public target cannot validate the current render. A successful temporary
+document replaces the public target only after rendering completes; a
+failed or partial render preserves the previous document. Temporary final
+documents are removed after each attempt. Because the bundle spans
 multiple files, writing is not transactional: an unexpected filesystem
 failure can leave a partial bundle for inspection or removal.
 }

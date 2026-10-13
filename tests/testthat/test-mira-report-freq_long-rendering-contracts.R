@@ -111,14 +111,12 @@ test_that("print returns the descriptor invisibly for complete and partial rende
 })
 
 test_that("Quarto PDF integration requires an existing CLI and LaTeX toolchain", {
-  skip_if_not_installed("knitr")
-  skip_if_not_installed("quarto")
-  cli <- tryCatch(suppressWarnings(quarto::quarto_path()), error = function(e) NULL)
-  skip_if(is.null(cli) || length(cli) != 1L || is.na(cli) || !nzchar(cli),
-          "Quarto CLI is not available")
+  report_test_require_quarto("MIRA_RUN_QUARTO_PDF_TESTS")
   latex_engines <- Sys.which(c("pdflatex", "xelatex", "lualatex"))
-  skip_if(!any(nzchar(latex_engines)),
-          "No existing LaTeX executable is available; tests never install one")
+  if (!any(nzchar(latex_engines))) {
+    stop("MIRA_RUN_QUARTO_PDF_TESTS requires an existing LaTeX executable; tests never install one.",
+         call. = FALSE)
+  }
   selected_engine <- names(latex_engines)[which(nzchar(latex_engines))[[1L]]]
   root <- withr::local_tempdir(pattern = "mira-quarto-pdf-")
   # Add the supported Quarto PDF setting to this test's source so that a

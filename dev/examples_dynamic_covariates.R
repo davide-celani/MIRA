@@ -294,9 +294,10 @@ fit_cmt_01 <- mira_fit_long(
   stan_data = stan_data_cmt_01,
   prior = prior_cmt_01,
   chains = 4,
+  adapt_delta = 0.97,
   parallel_chains = 4,
-  iter_warmup = 1000,
-  iter_sampling = 1000,
+  iter_warmup = 2000,
+  iter_sampling = 2000,
   seed = 223,
   refresh = 100,
   verbose = TRUE

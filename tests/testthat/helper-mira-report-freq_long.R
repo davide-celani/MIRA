@@ -150,3 +150,48 @@ report_test_atomic_table <- function(x) {
 report_test_relpath <- function(path) {
   gsub("\\\\", "/", path)
 }
+
+# Real integrations have an explicit profile. Enabling one turns missing
+# prerequisites into an error, so an integration job cannot pass by skipping it.
+report_test_require_quarto <- function(profile = "MIRA_RUN_QUARTO_TESTS") {
+  if (!identical(tolower(Sys.getenv(profile)), "true")) {
+    testthat::skip(paste0("Real rendering requires ", profile, "=true"))
+  }
+  for (package in c("knitr", "quarto")) {
+    if (!requireNamespace(package, quietly = TRUE)) {
+      stop(profile, " requires the installed R package '", package, "'.", call. = FALSE)
+    }
+  }
+  cli <- tryCatch(quarto::quarto_path(), error = function(e) NULL)
+  if (is.null(cli) || length(cli) != 1L || is.na(cli) || !nzchar(cli) ||
+      !file.exists(cli)) {
+    stop(profile, " requires an existing Quarto CLI; tests never install it.",
+         call. = FALSE)
+  }
+  invisible(cli)
+}
+
+# These parsers read published table cells, independently of the report's table
+# preparation helpers. They intentionally support the simple tables used here.
+report_test_html_table <- function(html, caption) {
+  tables <- regmatches(html, gregexpr("(?s)<table\\b.*?</table>", html, perl = TRUE))[[1L]]
+  selected <- tables[grepl(paste0("<caption>", caption, "</caption>"), tables, fixed = TRUE)]
+  testthat::expect_length(selected, 1L)
+  rows <- regmatches(selected, gregexpr("(?s)<tr\\b[^>]*>.*?</tr>", selected,
+                                       perl = TRUE))[[1L]]
+  cells <- lapply(rows, function(row) {
+    values <- regmatches(row, gregexpr("(?s)<t[hd]\\b[^>]*>.*?</t[hd]>", row,
+                                       perl = TRUE))[[1L]]
+    values <- trimws(gsub("<[^>]+>", "", values))
+    for (entity in c("&lt;", "&gt;", "&amp;", "&quot;", "&#39;")) {
+      replacement <- c("&lt;" = "<", "&gt;" = ">", "&amp;" = "&",
+                       "&quot;" = '"', "&#39;" = "'")[[entity]]
+      values <- gsub(entity, replacement, values, fixed = TRUE)
+    }
+    values
+  })
+  headers <- cells[[1L]]
+  result <- as.data.frame(do.call(rbind, cells[-1L]), stringsAsFactors = FALSE)
+  names(result) <- headers
+  result
+}

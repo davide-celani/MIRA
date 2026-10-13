@@ -440,7 +440,7 @@
 .mira_detect_covariates_long <- function(data, covariates = NULL, exclude = character(0)) {
   reserved <- c(
     "patient", "outcome", "time", "time_index", "time_label", "arm", "value",
-    "patient_factor", "time_factor", "arm_factor"
+    "patient_factor", "time_factor", "arm_factor", "patient_mean", "time_ordinal"
   )
   reserved_present <- intersect(names(data), reserved)
   if (!is.null(covariates) && !(length(covariates) == 1L && identical(covariates, "auto"))) {
@@ -1267,9 +1267,27 @@
   )
 }
 
-.mira_effect_indices_long <- function(coefficient_names, question) {
-  has_time <- grepl("time_factor", coefficient_names, fixed = TRUE)
-  has_arm <- grepl("arm_factor", coefficient_names, fixed = TRUE)
+.mira_effect_indices_long <- function(coefficient_names, question, model = NULL) {
+  if (is.null(model)) {
+    has_time <- grepl("time_factor", coefficient_names, fixed = TRUE)
+    has_arm <- grepl("arm_factor", coefficient_names, fixed = TRUE)
+  } else {
+    # Model terms distinguish the actual design factors from arbitrary
+    # covariate names or factor levels containing the same text. Matching
+    # matrix columns also respects any rank-deficient columns dropped at fit.
+    design <- stats::model.matrix(model)
+    factors <- attr(stats::terms(model), "factors")
+    assignments <- attr(design, "assign")[match(coefficient_names, colnames(design))]
+    contains_variable_long <- function(variable) {
+      if (is.null(factors) || !variable %in% rownames(factors)) {
+        return(rep(FALSE, length(coefficient_names)))
+      }
+      term_indices <- which(factors[variable, ] > 0)
+      !is.na(assignments) & assignments %in% term_indices
+    }
+    has_time <- contains_variable_long("time_factor")
+    has_arm <- contains_variable_long("arm_factor")
+  }
   if (identical(question, "TIME_X_ARM")) {
     which(has_time & has_arm)
   } else if (identical(question, "TIME")) {
@@ -1291,7 +1309,7 @@
     error = function(e) NULL
   )
   if (is.null(decomposition)) return(NULL)
-  tolerance <- max(abs(decomposition$values), 1) * sqrt(.Machine$double.eps)
+  tolerance <- max(abs(decomposition$values)) * sqrt(.Machine$double.eps)
   keep <- decomposition$values > tolerance
   rank <- sum(keep)
   if (rank == 0L) return(NULL)
@@ -1389,7 +1407,7 @@
         test <- .mira_wald_chisq_long(
           beta_eval$value,
           vcov_eval$value,
-          .mira_effect_indices_long(names(beta_eval$value), question)
+          .mira_effect_indices_long(names(beta_eval$value), question, model = model)
         )
         if (is.null(test)) return(NULL)
         data.frame(
@@ -1765,7 +1783,7 @@
     confidence_intervals = confidence_eval$error
   ))
   for (question in c("TIME", "ARM", "TIME_X_ARM")) {
-    indices <- .mira_effect_indices_long(names(coefficients), question)
+    indices <- .mira_effect_indices_long(names(coefficients), question, model = model)
     if (length(indices) == 0L) next
     constraint <- diag(length(coefficients))[indices, , drop = FALSE]
     evaluated <- .mira_eval_long(
@@ -2018,12 +2036,18 @@
 
 .mira_match_effect_long <- function(table, question) {
   if (is.null(table) || nrow(table) == 0L || !"effect" %in% names(table)) return(integer(0))
-  effect <- tolower(gsub("[^[:alnum:]]+", "", table$effect))
-  has_time <- grepl("timefactor|time", effect)
-  has_arm <- grepl("armfactor|arm", effect)
-  if (question == "TIME_X_ARM") which(has_time & has_arm) else if (question == "TIME") {
-    which(has_time & !has_arm)
-  } else if (question == "ARM") which(has_arm & !has_time) else integer(0)
+  # afex preserves case-sensitive formula term labels. Matching can otherwise
+  # misreport a covariate such as lifetime or farm as a time or arm effect.
+  effect <- gsub("[[:space:]]*:[[:space:]]*", ":",
+                 trimws(as.character(table$effect)))
+  if (question == "TIME_X_ARM") {
+    which(effect %in% c("time_factor:arm_factor", "arm_factor:time_factor",
+                        "time:arm", "arm:time"))
+  } else if (question == "TIME") {
+    which(effect %in% c("time_factor", "time"))
+  } else if (question == "ARM") {
+    which(effect %in% c("arm_factor", "arm"))
+  } else integer(0)
 }
 
 .mira_build_sensitivity_long <- function(mixed_tests,
@@ -5720,7 +5744,8 @@ mira_detect_long <- function(data,
 #'   exist, be unique, and not overlap selected or detected longitudinal
 #'   variables, the chosen ID or arm, retained ID/arm candidates, or reserved
 #'   internal columns (`patient`, `outcome`, `time`, `time_index`, `time_label`,
-#'   `arm`, `value`, `patient_factor`, `time_factor`, and `arm_factor`). With
+#'   `arm`, `value`, `patient_factor`, `time_factor`, `arm_factor`,
+#'   `patient_mean`, and `time_ordinal`). With
 #'   `NULL` or `"auto"`, eligible numeric and low-cardinality categorical columns
 #'   are detected after excluding ID-, arm-, and longitudinal-like variables.
 #'   Every candidate needs at least two distinct non-missing values; factor,

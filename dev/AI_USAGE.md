@@ -1,5 +1,30 @@
 # AI assistance record
 
+## Validation session: 2026-10-12
+
+OpenAI Codex assisted with an audit of the local implementations, complete
+test suite, dependency declarations, documentation and CI for the requested
+validation of `mira_info_long()` and `mira_report_freq_long()`. The exact
+runtime model identifier and deployment version were not exposed; this record
+does not invent them.
+
+Assistance included identifying invalid-argument tests that passed on an
+unrelated missing-symbol error, correcting those QTE tests and their RNG
+cleanup, replacing broad warning suppression with explicit checks, adding
+hand-derived data-mapping and prior-conversion oracles, and preparing CI
+profiles for offline tests and explicit rendering integrations. Codex also
+consulted the official JOSS submission and review guidance. The validation
+report records the other test and implementation changes, commands, outcomes
+and limitations of this session; a configured workflow is not a completed CI
+run, and mocked rendering is not real rendering.
+
+Human review remains pending. The maintainer must review and validate all
+AI-assisted outputs, their scientific interpretation and the reported
+evidence before accepting the working-tree changes or making a submission.
+This record does not assert human validation, public development history,
+external adoption, or an editorial verdict. No submission or communication
+with editors or reviewers was performed.
+
 ## Release-preparation session: 2026-10-03
 
 OpenAI Codex assisted with review of the existing package and preparation of

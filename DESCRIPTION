@@ -7,7 +7,8 @@ Authors@R:
         given = "Davide",
         family = "Celani",
         email = "davide.celani.00@gmail.com",
-        role = c("aut", "cre")
+        role = c("aut", "cre"),
+        comment = c(ORCID = "0009-0006-3321-3928")
     )
 Description:
     Bayesian multilevel modeling of continuous longitudinal outcomes using

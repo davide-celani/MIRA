@@ -1,5 +1,17 @@
 # AI assistance record
 
+## Bibliographic identity session: 2026-10-14
+
+OpenAI Codex inspected local citation metadata and existing release workflows,
+consulted official CFF, R and Zenodo documentation, and added Davide Celani's
+user-provided ORCID to CFF and R author metadata. Assistance included a local
+consistency/checksum validator, its integration in the existing R check job,
+and documentation of persistent identity versus release-specific metadata.
+No scientific algorithms were changed. No staging, commit, push, tag, release,
+remote configuration change or Zenodo deposit was performed. Human review
+remains pending; private Zenodo integration settings and actual ingestion on
+the next release are not certified by the local validation.
+
 ## Validation session: 2026-10-12
 
 OpenAI Codex assisted with an audit of the local implementations, complete

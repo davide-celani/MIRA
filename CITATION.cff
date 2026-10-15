@@ -8,6 +8,7 @@ doi: "10.5281/zenodo.23120184"
 authors:
   - family-names: Celani
     given-names: Davide
+    orcid: "https://orcid.org/0009-0006-3321-3928"
     email: davide.celani.00@gmail.com
 repository-code: "https://github.com/davide-celani/MIRA"
 url: "https://github.com/davide-celani/MIRA"

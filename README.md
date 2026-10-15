@@ -255,7 +255,9 @@ require the CLI and are skipped when it is unavailable.
 ## Citation
 
 The software citation title is **MIRA: Bayesian Multilevel Inference for
-Longitudinal Data**. The author is Davide Celani. Retrieve the R citation with:
+Longitudinal Data**. The author is Davide Celani
+([ORCID: 0009-0006-3321-3928](https://orcid.org/0009-0006-3321-3928)).
+Retrieve the R citation with:
 
 ```r
 citation("MIRA")
@@ -263,6 +265,10 @@ toBibtex(citation("MIRA"))
 ```
 
 GitHub uses [CITATION.cff](CITATION.cff); R uses [inst/CITATION](inst/CITATION).
+The author ORCID is retained in both formats and in `DESCRIPTION`; R's
+`toBibtex()` may omit it from the rendered BibTeX entry. Future Zenodo releases
+use the CFF author metadata when the native integration is enabled; see the
+[release guide](dev/RELEASE.md) for validation and account checks.
 The citation for the archived `v0.0.1` release is:
 
 > Celani, D. (2026). *MIRA: Bayesian Multilevel Inference for Longitudinal Data*

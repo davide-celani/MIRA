@@ -12,10 +12,62 @@ New commits on `main` continue development without changing the published
 tag or the archived snapshot. Adding DOI links and citation metadata in a
 follow-up commit does not require another release.
 
+## Permanent author identity and automatic Zenodo metadata
+
+Davide Celani's persistent ORCID is
+[0009-0006-3321-3928](https://orcid.org/0009-0006-3321-3928).
+`CITATION.cff` stores its full URL; `DESCRIPTION` (`Authors@R`) and
+`inst/CITATION` use `comment = c(ORCID = "0009-0006-3321-3928")` in the
+corresponding `person()` entry. Preserve these entries when updating a
+release's version, date or DOI; ORCID needs no per-release re-entry.
+Do not add temporary affiliations or academic roles to this identity.
+
+The native GitHub-Zenodo integration reads the root `CITATION.cff` from the
+released tag, including its author ORCID. No `.zenodo.json`, publication
+Action, Zenodo token or custom deposit API is needed. If `.zenodo.json` is
+introduced later, Zenodo ignores the entire CFF in favor of that file;
+review its complete creator metadata and extend validation before using it.
+See [Zenodo's CFF documentation](https://help.zenodo.org/docs/github/describe-software/citation-file/).
+
+From the repository root, run `Rscript --vanilla dev/validate-metadata.R`
+and `cffconvert --validate`. The first uses the existing `yaml` Suggests
+dependency and checks the checksum, author association and agreement of all
+authors/ORCIDs across CFF and R metadata, plus title, version, DOI and source
+URL. It stops if `.zenodo.json` would change the metadata source. It runs in
+the existing R check workflow; the citation workflow validates the CFF schema.
+These checks do not publish anything and do not verify Zenodo account settings.
+
+Before publishing a future release, confirm in your authenticated
+[Zenodo GitHub settings](https://zenodo.org/account/settings/github/) that
+`davide-celani/MIRA` is enabled, GitHub access remains authorized, and previous
+releases belong to the existing MIRA record family. GitHub login alone does
+not establish that repository archiving is enabled. Review synchronization
+errors there if an archive is missing; do not create a second manual deposit.
+After publication verify the creator's ORCID and that the new version belongs
+to concept DOI `10.5281/zenodo.23120183`.
+
+After your own review, commit and push all metadata and validation changes
+together with the release candidate. The future tag must point to that
+commit or a descendant containing them. A push to `main` alone does not
+archive a version; publishing the GitHub Release triggers the enabled native
+integration. For the exact candidate commit or tag, inspect its files with
+`git show <ref>:CITATION.cff`, `git show <ref>:DESCRIPTION` and
+`git show <ref>:inst/CITATION`, then run the checks on that candidate.
+`.Rbuildignore` excludes CFF and developer files only from the R package
+tarball, not from GitHub's source archive used by Zenodo.
+
+The existing version/date/DOIs below document the published `v0.0.1` and are
+preserved. They are release metadata, not permanent author identity. Follow
+the next section when preparing another version so an old DOI/date is not
+reused as the new version's metadata. Future CI execution and actual ORCID
+ingestion can only be confirmed after the reviewed changes reach GitHub and
+the next normal release is archived.
+
 ## Prepare the next software version
 
 Update `DESCRIPTION`, `CITATION.cff`, and `NEWS.md` together when preparing a
-new version. Remove the previous release date and version DOI from the CFF,
+new version. Update the existing citation year in `inst/CITATION` when the
+release year changes. Remove the previous release date and version DOI from the CFF,
 and remove the previous version DOI from the R citation
 in `inst/CITATION`; use the repository URL while the new archive is pending.
 Do not pair a new version number with an older archive's DOI. Keep the concept
@@ -53,7 +105,9 @@ the release as validated solely because metadata has been added.
 
 1. [Create a Zenodo account](https://help.zenodo.org/docs/get-started/create-an-account/).
    Use GitHub to connect the account if convenient. Add an ORCID only when it
-   belongs to the author and its value has been verified.
+   belongs to the author and its value has been verified. The ORCID in
+   the repository creator metadata is what supplies the release author
+   identifier; linking ORCID to the account is a separate account setting.
 2. In Zenodo's GitHub settings, authorize GitHub access and
    [enable the MIRA repository](https://help.zenodo.org/docs/github/enable-repository/).
    Confirm it is enabled before publishing the first release.
@@ -70,9 +124,10 @@ the release as validated solely because metadata has been added.
 3. Zenodo archives the new release. Follow the
    [GitHub upload guide](https://help.zenodo.org/docs/github/archive-software/github-upload/)
    and inspect any reported metadata errors.
-4. Open the Zenodo record and verify the exact title, author, MIT license,
-   version, source URL, and archived files. Record both the version DOI and
-   the concept DOI.
+4. Open the Zenodo record and verify the exact title, Davide Celani with
+   ORCID `0009-0006-3321-3928`, MIT license, version, source URL, and
+   archived files. Confirm the new version belongs to concept DOI
+   `10.5281/zenodo.23120183` and record its newly assigned version DOI.
 
 For a paper's reproducible analysis, cite the DOI of the version actually used.
 The concept DOI identifies MIRA across versions. See

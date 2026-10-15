@@ -51,6 +51,8 @@ jobs:
             ${{ matrix.config.matrix-package }}
             ${{ matrix.config.deriv-package }}
           needs: check
+      - name: Validate author identity and ORCID metadata
+        run: Rscript --vanilla dev/validate-metadata.R
       - uses: r-lib/actions/check-r-package@v2
         with:
           args: 'c("--no-manual", "--as-cran")'

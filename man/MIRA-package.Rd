@@ -20,11 +20,11 @@ fitting requires CmdStan and a C++ toolchain. For data exploration use
 \url{https://github.com/davide-celani/MIRA}
 }
 \author{
-\strong{Maintainer}: Davide Celani \email{davide.celani.00@gmail.com}
+\strong{Maintainer}: Davide Celani \email{davide.celani.00@gmail.com} (\href{https://orcid.org/0009-0006-3321-3928}{ORCID})
 
 Authors:
 \itemize{
-  \item Davide Celani \email{davide.celani.00@gmail.com}
+  \item Davide Celani \email{davide.celani.00@gmail.com} (\href{https://orcid.org/0009-0006-3321-3928}{ORCID})
 }
 
 }

@@ -1,6 +1,9 @@
 # Reproducing the longitudinal validation
 
-This guide accompanies `VALIDATION_REPORT_2026-10-12.md`. Run from the repository
+This guide accompanies `VALIDATION_REPORT_2026-10-16.md` and preserves the
+historical procedures in `VALIDATION_REPORT_2026-10-12.md`. Recorded results
+belong to the report's stated working tree, not automatically to current files.
+Run from the repository
 root with a supported R installation and **all DESCRIPTION Imports** already
 installed. `testthat` and `withr` are needed for tests. These scripts do not
 install packages, Quarto, TeX or CmdStan and do not need network access.
@@ -121,7 +124,7 @@ tools are unavailable. Tests inspect scientific text, table structure and
 format-specific escaping, not merely the presence of a file. Mocked renderer
 fault injection remains part of the offline suite and is labeled separately.
 
-On the audited Windows host, the bundled Quarto CLI was discovered and the
+During the 2026-10-12 audit on Windows, the bundled Quarto CLI was discovered and the
 public integration was attempted. `processx` failed to create its write pipe
 (OS error 5); direct Quarto also failed to spawn Rscript (invalid handle).
 These are recorded environmental integration failures, not successful renders.
@@ -131,17 +134,38 @@ See the report for any separately executed Pandoc/TeX conversions.
 
 ```powershell
 New-Item -ItemType Directory -Path "$audit/mutations" -Force | Out-Null
-& $rscript --vanilla dev/validate-mutations.R "$audit/mutations"
+# List selectable cases without running tests:
+& $rscript --vanilla dev/validate-mutations.R --list
+# Focused campaign for the two frequentist longitudinal functions:
+& $rscript --vanilla dev/validate-mutations.R "$audit/mutations" 'arm-sign,missing-BH-family,truncate-scientific-CSV,false-render-success,parser-ragged,ignore-custom-chronology'
 ```
 
 Run from the repository root into a fresh external directory. The script
 copies the current working tree, including local/untracked files, excluding
-top-level `.git`. Each targeted mutant runs in a separate R process. Only
-relevant assertion failures count as detection; parse/load/infrastructure
-errors do not. Inspect each failure CSV, not only the detection total. The
-recorded chronology mutant survived because its internal fallback is not
-exercised by the tested public path; public custom chronology has separate
-tests. No arbitrary mutation score is a completion criterion.
+top-level `.git`. It first runs an **unmutated copy** with the union of the
+selected test-file filters and requires the designated relevant test labels
+to exist. Failure, error, warning, or a missing designated test blocks the
+campaign before any mutant is run. Each mutant then runs in a separate R
+process. A silent marker outside its copy records execution of the altered
+expression. Detection requires both that marker and a failed assertion in a
+predeclared relevant test block. Failure CSVs retain the actual assertion
+messages and must still be reviewed for their scientific meaning.
+
+The summary distinguishes `detected`, `survived`, `non-reached`, `invalid`
+(absent/non-unique mutation target or malformed mutated source), and `blocked`
+(baseline, process/loading problem, or failures not establishing the intended
+detection). Parse/load errors never count as detection. `invalid` or `blocked`
+produces a nonzero exit status; survival/non-reach is a reported scientific
+limit, not a false detection. Omitting the selection runs the same six cases
+shown above. Historical cases remain explicitly selectable, including a Stan
+case that is outside the current two-function campaign.
+
+The chronology marker is inside the branch whose behavior changes. Historical
+public calls did not exercise this internal fallback, so an unchanged test
+result with no marker is classified `non-reached`, not equivalent. Public
+custom chronology has separate tests. No arbitrary mutation score is a
+completion criterion. Do not modify files while the copied baseline or any
+mutation process is reading them; integrate all changes first.
 
 The existing CmdStan smoke test covers all three supported likelihoods with
 P=0 and P=1. It requires a configured existing CmdStan plus compiler and uses
@@ -159,11 +183,14 @@ or permissions change was attempted for it.
 ## CI and interpretation
 
 The workflow now configures release on Linux/Windows/macOS, Linux oldrel-1 and
-Linux R 4.2.3 with a compatible Matrix pin. A distinct Linux release job
+Linux R 4.2.3 with compatible Matrix 1.6-5 and Deriv 4.2.0 pins. Its explicit
+Depends/Imports/LinkingTo/Suggests dependency selection preserves MIRA's full
+test dependencies without following Matrix's unrelated Enhances. A distinct Linux release job
 explicitly installs Quarto and exercises installed-package HTML/DOCX. The
 ordinary test jobs disable external integrations. Existing CmdStan workflow
 remains separate. These CI jobs were inspected/configured, not dispatched.
-Only local Windows R 4.4.3 results were executed here; R 4.5.3 lacked Imports.
+The 2026-10-12 audit executed only local Windows R 4.4.3; R 4.5.3 lacked Imports.
+Use the dated reports for the profiles actually executed in each later audit.
 
 JOSS requires evidence beyond test outcomes. See `JOSS_READINESS.md` and
 `AI_USAGE.md`; public history, research use, authorship and human review remain

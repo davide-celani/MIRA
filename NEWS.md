@@ -1,5 +1,10 @@
 # MIRA (development version)
 
+- Preserve literal backticks and backslashes in longitudinal adjustment
+  covariate names, preventing distinct selected columns from collapsing into
+  a different model specification.
+- Reject empty rendered documents before replacing previous reports; retain
+  explicit failure diagnostics and clean up temporary outputs for each format.
 - Prevent response-derived and ordinal internal columns from being selected as
   adjustment covariates; document the complete reserved-name contract.
 - Select GEE, CR2, and ANOVA sensitivity hypotheses by model terms rather than

@@ -2187,6 +2187,11 @@ mira_report_freq_long <- function(
             "Quarto returned without creating the expected %s file.", fmt
           ), call. = FALSE)
         }
+        staged_size <- file.info(staged_path)$size
+        if (is.na(staged_size) || !is.finite(staged_size) || staged_size <= 0) {
+          stop(sprintf("Quarto created an empty or unreadable %s file.", fmt),
+               call. = FALSE)
+        }
         if (!file.copy(staged_path, output_paths[[fmt]], overwrite = TRUE)) {
           stop(sprintf("Could not place the rendered %s file at its expected path.",
                        fmt), call. = FALSE)

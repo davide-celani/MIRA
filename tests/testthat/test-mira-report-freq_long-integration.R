@@ -382,32 +382,14 @@ test_that("Quarto DOCX output contains scientific table cells", {
     utils::unzip(report$files[["docx"]], files = "word/document.xml", exdir = expanded)
     xml <- paste(readLines(file.path(expanded, "word/document.xml"), warn = FALSE),
                   collapse = "\n")
-    tables <- regmatches(xml, gregexpr("(?s)<w:tbl>.*?</w:tbl>", xml, perl = TRUE))[[1L]]
-    expect_gt(length(tables), 0L)
-    parsed <- lapply(tables, function(table) {
-      rows <- regmatches(table, gregexpr("(?s)<w:tr\\b.*?</w:tr>", table, perl = TRUE))[[1L]]
-      cells <- lapply(rows, function(row) {
-        pieces <- regmatches(row, gregexpr("(?s)<w:tc\\b.*?</w:tc>", row, perl = TRUE))[[1L]]
-        vapply(pieces, function(cell) {
-          text <- regmatches(cell, gregexpr("(?s)<w:t(?: [^>]*)?>.*?</w:t>", cell,
-                                            perl = TRUE))[[1L]]
-          paste(gsub("<[^>]+>", "", text), collapse = "")
-        }, character(1L))
-      })
-      if (length(cells) < 2L) return(NULL)
-      result <- as.data.frame(do.call(rbind, cells[-1L]), stringsAsFactors = FALSE)
-      names(result) <- cells[[1L]]
-      result
-    })
-    mean_tables <- Filter(function(table) all(c("time", "mean") %in% names(table)), parsed)
-    expect_length(mean_tables, 1L)
-    observed <- mean_tables[[1L]]
+    # DOCX partitions wide tables into blocks of at most seven columns. The
+    # repeated visit keys identify the distinct sample-size and mean blocks.
+    observed <- report_test_docx_table(xml, c("time", "mean"))
     raw <- report_integration_data()[c("score_t0", "score_t1", "score_t2")]
     expect_identical(observed$time, names(raw))
-    n_tables <- Filter(function(table) all(c("time", "n") %in% names(table)), parsed)
-    expect_length(n_tables, 1L)
-    expect_identical(n_tables[[1L]]$time, names(raw))
-    expect_equal(as.numeric(n_tables[[1L]]$n), rep(6, 3), tolerance = 0)
+    sample_size <- report_test_docx_table(xml, c("time", "n"))
+    expect_identical(sample_size$time, names(raw))
+    expect_equal(as.numeric(sample_size$n), rep(6, 3), tolerance = 0)
     expect_true(all(abs(as.numeric(observed$mean) - vapply(raw, mean, numeric(1L))) <=
                       0.0005000001))
     expect_length(list.files(output_dir, pattern = "mira_report-render-"), 0L)

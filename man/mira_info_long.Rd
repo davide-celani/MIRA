@@ -480,9 +480,10 @@ tests and HTZ joint Wald tests.
 }
 
 For GEE and CR2 joint tests, \code{TIME} selects every fixed-effect coefficient
-whose name contains the time factor (including interaction coefficients),
-\code{ARM} analogously selects every arm coefficient, and \code{TIME_X_ARM} selects only
-coefficients containing both. Thus these are joint coefficient tests, not
+assigned to model terms involving the time factor (including interactions),
+\code{ARM} analogously selects coefficients in terms involving the arm factor,
+and \code{TIME_X_ARM} selects terms involving both factors. Covariate names do not
+determine term membership. Thus these are joint coefficient tests, not
 comparisons of a single reference-cell coefficient.
 
 The mixed models specify a conditional mean with subject-specific random

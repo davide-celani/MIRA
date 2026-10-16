@@ -559,7 +559,7 @@
 }
 
 .mira_quote_formula_name_long <- function(x) {
-  paste0("`", gsub("`", "", x, fixed = TRUE), "`")
+  encodeString(x, quote = "`")
 }
 
 .mira_formula_text_long <- function(x) {
@@ -3793,7 +3793,7 @@
         }
 
         quote_formula_name_long <- function(x) {
-          paste0("`", gsub("`", "", x, fixed = TRUE), "`")
+          .mira_quote_formula_name_long(x)
         }
         covariate_terms <- vapply(
           model_covariates_used,
@@ -5928,9 +5928,10 @@ mira_detect_long <- function(data,
 #'   tests and HTZ joint Wald tests.
 #'
 #' For GEE and CR2 joint tests, `TIME` selects every fixed-effect coefficient
-#' whose name contains the time factor (including interaction coefficients),
-#' `ARM` analogously selects every arm coefficient, and `TIME_X_ARM` selects only
-#' coefficients containing both. Thus these are joint coefficient tests, not
+#' assigned to model terms involving the time factor (including interactions),
+#' `ARM` analogously selects coefficients in terms involving the arm factor,
+#' and `TIME_X_ARM` selects terms involving both factors. Covariate names do not
+#' determine term membership. Thus these are joint coefficient tests, not
 #' comparisons of a single reference-cell coefficient.
 #'
 #' The mixed models specify a conditional mean with subject-specific random

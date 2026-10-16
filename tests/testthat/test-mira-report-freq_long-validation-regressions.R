@@ -244,3 +244,32 @@ test_that("DOCX pipe output preserves separate table lines and scientific cells"
   expect_true(any(grepl("^\\|:?-+", lines)))
 })
 
+test_that("an empty renderer output cannot replace an old document or report success", {
+  root <- withr::local_tempdir(pattern = "mira-empty-render-")
+  formats <- c("html", "docx", "pdf")
+  old_paths <- file.path(root, paste0("mira_report.", formats))
+  for (path in old_paths) writeLines("previous successful document", path)
+  opened <- character()
+  testthat::local_mocked_bindings(
+    quarto_render = function(output_file, execute_dir, ...) {
+      file.create(file.path(execute_dir, output_file))
+      invisible(NULL)
+    }, .package = "quarto"
+  )
+  testthat::local_mocked_bindings(
+    browseURL = function(url, ...) opened <<- c(opened, url), .package = "utils"
+  )
+  expect_warning(report <- report_test_call(list(
+    render = TRUE, open = TRUE, overwrite = TRUE, format = formats
+  ), root), "Quarto created an empty or unreadable html file", fixed = TRUE)
+  expect_identical(report$rendered, c(html = FALSE, docx = FALSE, pdf = FALSE))
+  expect_length(report$files, 0L)
+  expect_length(opened, 0L)
+  for (format in formats) {
+    expect_identical(report$render_errors[[format]],
+      paste0("Quarto created an empty or unreadable ", format, " file."))
+    expect_identical(readLines(file.path(root, paste0("mira_report.", format))),
+      "previous successful document")
+  }
+  expect_length(list.files(root, pattern = "mira_report-render-"), 0L)
+})

@@ -506,7 +506,8 @@ test_that("partial rendering records failures and opens only the first success",
         stop("controlled PDF failure", call. = FALSE)
       }
       target <- file.path(execute_dir, output_file)
-      if (!file.create(target)) stop("could not create mocked output")
+      writeLines("<!DOCTYPE html><html><body>Controlled successful report</body></html>",
+                 target)
       invisible(target)
     },
     .package = "quarto"

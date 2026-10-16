@@ -43,3 +43,63 @@ test_that("missing, near-matching, and duplicate captions fail clearly", {
     "Expected exactly one HTML table with caption 'Descriptive statistics'; found 2.",
     fixed = TRUE)
 })
+
+# The verifier must reject absent cells before rbind can recycle a short row.
+# The literal zero makes that failure scientifically plausible (0, 0, 0).
+test_that("published HTML rejects malformed rows before recycling scientific cells", {
+  valid <- paste0('<table><caption>Results</caption>',
+    '<thead><tr><th>id</th><th>n</th><th>mean</th></tr></thead>',
+    '<tbody><tr><td>0</td><td>0</td><td>0</td></tr>',
+    '<tr><td>B</td><td>6</td><td>3.5</td></tr></tbody></table>')
+  ragged <- sub('<td>0</td><td>0</td><td>0</td>', '<td>0</td>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(ragged, "Results"),
+    "data row 1 has 1 cells; expected 3", fixed = TRUE)
+  unclosed <- sub('<td>3.5</td>', '<td>3.5', valid, fixed = TRUE)
+  expect_error(report_test_html_table(unclosed, "Results"),
+    "malformed or mismatched cells in row 3", fixed = TRUE)
+  mismatched <- sub('<td>3.5</td>', '<td>3.5</th>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(mismatched, "Results"),
+    "malformed or mismatched cells in row 3", fixed = TRUE)
+  missing_row <- sub('</tr></tbody>', '</tbody>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(missing_row, "Results"),
+    "malformed or missing rows", fixed = TRUE)
+  missing_table <- sub('</table>', '', valid, fixed = TRUE)
+  expect_error(report_test_html_table(missing_table, "Results"),
+    "malformed or missing table boundaries", fixed = TRUE)
+})
+
+test_that("published HTML requires an unambiguous header before indexing", {
+  valid <- report_parser_fixture('<caption>Descriptive statistics</caption>')
+  no_header <- gsub('th>', 'td>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(no_header, "Descriptive statistics"),
+    "first row must contain only header cells", fixed = TRUE)
+  duplicate_header <- sub('<th>n</th>', '<th>time</th>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(duplicate_header, "Descriptive statistics"),
+    "header names must be nonempty and unique", fixed = TRUE)
+  empty_header <- sub('<th>n</th>', '<th> </th>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(empty_header, "Descriptive statistics"),
+    "header names must be nonempty and unique", fixed = TRUE)
+  empty_table <- '<table><caption>Descriptive statistics</caption></table>'
+  expect_error(report_test_html_table(empty_table, "Descriptive statistics"),
+    "no header row", fixed = TRUE)
+  repeated_header <- sub('<td>t0</td>', '<th>t0</th>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(repeated_header, "Descriptive statistics"),
+    "data row 1 must contain only data cells", fixed = TRUE)
+  spanning <- sub('<td>t0</td>', '<td colspan="2">t0</td>', valid, fixed = TRUE)
+  expect_error(report_test_html_table(spanning, "Descriptive statistics"),
+    "rowspan and colspan are unsupported", fixed = TRUE)
+})
+
+test_that("published HTML preserves empty, NA, zero, signs, precision and table identity", {
+  target <- paste0('<table><caption>Results</caption>',
+    '<tr><th>id</th><th>empty</th><th>missing</th><th>value</th></tr>',
+    '<tr><td><strong>A</strong> &#956;</td><td></td><td>NA</td><td>0</td></tr>',
+    '<tr><td>B<br>C</td><td> </td><td>NaN</td><td>-0.0010</td></tr></table>')
+  decoy <- report_parser_fixture('<caption>Results similar</caption>')
+  observed <- report_test_html_table(paste0(decoy, target, decoy), "Results")
+  expect_identical(names(observed), c("id", "empty", "missing", "value"))
+  expect_identical(observed$id, c("A \u03bc", "B C"))
+  expect_identical(observed$empty, c("", ""))
+  expect_identical(observed$missing, c("NA", "NaN"))
+  expect_identical(observed$value, c("0", "-0.0010"))
+})

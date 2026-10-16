@@ -174,6 +174,7 @@ report_test_require_quarto <- function(profile = "MIRA_RUN_QUARTO_TESTS") {
 # These parsers read published table cells, independently of the report's table
 # preparation helpers. They intentionally support the simple tables used here.
 report_test_html_text <- function(html) {
+  html <- gsub("(?is)<br\\b[^>]*>|</(?:p|div|li)>", " ", html, perl = TRUE)
   text <- gsub("(?s)<[^>]+>", "", html, perl = TRUE)
   entities <- gregexpr("&(?:amp|lt|gt|quot|apos|nbsp|#[0-9]+|#[xX][0-9A-Fa-f]+);",
                       text, perl = TRUE)
@@ -201,7 +202,12 @@ report_test_html_text <- function(html) {
 }
 
 report_test_html_table <- function(html, caption) {
-  tables <- regmatches(html, gregexpr("(?s)<table\\b.*?</table>", html, perl = TRUE))[[1L]]
+  matches <- function(text, pattern) regmatches(text, gregexpr(pattern, text, perl = TRUE))[[1L]]
+  tables <- matches(html, "(?s)<table\\b[^>]*>.*?</table>")
+  if (length(matches(html, "<table\\b")) != length(tables) ||
+      length(matches(html, "</table>")) != length(tables)) {
+    stop("HTML has malformed or missing table boundaries.", call. = FALSE)
+  }
   captions <- vapply(tables, function(table) {
     element <- regmatches(table, regexpr("(?s)<caption\\b[^>]*>.*?</caption>",
                                          table, perl = TRUE))
@@ -215,13 +221,86 @@ report_test_html_table <- function(html, caption) {
   }
   rows <- regmatches(selected, gregexpr("(?s)<tr\\b[^>]*>.*?</tr>", selected,
                                        perl = TRUE))[[1L]]
-  cells <- lapply(rows, function(row) {
-    values <- regmatches(row, gregexpr("(?s)<t[hd]\\b[^>]*>.*?</t[hd]>", row,
-                                       perl = TRUE))[[1L]]
+  fail <- function(message) stop(sprintf("HTML table '%s': %s.", caption, message), call. = FALSE)
+  if (length(matches(selected, "<tr\\b")) != length(rows) ||
+      length(matches(selected, "</tr>")) != length(rows)) fail("malformed or missing rows")
+  if (!length(rows)) fail("no header row")
+  cells <- lapply(seq_along(rows), function(i) {
+    row <- rows[[i]]
+    if (grepl("(?i)\\b(rowspan|colspan)\\s*=", row, perl = TRUE)) {
+      fail("rowspan and colspan are unsupported")
+    }
+    # Match each tag to its own closing tag; a td closed by th is malformed.
+    values <- matches(row, "(?s)<(th|td)\\b[^>]*>.*?</\\1>")
+    if (length(matches(row, "<t[hd]\\b")) != length(values) ||
+        length(matches(row, "</t[hd]>")) != length(values)) {
+      fail(sprintf("malformed or mismatched cells in row %d", i))
+    }
+    if (i == 1L && (!length(values) || any(!grepl("^<th\\b", values)))) {
+      fail("first row must contain only header cells")
+    }
+    if (i > 1L && any(!grepl("^<td\\b", values))) {
+      fail(sprintf("data row %d must contain only data cells", i - 1L))
+    }
     report_test_html_text(values)
   })
   headers <- cells[[1L]]
-  result <- as.data.frame(do.call(rbind, cells[-1L]), stringsAsFactors = FALSE)
+  if (any(!nzchar(headers)) || anyDuplicated(headers)) fail("header names must be nonempty and unique")
+  widths <- lengths(cells[-1L])
+  if (any(widths != length(headers))) {
+    i <- which(widths != length(headers))[[1L]]
+    fail(sprintf("data row %d has %d cells; expected %d", i, widths[[i]], length(headers)))
+  }
+  result <- as.data.frame(matrix(unlist(cells[-1L], use.names = FALSE),
+    ncol = length(headers), byrow = TRUE), stringsAsFactors = FALSE)
   names(result) <- headers
   result
+}
+
+# DOCX has no th tags. Identify the scientific table by a unique required-header
+# signature and validate rectangular cells before selecting or indexing it.
+report_test_docx_table <- function(xml, required_headers) {
+  matches <- function(text, pattern) regmatches(text, gregexpr(pattern, text, perl = TRUE))[[1L]]
+  fail <- function(message) stop(paste0("DOCX table: ", message, "."), call. = FALSE)
+  tables <- matches(xml, "(?s)<w:tbl\\b[^>]*>.*?</w:tbl>")
+  if (length(matches(xml, "<w:tbl\\b")) != length(tables) ||
+      length(matches(xml, "</w:tbl>")) != length(tables)) fail("malformed or missing table boundaries")
+  parsed <- lapply(seq_along(tables), function(index) {
+    table <- tables[[index]]
+    rows <- matches(table, "(?s)<w:tr\\b[^>]*>.*?</w:tr>")
+    if (length(matches(table, "<w:tr\\b")) != length(rows) ||
+        length(matches(table, "</w:tr>")) != length(rows)) fail("malformed or missing rows")
+    if (!length(rows)) fail("no header row")
+    cells <- lapply(seq_along(rows), function(i) {
+      row <- rows[[i]]
+      if (grepl("<w:(gridSpan|vMerge)\\b", row, perl = TRUE)) fail("merged cells are unsupported")
+      pieces <- matches(row, "(?s)<w:tc\\b[^>]*>.*?</w:tc>")
+      if (length(matches(row, "<w:tc\\b")) != length(pieces) ||
+          length(matches(row, "</w:tc>")) != length(pieces)) fail("malformed or missing cells")
+      vapply(pieces, function(cell) {
+        cell <- gsub("<w:(br|tab)\\b[^>]*/>", "<w:t> </w:t>", cell, perl = TRUE)
+        cell <- gsub("<w:t\\b[^>]*/>", "<w:t></w:t>", cell, perl = TRUE)
+        text <- matches(cell, "(?s)<w:t\\b[^>]*>.*?</w:t>")
+        if (length(matches(cell, "<w:t\\b")) != length(text) ||
+            length(matches(cell, "</w:t>")) != length(text)) fail("malformed text nodes")
+        report_test_html_text(paste0(text, collapse = ""))
+      }, character(1L))
+    })
+    headers <- cells[[1L]]
+    if (!length(headers) || any(!nzchar(headers)) || anyDuplicated(headers)) {
+      fail("header names must be nonempty and unique")
+    }
+    widths <- lengths(cells[-1L])
+    if (any(widths != length(headers))) fail("data row width differs from the header")
+    result <- as.data.frame(matrix(unlist(cells[-1L], use.names = FALSE),
+      ncol = length(headers), byrow = TRUE), stringsAsFactors = FALSE)
+    names(result) <- headers
+    result
+  })
+  selected <- Filter(function(table) all(required_headers %in% names(table)), parsed)
+  if (length(selected) != 1L) {
+    fail(sprintf("expected exactly one table with headers [%s]; found %d",
+      paste(required_headers, collapse = ", "), length(selected)))
+  }
+  selected[[1L]]
 }

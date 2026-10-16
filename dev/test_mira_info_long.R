@@ -141,9 +141,15 @@ trial <- data.frame(
 # analysis. The requested optional switches are still recorded in $config.
 detected <- mira_info_long(
   trial,
-  analyses = c("model", "arm_tests"),
-  inspect_only = TRUE,
+  analyses = "all",
   verbose = FALSE
+)
+
+
+report <- mira_report_freq_long(
+  x = detected,
+  format = "pdf",
+  overwrite = TRUE
 )
 
 # These are the principal resolved choices. Control is selected as the
@@ -201,11 +207,18 @@ explicit_fit <- mira_info_long(
   time_labels = c("Baseline", "Week 4", "Week 12"),
   outcomes = "symptom",
   covariates = character(0),
-  analyses = "none",
+  analyses = "all",
   improvement_direction = "lower",
   stable_threshold = 1,
   strict_id = TRUE,
   verbose = FALSE
+)
+
+
+report <- mira_report_freq_long(
+  x = explicit_fit,
+  format = "pdf",
+  overwrite = TRUE
 )
 
 data.frame(

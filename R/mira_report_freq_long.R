@@ -889,9 +889,12 @@
         details <- component[intersect(c("error", "warnings"), names(component))]
         details <- Filter(function(value) length(value) > 0L &&
                             !all(is.na(value)), details)
-        if (length(details)) {
+        nonestimable_test <- inherits(component$test, "htest") &&
+          length(component$reason_skipped) > 0L
+        if (length(details) || nonestimable_test) {
           # Disabled modules with only a reason remain omitted. An actual
-          # failure also carries its recorded non-estimability explanation.
+          # failure, including a non-estimable htest without an engine error,
+          # carries its recorded non-estimability explanation.
           if (length(component$reason_skipped)) details$reason <- component$reason_skipped
           node <- .mira_report_prune_long(details, path,
                                          paste0("outcome$", path), cfg)
@@ -1514,7 +1517,9 @@
 #' matrices, duplicate equivalent model tables, and models without a fitted
 #' object. Primary-model, plotting, and failed advanced-module errors or
 #' warnings can instead appear under diagnostics, with recorded reasons when
-#' available. Disabled modules with only a skip reason remain omitted.
+#' available. A non-estimable Friedman test also appears there with its reason,
+#' even when its engine returned an object without an error or warning.
+#' Disabled modules with only a skip reason remain omitted.
 #' Headings and inline metadata preserve labels as literal text, including
 #' characters with special meaning in Markdown or HTML.
 #' This presentation policy does not modify the original MIRA object and does

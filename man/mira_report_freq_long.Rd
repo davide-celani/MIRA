@@ -228,7 +228,9 @@ or unperformed modules, empty non-result structures, all-missing correlation
 matrices, duplicate equivalent model tables, and models without a fitted
 object. Primary-model, plotting, and failed advanced-module errors or
 warnings can instead appear under diagnostics, with recorded reasons when
-available. Disabled modules with only a skip reason remain omitted.
+available. A non-estimable Friedman test also appears there with its reason,
+even when its engine returned an object without an error or warning.
+Disabled modules with only a skip reason remain omitted.
 Headings and inline metadata preserve labels as literal text, including
 characters with special meaning in Markdown or HTML.
 This presentation policy does not modify the original MIRA object and does

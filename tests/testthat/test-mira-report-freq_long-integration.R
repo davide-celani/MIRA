@@ -351,8 +351,10 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
     expect_true(all(abs(as.numeric(descriptives$sd) - vapply(raw, stats::sd, numeric(1L))) <=
                       0.0005000001))
     change <- report_test_html_table(html, "Within-participant changes")
+    report_test_contrast_keys(change, names(raw))
     for (i in seq_len(nrow(change))) {
       differences <- raw[[change$to[[i]]]] - raw[[change$from[[i]]]]
+      expect_equal(as.numeric(change$n[[i]]), length(differences), tolerance = 0)
       statistic <- mean(differences) / (stats::sd(differences) / sqrt(length(differences)))
       expected_p <- 2 * stats::pt(-abs(statistic), df = length(differences) - 1L)
       expected_label <- if (expected_p < 0.001) "<0.001" else sprintf("%.3f", expected_p)
@@ -369,10 +371,11 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
 
 test_that("Quarto DOCX output contains scientific table cells", {
   report_test_require_quarto()
-  fit <- report_integration_fit()
+  data <- report_test_inference_data()
+  fit <- report_integration_fit(data, alpha = 0.10)
   report_integration_with_dir(function(output_dir) {
     report <- report_test_run(
-      fit, output_dir = output_dir, format = "docx", sections = "descriptives",
+      fit, output_dir = output_dir, format = "docx", sections = c("descriptives", "change"),
       render = TRUE, open = FALSE, date = "2025-01-15"
     )
     expect_identical(report$rendered, c(docx = TRUE))
@@ -382,16 +385,8 @@ test_that("Quarto DOCX output contains scientific table cells", {
     utils::unzip(report$files[["docx"]], files = "word/document.xml", exdir = expanded)
     xml <- paste(readLines(file.path(expanded, "word/document.xml"), warn = FALSE),
                   collapse = "\n")
-    # DOCX partitions wide tables into blocks of at most seven columns. The
-    # repeated visit keys identify the distinct sample-size and mean blocks.
-    observed <- report_test_docx_table(xml, c("time", "mean"))
-    raw <- report_integration_data()[c("score_t0", "score_t1", "score_t2")]
-    expect_identical(observed$time, names(raw))
-    sample_size <- report_test_docx_table(xml, c("time", "n"))
-    expect_identical(sample_size$time, names(raw))
-    expect_equal(as.numeric(sample_size$n), rep(6, 3), tolerance = 0)
-    expect_true(all(abs(as.numeric(observed$mean) - vapply(raw, mean, numeric(1L))) <=
-                      0.0005000001))
+    raw <- data[c("score_t0", "score_t1", "score_t2")]
+    expect_no_error(report_test_docx_inference(xml, raw, alpha = 0.10))
     expect_length(list.files(output_dir, pattern = "mira_report-render-"), 0L)
   })
 })

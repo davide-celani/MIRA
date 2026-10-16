@@ -283,6 +283,78 @@ test_that("core summaries handle two rows, all missing values, and constants", {
   expect_identical(constant$trajectories$direction, rep("Stable", 4L))
 })
 
+test_that("entirely tied Friedman profiles are unavailable with a visible reason", {
+  # Each column varies between subjects. It is the zero within-subject rank
+  # variation (tie correction C = 0), not a constant outcome column, that makes
+  # the global Friedman statistic and Kendall W unidentifiable.
+  data <- data.frame(subject_id = 1:4, score_t0 = c(2, 5, 9, 14),
+    score_t1 = c(2, 5, 9, 14), score_t2 = c(2, 5, 9, 14))
+  expect_no_warning(result <- mira_info_long(data, id = "subject_id",
+    outcomes = "score", covariates = character(0), analyses = "none",
+    verbose = FALSE))
+  global <- result$advanced_tests$friedman
+  reason <- paste0("Friedman test is not estimable: ",
+                   "all complete repeated profiles are tied.")
+  expect_false(global$performed)
+  expect_identical(global$reason_skipped, reason)
+  expect_identical(global$tidy, data.frame(statistic = NA_real_, df = NA_real_,
+    p_raw = NA_real_, kendalls_w = NA_real_, n = 4L, n_timepoints = 3L))
+  expect_identical(global$summary, global$tidy)
+  expect_identical(result$effect_sizes$friedman$kendalls_w, NA_real_)
+  # Preserve the raw engine evidence without misclassifying its htest object
+  # as a usable inference or inventing an engine error/warning.
+  expect_s3_class(global$test, "htest")
+  expect_identical(global$object, global$test)
+  expect_null(global$error)
+  expect_length(global$errors, 0L)
+  expect_identical(global$warnings, character(0))
+  expect_null(summary(result)$advanced$friedman)
+  printed <- capture.output(print(result))
+  expect_true(any(grepl(paste0("Not available: ", reason), printed, fixed = TRUE)))
+
+  # Exercise the saved public report bundle and its real runtime, without
+  # claiming this ordinary test executes Quarto or an HTML browser renderer.
+  directory <- withr::local_tempdir()
+  capture.output(report <- mira_report_freq_long(result,
+    output_dir = directory, format = "html", render = FALSE,
+    sections = c("models", "diagnostics")))
+  payload <- readRDS(report$payload)
+  expect_identical(payload$result, result)
+  runtime <- new.env(parent = baseenv())
+  sys.source(report$runtime, envir = runtime)
+  tree <- runtime$.mira_report_outcome_tree_long(payload$result, payload$report)
+  expect_null(tree$advanced_tests$children$friedman)
+  failure <- tree$diagnostics$children[["advanced_tests$friedman"]]
+  expect_identical(failure$children$reason$value, reason)
+  rendered <- capture.output(runtime$.mira_report_knit_long(payload))
+  expect_true(any(grepl(reason, rendered, fixed = TRUE)))
+})
+
+test_that("one non-tied complete profile restores estimable Friedman inference", {
+  data <- data.frame(subject_id = 1:4, score_t0 = c(2, 5, 9, 14),
+    score_t1 = c(2, 5, 9, 15), score_t2 = c(2, 5, 9, 16))
+  result <- mira_info_long(data, id = "subject_id", outcomes = "score",
+    covariates = character(0), analyses = "none", verbose = FALSE)
+  # Three rank profiles (2,2,2), one (1,2,3): rank sums (7,8,9),
+  # Q_uncorrected=1/2 and C=1-3*24/(4*24)=1/4. Thus Q=2,
+  # W=Q/[n*(k-1)]=1/4, and chi-squared_2 survival p=exp(-1).
+  # This counterexample rejects guards that disable Friedman for any ties.
+  global <- result$advanced_tests$friedman
+  expect_true(global$performed)
+  expect_null(global$reason_skipped)
+  expect_identical(global$tidy$n, 4L)
+  expect_identical(global$tidy$n_timepoints, 3L)
+  expect_equal(global$tidy$df, 2)
+  expect_equal(global$tidy$statistic, 2, tolerance = 1e-12)
+  expect_equal(global$tidy$kendalls_w, 1 / 4, tolerance = 1e-12)
+  expect_equal(global$tidy$p_raw, exp(-1), tolerance = 1e-12)
+  expect_identical(summary(result)$advanced$friedman, global$tidy)
+  cfg <- list(sections = "all", max_depth = 50L)
+  tree <- MIRA:::.mira_report_outcome_tree_long(result, cfg)
+  expect_false(is.null(tree$advanced_tests$children$friedman))
+  expect_null(tree$diagnostics$children[["advanced_tests$friedman"]])
+})
+
 test_that("factor arms drop unused levels and isolate blank or single groups", {
   unused_data <- data.frame(
     subject_id = 1:6,

@@ -82,6 +82,202 @@ test_that("effect selection uses model terms rather than covariate substrings", 
     model = deceptive_levels), integer(0))
 })
 
+test_that("dropped nuisance coefficients preserve the estimable time contrast and rank", {
+  data <- scientific_regression_long()
+  data$age_time_factor <- data$z1
+  data$pre_arm_factor <- 2 * data$z1
+  # Put the redundant nuisance column before time: dropping it changes the
+  # coefficient positions. Its name also must not manufacture an arm effect.
+  expect_message(fitted <- lme4::lmer(
+    value ~ age_time_factor + pre_arm_factor + time_factor + z2 +
+      (1 | patient_factor), data = data), "rank deficient.*dropping 1 column")
+  beta <- lme4::fixef(fitted)
+  design <- stats::model.matrix(fitted)
+  expect_identical(attr(design, "col.dropped"), c(pre_arm_factor = 3L))
+  expect_match(attr(design, "msgRankdrop"), "rank deficient")
+  expect_identical(names(lme4::fixef(fitted, add.dropped = TRUE))[
+    is.na(lme4::fixef(fitted, add.dropped = TRUE))], "pre_arm_factor")
+  expect_identical(qr(design)$rank, 5L)
+  expect_identical(names(beta), colnames(design))
+  expect_identical(attr(design, "assign"), c(0L, 1L, 3L, 3L, 4L))
+  selected <- MIRA:::.mira_effect_indices_long(names(beta), "TIME", fitted)
+  expect_identical(selected, c(3L, 4L))
+  expect_identical(names(beta)[selected], c("time_factorMid", "time_factorFinal"))
+  expect_identical(MIRA:::.mira_effect_indices_long(names(beta), "ARM", fitted), integer(0))
+  expect_identical(MIRA:::.mira_effect_indices_long(names(beta), "TIME_X_ARM", fitted), integer(0))
+
+  # Balanced repeated measures give these time estimates independently of
+  # the subject-level covariates. The within-subject two-way residual mean
+  # square estimates sigma^2 with (8-1)*(3-1) residual degrees of freedom.
+  raw <- matrix(data$value, ncol = 3L, byrow = TRUE)
+  expected_beta <- colMeans(raw)[2:3] - mean(raw[, 1L])
+  residual <- sweep(sweep(raw, 1L, rowMeans(raw)), 2L, colMeans(raw)) + mean(raw)
+  expected_sigma2 <- sum(residual^2) / ((nrow(raw) - 1L) * (ncol(raw) - 1L))
+  expected_covariance <- expected_sigma2 / nrow(raw) * matrix(c(2, 1, 1, 2), 2L)
+  expected_statistic <- as.numeric(crossprod(expected_beta,
+    solve(expected_covariance, expected_beta)))
+  wald <- MIRA:::.mira_wald_chisq_long(beta, stats::vcov(fitted), selected)
+  expected_constraint <- rbind(c(0, 0, 1, 0, 0), c(0, 0, 0, 1, 0))
+  expect_equal(unname(beta[selected]), expected_beta, tolerance = 1e-10)
+  # The residual variance uses numerical REML optimization; this bound is
+  # much smaller than the stale-index counterexample below, not display rounding.
+  expect_equal(unname(as.matrix(stats::vcov(fitted))[selected, selected]),
+    expected_covariance, tolerance = 1e-7)
+  expect_identical(wald$constraints, expected_constraint)
+  expect_identical(wald$df, 2L)
+  expect_equal(wald$statistic, expected_statistic, tolerance = 1e-7)
+  # For df=2 the survival function is exactly exp(-Q/2); use the observed Q
+  # to isolate this conversion from the numerical REML variance estimate.
+  expect_equal(wald$p_value, exp(-wald$statistic / 2), tolerance = 1e-12)
+
+  # The real CR2 caller must use the retained coefficient positions too.
+  # A nonredundant fit supplies an independent wrapper oracle, with the same
+  # scientific model and an explicit named time contrast.
+  reduced <- lme4::lmer(value ~ age_time_factor + time_factor + z2 +
+    (1 | patient_factor), data = data)
+  reduced_beta <- lme4::fixef(reduced)
+  reduced_constraint <- diag(length(reduced_beta))[
+    match(c("time_factorMid", "time_factorFinal"), names(reduced_beta)), , drop = FALSE]
+  expected_cr2 <- clubSandwich::Wald_test(reduced, constraints = reduced_constraint,
+    vcov = clubSandwich::vcovCR(reduced, type = "CR2"), test = "HTZ", tidy = TRUE)
+  robust <- MIRA:::.mira_run_robust_inference_long(fitted, 0.95)
+  expect_true(robust$performed)
+  expect_identical(names(robust$effect_tests), "TIME")
+  expect_identical(robust$dropped_coefficients, "pre_arm_factor")
+  expect_identical(robust$effect_diagnostics$TIME$tested_coefficients,
+    c("time_factorMid", "time_factorFinal"))
+  expect_length(robust$effect_diagnostics$TIME$dropped_coefficients, 0L)
+  expect_false(robust$effect_diagnostics$TIME$hypothesis_reduced)
+  expect_null(robust$effect_diagnostics$TIME$note)
+  expect_identical(robust$effect_tests$TIME$df_num, 2L)
+  expect_equal(as.data.frame(robust$effect_tests$TIME), as.data.frame(expected_cr2),
+    tolerance = 1e-7)
+  expect_null(robust$error)
+  expect_length(robust$errors, 0L)
+  expect_length(robust$warnings, 0L)
+  # Positions 4:5 from the pre-drop design test Final plus z2, not TIME.
+  wrong <- MIRA:::.mira_wald_chisq_long(beta, stats::vcov(fitted), 4:5)
+  expect_false(identical(wrong$constraints, expected_constraint))
+  expect_false(isTRUE(all.equal(wrong$statistic, expected_statistic,
+    tolerance = 1e-7)))
+})
+
+test_that("a rank-deficient real GEE fit exposes failure without effect p-values", {
+  data <- scientific_regression_long()
+  data$age_time_factor <- data$z1
+  data$pre_arm_factor <- 2 * data$z1
+  formula <- value ~ age_time_factor + pre_arm_factor + time_factor + z2
+  design <- stats::model.matrix(formula, data)
+  expect_identical(ncol(design), 6L)
+  expect_identical(qr(design)$rank, 5L)
+  result <- MIRA:::.mira_run_gee_long(data, formula, 0.95)
+  expect_false(result$performed)
+  for (structure in c("independence", "exchangeable", "ar1")) {
+    fit <- result[[structure]]
+    expect_false(fit$performed)
+    expect_false(fit$converged)
+    expect_null(fit$model)
+    expect_null(fit$coefficients)
+    expect_null(fit$effect_tests)
+    expect_match(fit$error, "rank deficient", fixed = TRUE)
+    expect_identical(fit$reason_skipped,
+      "GEE estimation failed for this working correlation.")
+  }
+})
+
+test_that("public CR2 diagnoses reduced and unavailable interaction hypotheses in reports", {
+  data <- data.frame(subject_id = 1:12,
+    arm = rep(c("control", "active"), each = 6L),
+    score_t0 = c(3, 5, 4, 7, 6, 8, 5, 9, 7, 10, 8, 11),
+    score_t1 = c(4, 6, 5, 6, 8, 9, 7, 10, 8, 11, 9, 12),
+    score_t2 = c(6, 7, 7, 8, 9, 11, NA, NA, NA, NA, NA, NA))
+  requested <- c("time_factort1:arm_factoractive", "time_factort2:arm_factoractive")
+  for (no_interaction in c(FALSE, TRUE)) {
+    input <- data
+    if (no_interaction) input$score_t1[7:12] <- NA_real_
+    # Missing arm-by-visit cells are legitimate public inputs. Only t1 has
+    # both arms in the first case; neither follow-up does in the second.
+    result <- mira_info_long(input, id = "subject_id", outcomes = "score",
+      time_vars = c("score_t0", "score_t1", "score_t2"), arm = "arm",
+      reference_arm = "control", covariates = character(0),
+      analyses = c("model", "arm_tests"), verbose = FALSE)
+    fitted <- result$model$fitted_model
+    robust <- result$robustness$club_sandwich
+    diagnostic <- robust$effect_diagnostics$TIME_X_ARM
+    tested <- if (no_interaction) character(0) else requested[[1L]]
+    dropped <- if (no_interaction) requested else requested[[2L]]
+    expect_true(robust$performed)
+    expect_identical(robust$dropped_coefficients, dropped)
+    expect_identical(names(lme4::fixef(fitted, add.dropped = TRUE))[
+      is.na(lme4::fixef(fitted, add.dropped = TRUE))], dropped)
+    expect_identical(diagnostic$requested_coefficients, requested)
+    expect_identical(diagnostic$tested_coefficients, tested)
+    expect_identical(diagnostic$dropped_coefficients, dropped)
+    expect_true(diagnostic$hypothesis_reduced)
+    expect_null(robust$error)
+    expect_length(robust$warnings, 0L)
+    row <- result$sensitivity[result$sensitivity$question == "TIME_X_ARM" &
+      result$sensitivity$method == "Mixed model: CR2/HTZ robust Wald test", , drop = FALSE]
+    expect_identical(nrow(row), 1L)
+    expect_match(row$note, "Dropped coefficients:", fixed = TRUE)
+    for (coefficient in dropped) expect_match(row$note, coefficient, fixed = TRUE)
+    if (no_interaction) {
+      expect_null(robust$effect_tests$TIME_X_ARM)
+      expect_match(diagnostic$reason_skipped, "No retained coefficient", fixed = TRUE)
+      expect_match(row$note, "Hypothesis not estimable", fixed = TRUE)
+      expect_true(is.na(row$statistic))
+      expect_true(is.na(row$df))
+      expect_true(is.na(row$p_raw))
+    } else {
+      expect_null(diagnostic$reason_skipped)
+      expect_match(row$note, "Reduced hypothesis: tests 1 of 2", fixed = TRUE)
+      # The retained t1 interaction is the difference of the two groups'
+      # mean changes: 7/6 - 5/6 = 1/3. Their variance-of-mean sum is 17/90,
+      # giving the one-coefficient CR2 F statistic (1/3)^2/(17/90)=10/17.
+      observed <- robust$effect_tests$TIME_X_ARM
+      expect_equal(unname(lme4::fixef(fitted)[tested]), 1 / 3, tolerance = 1e-10)
+      expect_equal(observed$Fstat, 10 / 17, tolerance = 1e-10)
+      expect_identical(observed$df_num, 1L)
+      # Direct HTZ with this explicit retained contrast verifies that adding
+      # diagnostics has not changed the tested hypothesis, df, or p-value.
+      contrast <- matrix(c(0, 0, 0, 0, 1), nrow = 1L)
+      expected <- clubSandwich::Wald_test(fitted, constraints = contrast,
+        vcov = clubSandwich::vcovCR(fitted, type = "CR2"), test = "HTZ", tidy = TRUE)
+      expect_equal(as.data.frame(observed), as.data.frame(expected), tolerance = 1e-12)
+      expect_equal(row$p_raw, observed$p_val, tolerance = 0)
+    }
+
+    # Source-only public report export and its actual table renderer must
+    # carry the diagnosis; this is not a Quarto integration test.
+    output <- withr::local_tempdir(pattern = "mira-rank-diagnostics-")
+    report <- mira_report_freq_long(result, output_dir = output,
+      format = "html", sections = "robustness", render = FALSE, open = FALSE)
+    manifest <- utils::read.csv(report$results_manifest, stringsAsFactors = FALSE)
+    entry <- which(manifest$path == "outcome$sensitivity" & manifest$outcome == "score")
+    expect_length(entry, 1L)
+    exported <- utils::read.csv(file.path(output, manifest$file[[entry]]),
+      stringsAsFactors = FALSE)
+    exported_row <- exported[exported$question == "TIME_X_ARM" &
+      exported$method == "Mixed model: CR2/HTZ robust Wald test", , drop = FALSE]
+    expect_identical(exported_row$note, row$note)
+    if (no_interaction) expect_true(is.na(exported_row$p_raw))
+    payload <- readRDS(report$payload)
+    nodes <- MIRA:::.mira_report_outcome_tree_long(payload$result, payload$report)
+    rendered <- paste(capture.output(MIRA:::.mira_report_render_node_long(
+      nodes$sensitivity, 2L, payload$report)), collapse = "\n")
+    expect_match(rendered, if (no_interaction) "Hypothesis not estimable" else
+      "Reduced hypothesis: tests 1 of 2", fixed = TRUE)
+    expect_match(rendered, "Dropped coefficients:", fixed = TRUE)
+    # Erasing the note recreates the original presentation defect even though
+    # the numerical row and its p-value are unchanged.
+    incomplete <- nodes$sensitivity
+    incomplete$value$note <- NA_character_
+    without_note <- paste(capture.output(MIRA:::.mira_report_render_node_long(
+      incomplete, 2L, payload$report)), collapse = "\n")
+    expect_false(grepl("Dropped coefficients:", without_note, fixed = TRUE))
+  }
+})
+
 test_that("RM ANOVA sensitivity selects only the requested canonical effects", {
   table <- data.frame(effect = c("lifetime", "farm", "time_factor", "arm_factor",
     "time_factor:arm_factor", "age_time_factor", "pre_arm_factor",

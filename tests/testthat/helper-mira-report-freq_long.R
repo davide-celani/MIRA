@@ -251,7 +251,7 @@ report_test_html_table <- function(html, caption) {
     i <- which(widths != length(headers))[[1L]]
     fail(sprintf("data row %d has %d cells; expected %d", i, widths[[i]], length(headers)))
   }
-  result <- as.data.frame(matrix(unlist(cells[-1L], use.names = FALSE),
+  result <- as.data.frame(matrix(as.character(unlist(cells[-1L], use.names = FALSE)),
     ncol = length(headers), byrow = TRUE), stringsAsFactors = FALSE)
   names(result) <- headers
   result
@@ -292,7 +292,7 @@ report_test_docx_table <- function(xml, required_headers) {
     }
     widths <- lengths(cells[-1L])
     if (any(widths != length(headers))) fail("data row width differs from the header")
-    result <- as.data.frame(matrix(unlist(cells[-1L], use.names = FALSE),
+    result <- as.data.frame(matrix(as.character(unlist(cells[-1L], use.names = FALSE)),
       ncol = length(headers), byrow = TRUE), stringsAsFactors = FALSE)
     names(result) <- headers
     result

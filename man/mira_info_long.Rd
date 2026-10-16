@@ -435,6 +435,11 @@ asymptotic pairwise Wilcoxon signed-rank post-hoc tests with paired
 rank-biserial correlations computed after removing zero changes. This
 branch is stored under \code{advanced_tests$friedman} and is attempted even when
 \code{model = FALSE}.
+For this global test, \code{performed = TRUE} means finite, estimable inference.
+Entirely tied complete profiles instead have \code{performed = FALSE}, an
+explicit \code{reason_skipped}, and \code{NA} inferential fields in \code{tidy}/\code{summary}.
+The raw engine object is retained in \code{test}/\code{object} for diagnosis; pairwise
+post-hoc tests retain their own pairwise-complete samples and diagnostics.
 }
 
 The complete-profile ANOVA ICC is
@@ -485,6 +490,17 @@ assigned to model terms involving the time factor (including interactions),
 and \code{TIME_X_ARM} selects terms involving both factors. Covariate names do not
 determine term membership. Thus these are joint coefficient tests, not
 comparisons of a single reference-cell coefficient.
+When a rank-deficient mixed-model fit drops coefficients, CR2 retains the
+joint test of the remaining coefficients; it does not recover the original
+full hypothesis. \code{robustness$club_sandwich$dropped_coefficients} lists all
+dropped coefficients. Its \code{effect_diagnostics} records each question's
+\code{requested_coefficients}, \code{tested_coefficients}, \code{dropped_coefficients},
+\code{hypothesis_reduced}, \code{reason_skipped}, and explanatory \code{note}. The sensitivity
+table and report repeat the note for reduced hypotheses. If no coefficient
+remains for a question, no effect test or finite p-value is produced; the
+sensitivity row instead has \code{NA} statistic, degrees of freedom, and p-value
+with an explicit non-estimability note. These diagnostics do not change the
+retained contrasts, their degrees of freedom, or their p-values.
 
 The mixed models specify a conditional mean with subject-specific random
 effects, whereas GEE describes a population-averaged marginal mean under the

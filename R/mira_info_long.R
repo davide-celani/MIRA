@@ -1201,6 +1201,23 @@
   kendall_w <- if (!is.null(test) && n_complete > 0L && k > 1L) {
     as.numeric(test$statistic) / (n_complete * (k - 1L))
   } else NA_real_
+  # An htest object can exist even when the tie correction is zero and all
+  # inferential quantities are NaN. A completed engine call is not by itself
+  # an estimable global test. Retain the raw object for diagnostics only.
+  performed <- !is.null(test) && all(is.finite(c(
+    test$statistic, test$parameter, test$p.value, kendall_w
+  )))
+  reason_skipped <- if (is.null(test)) {
+    "Friedman test could not be computed on complete repeated profiles."
+  } else if (!performed) {
+    all_tied <- n_complete > 0L && k > 1L &&
+      all(as.matrix(complete) == complete[[1L]])
+    if (all_tied) {
+      "Friedman test is not estimable: all complete repeated profiles are tied."
+    } else {
+      "Friedman test is not estimable: the engine returned non-finite inference."
+    }
+  } else NULL
 
   tests <- list()
   rows <- list()
@@ -1241,17 +1258,17 @@
   posthoc <- .mira_adjust_family_long(posthoc, p_col = "p_raw", primary = primary_method)
 
   tidy <- data.frame(
-    statistic = if (!is.null(test)) as.numeric(test$statistic) else NA_real_,
-    df = if (!is.null(test)) as.numeric(test$parameter) else NA_real_,
-    p_raw = if (!is.null(test)) test$p.value else NA_real_,
-    kendalls_w = kendall_w,
+    statistic = if (performed) as.numeric(test$statistic) else NA_real_,
+    df = if (performed) as.numeric(test$parameter) else NA_real_,
+    p_raw = if (performed) test$p.value else NA_real_,
+    kendalls_w = if (performed) kendall_w else NA_real_,
     n = n_complete,
     n_timepoints = k,
     stringsAsFactors = FALSE
   )
 
   list(
-    performed = !is.null(test),
+    performed = performed,
     package = "stats",
     object = test,
     test = test,
@@ -1261,13 +1278,12 @@
     warnings = warnings,
     error = global_eval$error,
     errors = Filter(Negate(is.null), errors),
-    reason_skipped = if (is.null(test)) {
-      "Friedman test could not be computed on complete repeated profiles."
-    } else NULL
+    reason_skipped = reason_skipped
   )
 }
 
-.mira_effect_indices_long <- function(coefficient_names, question, model = NULL) {
+.mira_effect_indices_long <- function(coefficient_names, question, model = NULL,
+                                      include_dropped = FALSE) {
   if (is.null(model)) {
     has_time <- grepl("time_factor", coefficient_names, fixed = TRUE)
     has_arm <- grepl("arm_factor", coefficient_names, fixed = TRUE)
@@ -1276,6 +1292,10 @@
     # covariate names or factor levels containing the same text. Matching
     # matrix columns also respects any rank-deficient columns dropped at fit.
     design <- stats::model.matrix(model)
+    if (isTRUE(include_dropped)) {
+      design <- stats::model.matrix(stats::terms(model), stats::model.frame(model),
+        contrasts.arg = attr(design, "contrasts"))
+    }
     factors <- attr(stats::terms(model), "factors")
     assignments <- attr(design, "assign")[match(coefficient_names, colnames(design))]
     contains_variable_long <- function(variable) {
@@ -1774,7 +1794,10 @@
   )
 
   coefficients <- lme4::fixef(model)
+  complete_coefficients <- lme4::fixef(model, add.dropped = TRUE)
+  dropped_coefficients <- setdiff(names(complete_coefficients), names(coefficients))
   effect_tests <- list()
+  effect_diagnostics <- list()
   warnings <- unique(c(
     covariance_eval$warnings, coefficient_eval$warnings, confidence_eval$warnings
   ))
@@ -1784,6 +1807,29 @@
   ))
   for (question in c("TIME", "ARM", "TIME_X_ARM")) {
     indices <- .mira_effect_indices_long(names(coefficients), question, model = model)
+    requested <- names(complete_coefficients)[.mira_effect_indices_long(
+      names(complete_coefficients), question, model = model, include_dropped = TRUE)]
+    if (length(requested) == 0L) next
+    tested <- names(coefficients)[indices]
+    dropped <- setdiff(requested, tested)
+    reason <- if (length(tested) == 0L) {
+      "No retained coefficient is available for this hypothesis after rank-deficient columns were dropped."
+    } else NULL
+    note <- if (length(dropped) > 0L) {
+      paste0(if (length(tested) > 0L) {
+        paste0("Reduced hypothesis: tests ", length(tested), " of ", length(requested),
+          " requested coefficients; tested: ", paste(tested, collapse = ", "), ". ")
+      } else "Hypothesis not estimable: no requested coefficient remains; no test or p-value. ",
+      "Dropped coefficients: ", paste(dropped, collapse = ", "), ".")
+    } else NULL
+    effect_diagnostics[[question]] <- list(
+      requested_coefficients = requested,
+      tested_coefficients = tested,
+      dropped_coefficients = dropped,
+      hypothesis_reduced = length(dropped) > 0L,
+      reason_skipped = reason,
+      note = note
+    )
     if (length(indices) == 0L) next
     constraint <- diag(length(coefficients))[indices, , drop = FALSE]
     evaluated <- .mira_eval_long(
@@ -1811,6 +1857,8 @@
     coefficient_tests = coefficient_eval$value,
     confidence_intervals = confidence_eval$value,
     effect_tests = effect_tests,
+    dropped_coefficients = dropped_coefficients,
+    effect_diagnostics = effect_diagnostics,
     test = "Satterthwaite coefficient tests; HTZ joint Wald tests",
     warnings = warnings,
     error = NULL,
@@ -2174,7 +2222,20 @@
         if (!is.na(p_col)) .mira_as_numeric_long(table[[p_col]])[[1L]] else NA_real_,
         NA_real_, NA_character_, n_default,
         paste0("$robustness$club_sandwich$effect_tests$", question),
-        "CR2 covariance with small-sample HTZ correction."
+        paste(c("CR2 covariance with small-sample HTZ correction.",
+          robust$effect_diagnostics[[question]]$note), collapse = " ")
+      ))
+    }
+  }
+  if (isTRUE(robust$performed)) {
+    for (question in names(robust$effect_diagnostics)) {
+      diagnostic <- robust$effect_diagnostics[[question]]
+      if (length(diagnostic$tested_coefficients) > 0L ||
+          length(diagnostic$dropped_coefficients) == 0L) next
+      add_long(.mira_sensitivity_row_long(
+        question, "Mixed model: CR2/HTZ robust Wald test", n = n_default,
+        object_path = paste0("$robustness$club_sandwich$effect_diagnostics$", question),
+        note = diagnostic$note
       ))
     }
   }
@@ -5885,6 +5946,11 @@ mira_detect_long <- function(data,
 #'   rank-biserial correlations computed after removing zero changes. This
 #'   branch is stored under `advanced_tests$friedman` and is attempted even when
 #'   `model = FALSE`.
+#'   For this global test, `performed = TRUE` means finite, estimable inference.
+#'   Entirely tied complete profiles instead have `performed = FALSE`, an
+#'   explicit `reason_skipped`, and `NA` inferential fields in `tidy`/`summary`.
+#'   The raw engine object is retained in `test`/`object` for diagnosis; pairwise
+#'   post-hoc tests retain their own pairwise-complete samples and diagnostics.
 #'
 #' The complete-profile ANOVA ICC is
 #' `(MS_between - MS_within) / (MS_between + (k - 1) * MS_within)`, where `k` is
@@ -5933,6 +5999,17 @@ mira_detect_long <- function(data,
 #' and `TIME_X_ARM` selects terms involving both factors. Covariate names do not
 #' determine term membership. Thus these are joint coefficient tests, not
 #' comparisons of a single reference-cell coefficient.
+#' When a rank-deficient mixed-model fit drops coefficients, CR2 retains the
+#' joint test of the remaining coefficients; it does not recover the original
+#' full hypothesis. `robustness$club_sandwich$dropped_coefficients` lists all
+#' dropped coefficients. Its `effect_diagnostics` records each question's
+#' `requested_coefficients`, `tested_coefficients`, `dropped_coefficients`,
+#' `hypothesis_reduced`, `reason_skipped`, and explanatory `note`. The sensitivity
+#' table and report repeat the note for reduced hypotheses. If no coefficient
+#' remains for a question, no effect test or finite p-value is produced; the
+#' sensitivity row instead has `NA` statistic, degrees of freedom, and p-value
+#' with an explicit non-estimability note. These diagnostics do not change the
+#' retained contrasts, their degrees of freedom, or their p-values.
 #'
 #' The mixed models specify a conditional mean with subject-specific random
 #' effects, whereas GEE describes a population-averaged marginal mean under the

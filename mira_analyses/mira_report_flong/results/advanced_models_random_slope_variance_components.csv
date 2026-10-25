@@ -1,5 +1,0 @@
-"grp","var1","var2","vcov","sdcor"
-"patient_factor","(Intercept)",,27.4469585135242,5.23898449258291
-"patient_factor","time_ordinal",,0.0251691077849005,0.158647747493939
-"patient_factor","(Intercept)","time_ordinal",0.831153088903954,1
-"Residual",,,1.23439580223287,1.11103366386121

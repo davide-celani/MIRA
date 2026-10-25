@@ -1,4 +1,0 @@
-"from","from_label","to","to_label","n","symptom_rank_biserial","symptom_statistic","symptom_p_raw","symptom_p_primary","symptom_p_bonferroni","symptom_p_holm","symptom_p_bh","symptom_p_by","primary_method"
-"pre","Baseline","week4","Week 4",42,-1,0,1.70889304776126e-08,5.12667914328377e-08,5.12667914328377e-08,5.12667914328377e-08,2.56333957164188e-08,4.69945588134345e-08,"holm"
-"pre","Baseline","final","Week 12",42,-1,0,1.70889304776126e-08,5.12667914328377e-08,5.12667914328377e-08,5.12667914328377e-08,2.56333957164188e-08,4.69945588134345e-08,"holm"
-"week4","Week 4","final","Week 12",42,-0.736434108527132,119,3.30712948689146e-05,3.30712948689146e-05,9.92138846067438e-05,3.30712948689146e-05,3.30712948689146e-05,6.06307072596767e-05,"holm"

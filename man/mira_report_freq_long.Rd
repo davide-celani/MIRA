@@ -121,9 +121,12 @@ export.}
 \item{max_table_columns}{A finite numeric scalar greater than or equal to
 two, converted to an integer for rendering. It is an upper bound per
 displayed table block, not a request to discard columns. Wide tables are
-split into blocks and the first one or two columns, typically identifiers,
-are repeated. Width heuristics can produce smaller blocks; PDF blocks are
-capped at eight columns and non-HTML, non-LaTeX blocks at seven.}
+split into blocks. Comparison tables repeat \code{from}, \code{to} and
+any \code{arm}, \code{arm_a}, \code{arm_b} identifiers when the column limit
+leaves room for these keys and a statistic; otherwise the first one or
+two columns, typically identifiers, are repeated. Columns retain their
+original relative order. Width heuristics can produce smaller blocks;
+PDF blocks are capped at eight columns and non-HTML, non-LaTeX blocks at seven.}
 
 \item{digits}{A finite numeric scalar from 1 through 10, converted to an
 integer. It controls numeric display precision in tables. Recognized

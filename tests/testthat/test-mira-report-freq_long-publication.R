@@ -119,6 +119,76 @@ test_that("rendered table blocks preserve every statistic and repeat participant
   expect_identical(sum(rendered$lines == "</div>"), 4L)
 })
 
+test_that("comparison blocks retain both visit keys after canonical column ordering", {
+  visits <- c("score_t0", "score_t1", "score_t2")
+  for (declared in list(NULL, "Sleep_index_Mean")) {
+    time_vars <- if (is.null(declared)) visits else setNames(list(visits), declared)
+    fit <- mira_info_long(report_test_inference_data(), id = "patient",
+      time_vars = time_vars, covariates = character(0), analyses = "none",
+      verbose = FALSE)
+    input <- fit$change
+    before <- unserialize(serialize(input, NULL))
+    expect_identical(names(input)[1:4], c("from", "from_label", "to", "to_label"))
+    for (target in c("pipe", "latex", "html")) {
+      rendered <- report_publication_table_capture(input,
+        report_test_cfg(max_table_columns = 7L), target = target)
+      expect_gt(length(rendered$calls), 1L)
+      non_keys <- unlist(lapply(rendered$calls, function(call) {
+        expect_true(all(c("from", "to") %in% names(call$x)))
+        expect_identical(call$x$from, input$from)
+        expect_identical(call$x$to, input$to)
+        expect_lte(ncol(call$x), 7L)
+        positions <- match(names(call$x), names(input))
+        expect_identical(positions, sort(positions))
+        setdiff(names(call$x), c("from", "to"))
+      }), use.names = FALSE)
+      expect_identical(non_keys, setdiff(names(input), c("from", "to")))
+    }
+    expect_identical(input, before)
+    # Even when keys exceed the width budget, a three-column block has room
+    # for the complete comparison identity and one scientific value.
+    keys <- match(c("from", "to"), names(input))
+    narrow <- .mira_report_partition_columns_long(input, 3L, width_budget = 1)
+    expect_true(all(vapply(narrow, function(block) all(keys %in% block), logical(1L))))
+    expect_true(all(lengths(narrow) <= 3L))
+    expect_identical(unlist(lapply(narrow, setdiff, y = keys), use.names = FALSE),
+                     setdiff(seq_len(ncol(input)), keys))
+    # A requested two-column limit cannot hold two keys plus a statistic.
+    # Preserve that existing limit and every column without silent omission.
+    minimal <- .mira_report_partition_columns_long(input, 2L, width_budget = 1)
+    expect_true(all(lengths(minimal) <= 2L))
+    expect_identical(unlist(lapply(minimal, setdiff, y = 1L), use.names = FALSE),
+                     seq.int(2L, ncol(input)))
+  }
+})
+
+test_that("partitioned comparisons keep arm identities alongside both visits", {
+  data <- report_test_inference_data()
+  data$arm <- factor(rep(c("control", "active"), each = 3L))
+  fit <- mira_info_long(data, id = "patient", arm = "arm",
+    covariates = character(0), analyses = "arm_tests",
+    verbose = FALSE)
+  for (input in list(fit$arm_analysis$change_descriptives,
+                     fit$arm_analysis$change_pairwise)) {
+    expect_s3_class(input, "data.frame")
+    keys <- c(intersect(c("arm", "arm_a", "arm_b"), names(input)), "from", "to")
+    rendered <- report_publication_table_capture(input, target = "pipe")
+    expect_gt(length(rendered$calls), 1L)
+    non_keys <- unlist(lapply(rendered$calls, function(call) {
+      expect_true(all(keys %in% names(call$x)))
+      for (key in keys) expect_identical(call$x[[key]], input[[key]])
+      expect_lte(ncol(call$x), 7L)
+      positions <- match(names(call$x), names(input))
+      expect_identical(positions, sort(positions))
+      setdiff(names(call$x), keys)
+    }), use.names = FALSE)
+    expect_identical(non_keys, setdiff(names(input), keys))
+    limited <- .mira_report_partition_columns_long(input, length(keys), width_budget = 1)
+    expect_true(all(lengths(limited) <= length(keys)))
+    expect_identical(sort(unique(unlist(limited))), seq_len(ncol(input)))
+  }
+})
+
 test_that("width-aware PDF partitions retain long identifiers and all columns", {
   input <- data.frame(
     participant_identifier = rep(strrep("subject_", 8L), 2L),

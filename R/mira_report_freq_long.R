@@ -351,13 +351,21 @@
     return(list(seq_len(column_n)))
   }
 
-  key_n <- min(2L, max_columns - 1L, column_n - 1L)
-  if (key_n > 1L && is.finite(width_budget) &&
-      sum(widths[seq_len(key_n)]) > width_budget * 0.4) {
-    key_n <- 1L
+  comparison_keys <- match(c("from", "to"), names(x))
+  group_keys <- which(names(x) %in% c("arm", "arm_a", "arm_b"))
+  comparison_keys <- c(group_keys, comparison_keys)
+  if (max_columns > length(comparison_keys) && !anyNA(comparison_keys)) {
+    # Labels may separate these columns in the canonical output. Every block
+    # needs both visits and any arm identities, regardless of their width.
+    key_columns <- comparison_keys
+  } else {
+    key_n <- min(2L, max_columns - 1L, column_n - 1L)
+    if (key_n > 1L && is.finite(width_budget) &&
+        sum(widths[seq_len(key_n)]) > width_budget * 0.4) {
+      key_n <- 1L
+    }
+    key_columns <- seq_len(max(1L, key_n))
   }
-  key_n <- max(1L, key_n)
-  key_columns <- seq_len(key_n)
   other_columns <- setdiff(seq_len(column_n), key_columns)
   if (length(other_columns) == 0L) return(list(key_columns))
 
@@ -380,7 +388,7 @@
     current <- c(current, column)
   }
   if (length(current) > 0L) chunks[[length(chunks) + 1L]] <- current
-  lapply(chunks, function(indices) unique(c(key_columns, indices)))
+  lapply(chunks, function(indices) sort(unique(c(key_columns, indices))))
 }
 
 .mira_report_latex_alignment_long <- function(x) {
@@ -1503,9 +1511,12 @@
 #' @param max_table_columns A finite numeric scalar greater than or equal to
 #'   two, converted to an integer for rendering. It is an upper bound per
 #'   displayed table block, not a request to discard columns. Wide tables are
-#'   split into blocks and the first one or two columns, typically identifiers,
-#'   are repeated. Width heuristics can produce smaller blocks; PDF blocks are
-#'   capped at eight columns and non-HTML, non-LaTeX blocks at seven.
+#'   split into blocks. Comparison tables repeat \code{from}, \code{to} and
+#'   any \code{arm}, \code{arm_a}, \code{arm_b} identifiers when the column limit
+#'   leaves room for these keys and a statistic; otherwise the first one or
+#'   two columns, typically identifiers, are repeated. Columns retain their
+#'   original relative order. Width heuristics can produce smaller blocks;
+#'   PDF blocks are capped at eight columns and non-HTML, non-LaTeX blocks at seven.
 #' @param digits A finite numeric scalar from 1 through 10, converted to an
 #'   integer. It controls numeric display precision in tables. Recognized
 #'   numeric p-value columns below \code{10^-digits} are displayed as less than

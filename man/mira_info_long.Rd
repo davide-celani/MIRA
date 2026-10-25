@@ -48,9 +48,10 @@ in \code{config$id_generated}.}
 \item{time_vars}{\code{NULL} (the default), a character vector of at least two
 longitudinal column names, or a list of such vectors, one per outcome. All
 selected columns must exist, be numeric, and be distinct within each outcome
-group. A named list uses its element names as outcome names. For an unnamed
-list, \code{outcomes} may supply one name per element; otherwise names are
-inferred from the columns where possible. A character vector whose names
+group. Non-empty list-element names explicitly declare outcome names,
+including in a partially named list. Unnamed elements use corresponding
+\code{outcomes} names when supplied; otherwise their names are inferred from
+the columns where possible. A character vector whose names
 all parse into more than one outcome family is split into those families.
 With \code{NULL}, all unambiguous automatically detected outcome groups are used.
 Explicit groups are ordered by parsed time values when every value is
@@ -170,7 +171,7 @@ outcome names, unique after case-and-punctuation normalization. \code{NULL} and
 \code{"auto"} select all unambiguous detected groups. Explicit names select
 detected groups by normalized name, label an explicitly supplied single
 \code{time_vars} group, or provide labels for an unnamed \code{time_vars} list. As a
-compatibility convenience, when \code{time_vars} is \code{NULL} and \code{outcomes}
+column-selection convenience, when \code{time_vars} is \code{NULL} and \code{outcomes}
 contains at least two values that are all column names, those values are
 treated as \code{time_vars} rather than as outcome-family names. The
 implementation also accepts \code{character(0)} as an explicit selection and
@@ -237,8 +238,7 @@ With \code{inspect_only = TRUE}, the result has classes \code{mira_detect_long} 
 and contains:
 
 \describe{
-\item{call, version}{The matched call and output-schema version, currently
-\code{"4.0.0"}.}
+\item{call}{The matched call.}
 \item{config}{Resolved ID, outcome groups, ordered time variables and
 labels, arm/reference, covariates, improvement directions, thresholds,
 optional-analysis switches, provenance, sources, and alternatives.}
@@ -253,8 +253,7 @@ A successful single-outcome analysis has classes \code{mira_info_long} and \code
 Its important top-level components are:
 
 \describe{
-\item{call, version}{The matched public call and output-schema version,
-currently \code{"4.0.0"}.}
+\item{call}{The matched public call.}
 \item{settings, overview}{Outcome-specific settings and sample,
 completeness, timepoint, covariate, and arm summaries.}
 \item{outcome, outcome_display, time_vars, time_labels}{Outcome identifiers
@@ -288,8 +287,8 @@ model-comparison table and paths to available fit objects.}
 \item{effect_sizes}{Paired Cohen's \code{dz}, paired rank-biserial correlations,
 ANOVA eta-squared measures, Kendall's W, mixed-model R-squared modules,
 and model ICC where available.}
-\item{multiplicity}{Contrast-family tables, available adjustments, and
-source-object paths.}
+\item{multiplicity}{Contrast-family metadata, available adjustments, and
+source-object paths to canonical contrast tables.}
 \item{sensitivity}{A method-by-scientific-question table for time, arm, and
 interaction tests, with raw p-values and source paths.}
 \item{outliers}{A note and optional IQR-flag tables \code{by_time} and \code{change}.}
@@ -304,12 +303,10 @@ time variable, ordered index and label, arm, value, and selected
 covariates.}
 \item{config, data_overview, detected_variables, diagnostics}{Resolved
 configuration, detection evidence, and per-outcome adaptations.}
-\item{outcomes}{A one-element outcome-indexed list, permitting the same
-access convention as multi-outcome results.}
 }
 
 A multi-outcome result has classes \code{mira_info_multi_long}, \code{mira_info_long}, and \code{list}.
-Its top level contains \code{call}, \code{version}, \code{config}, \code{data_overview},
+Its top level contains \code{call}, \code{config}, \code{data_overview},
 \code{detected_variables}, \code{diagnostics}, and the outcome-indexed \code{outcomes} list.
 Each successful element of \code{outcomes} is an outcome-specific \code{mira_info_long}
 object with the components above. A failed element has classes
@@ -334,6 +331,83 @@ suite of longitudinal models. Results are returned as structured objects for
 programmatic use; printing is only a presentation layer.
 }
 \details{
+\subsection{Metric names and their provenance}{
+
+Each outcome metric has one canonical base name. When the public call
+declares an outcome name, its final name is \code{paste0(declared_name, "_", base)};
+otherwise it is the unchanged base name. For example, \code{mean}, \code{sd}, and
+\code{mean_change} become \code{Energy_mean}, \code{Energy_sd}, and \code{Energy_mean_change}
+with \code{outcomes = "Energy"}, and \code{Sleep_index_mean}, \code{Sleep_index_sd}, and
+\code{Sleep_index_mean_change} with \code{outcomes = "Sleep_index"}. These are
+applications of one rule to arbitrary supported names. Capitalization,
+spaces, underscores, and words such as \code{mean} in declared names are retained.
+
+A non-selector \code{outcomes} value declares a name when it selects an outcome
+family, labels one manual group, or labels elements of an unnamed
+\code{time_vars} list. A non-empty \code{time_vars} list-element name also declares a
+name. In contrast, \code{NULL}, \code{"auto"}, a vector of temporal source columns,
+source-column selection through \code{outcomes}, automatic detection, and a
+custom \code{variable_pattern} infer names. Naming the source columns does not
+declare the outcome name. With partially named lists, named and unnamed
+groups independently follow the explicit and inferred rules. Explicit
+\code{outcomes} selections take precedence over list labels.
+
+\code{config$outcome_names} is indexed in outcome order. Each entry records the
+container \code{key}, exact \code{declared} name (\code{NULL} when inferred), \code{source}
+(\code{"outcomes"}, \code{"time_vars_names"}, or \code{"inferred"}), and display \code{label}.
+A display label is never used as a metric prefix. Provenance survives the
+analysis wrapper and the \code{data} workflow of \code{\link[=mira_report_freq_long]{mira_report_freq_long()}}.
+Declared names that collide after the existing case-and-punctuation
+matching normalization produce an explicit error. Metric-name collisions
+also produce an error instead of overwriting fields.
+
+Result tables carry a \code{mira_metric_names} attribute: a named character
+vector mapping canonical metric bases to actual field names. It contains
+references only, never copies of results. Identifiers, time/group labels,
+source-column names, sample sizes and availability counts remain structural
+fields. Outcome estimates, dispersion, confidence limits, effect sizes,
+test statistics, p-values and numerical model diagnostics use the metric
+convention in MIRA-owned result summaries. Raw and adjusted p-values,
+counts and percentages, variance and standard deviation, and preferred and
+method-specific ICCs remain distinct. Fitted models, their native summaries,
+native analysis tables and plot objects keep their external contracts.
+In particular, native \code{summary_emm}, \code{afex}, \code{anova}, \code{nlme}, and
+\code{clubSandwich} structures are preserved; MIRA-owned adjusted contrast,
+standardized ANOVA/Friedman/GEE and coefficient tables use the rule above.
+Correlation matrix dimensions remain source-column names. Direction and
+clinical-direction labels are categorical states. The long-data \code{value}
+column is the observed source response, while its derived \code{patient_mean}
+follows the metric convention. Detection profiles describe source columns
+and are not outcome-metric tables.
+}
+
+\subsection{Structure and semantic order}{
+
+Existing result components are ordered as context and configuration,
+dataset overview and availability, descriptives, changes and comparisons,
+statistical analyses and models, robustness and diagnostics, then plots
+and supporting data. A single outcome is stored directly in the result;
+multiple outcomes are indexed under \code{outcomes} in declared/resolved order.
+Each successful outcome uses the same internal component paths. Generic
+metrics for different inferred outcomes remain distinct through this index.
+
+Within each table family, identifying fields precede availability, estimates
+and dispersion, standard errors and lower/upper confidence limits, effect
+sizes, and tests with their raw/adjusted p-values. Related category counts
+and percentages remain adjacent. Ordering uses canonical metric meanings,
+so adding an outcome prefix does not change relative metric order. Rows
+retain resolved chronology, comparison orientation, group levels and subject
+associations. Empty and unavailable results retain their existing distinction
+between an empty table, \code{NULL}, and a skipped module.
+
+Outcome-prefixed copies of generic values are not retained. Multiplicity
+entries contain family metadata and \code{object_path} references to the canonical
+contrast tables; they do not duplicate those tables. GEE coefficient summaries
+retain their robust standard error once as the canonical \code{robust_se} metric.
+Repeated-measures ANOVA records its subject count as \code{n_subjects}. Contextual
+effect-size summaries, baseline-only comparisons and the preferred ICC remain
+available because they describe different summaries or selection rules.
+
 \code{mira_info_long()} first validates global arguments and resolves the analysis
 configuration. It groups repeated-measure columns by parsed outcome name,
 orders their timepoints, resolves or generates an ID, selects an arm and
@@ -362,6 +436,7 @@ available, failures become \code{mira_info_error_long} entries, and one warning 
 the failed outcomes. Missing optional packages and most advanced-model
 failures instead produce structured skipped modules with \code{performed = FALSE},
 an error or \code{reason_skipped}, and any captured warnings.
+}
 }
 \section{Input data and longitudinal naming}{
 
@@ -437,8 +512,8 @@ branch is stored under \code{advanced_tests$friedman} and is attempted even when
 \code{model = FALSE}.
 For this global test, \code{performed = TRUE} means finite, estimable inference.
 Entirely tied complete profiles instead have \code{performed = FALSE}, an
-explicit \code{reason_skipped}, and \code{NA} inferential fields in \code{tidy}/\code{summary}.
-The raw engine object is retained in \code{test}/\code{object} for diagnosis; pairwise
+explicit \code{reason_skipped}, and \code{NA} inferential fields in \code{tidy}.
+The raw engine object is retained in \code{test} for diagnosis; pairwise
 post-hoc tests retain their own pairwise-complete samples and diagnostics.
 }
 
@@ -446,7 +521,7 @@ The complete-profile ANOVA ICC is
 \code{(MS_between - MS_within) / (MS_between + (k - 1) * MS_within)}, where \code{k} is
 the number of selected timepoints. The model ICC, when available, is the
 random-intercept variance divided by the sum of random-intercept and residual
-variances; \code{variability$ICC} prefers this estimate and otherwise uses the
+variances; the \code{ICC} metric in \code{variability} prefers this estimate and otherwise uses the
 ANOVA estimate.
 
 Requested correlations, IQR flags, plots, arm analyses, and model-based
@@ -611,6 +686,15 @@ entry during a multi-outcome call.
 }
 
 \examples{
+# Resolve field references from canonical bases in either naming convention.
+metric_columns_long <- function(table, base) {
+  map <- attr(table, "mira_metric_names", exact = TRUE)
+  index <- match(base, names(map))
+  mapped <- !is.na(index)
+  base[mapped] <- unname(map[index[mapped]])
+  base
+}
+
 # ------------------------------------------------------------------
 # Example 1: Minimal automatic workflow
 # ------------------------------------------------------------------
@@ -649,21 +733,21 @@ data.frame(
   variable = auto_fit$time_vars,
   label = unname(auto_fit$time_labels)
 )
-utils::head(auto_fit$long_data[, c(
+utils::head(auto_fit$long_data[, metric_columns_long(auto_fit$long_data, c(
   "patient", "outcome", "time", "time_index", "time_label", "value"
-)])
+))])
 
 # Per-timepoint availability and descriptive statistics.
-auto_fit$descriptives[, c(
+auto_fit$descriptives[, metric_columns_long(auto_fit$descriptives, c(
   "label", "n", "missing", "mean", "sd", "ci_lower", "ci_upper"
-)]
+))]
 
 # Every ordered to-minus-from comparison is in $change. The adjusted columns
 # belong to the paired-t and paired-Wilcoxon families, respectively.
-auto_fit$change[, c(
+auto_fit$change[, metric_columns_long(auto_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "cohens_dz",
   "paired_t_p", "paired_t_p_adj", "wilcoxon_p_adj"
-)]
+))]
 
 # Select the clinically common baseline-to-final row without relying on row
 # position. This remains reliable if more visits are added later.
@@ -673,29 +757,31 @@ baseline_final <- auto_fit$change[
   ,
   drop = FALSE
 ]
-baseline_final[, c(
+baseline_final[, metric_columns_long(baseline_final, c(
   "n", "mean_from", "mean_to", "mean_change", "ci_lower", "ci_upper"
-)]
+))]
 
 # Variability and the preferred available ICC are kept in a one-row table.
-auto_fit$variability[, c(
+auto_fit$variability[, metric_columns_long(auto_fit$variability, c(
   "between_subject_sd", "within_subject_sd",
   "ICC_anova_complete_profiles", "ICC_model", "ICC"
-)]
+))]
 
 # $trajectories contains one baseline-to-final record per input row.
-utils::head(auto_fit$trajectories[, c(
+utils::head(auto_fit$trajectories[, metric_columns_long(auto_fit$trajectories, c(
   "patient", "baseline", "final", "absolute_change", "direction"
-)])
+))])
 table(auto_fit$trajectories$direction, useNA = "ifany")
 
 # Friedman is attempted with base R even though model fitting was disabled.
-auto_fit$advanced_tests$friedman$tidy[, c(
+auto_fit$advanced_tests$friedman$tidy[,
+  metric_columns_long(auto_fit$advanced_tests$friedman$tidy, c(
   "statistic", "df", "p_raw", "kendalls_w", "n", "n_timepoints"
-)]
-auto_fit$advanced_tests$friedman$posthoc$tidy[, c(
+))]
+auto_fit$advanced_tests$friedman$posthoc$tidy[,
+  metric_columns_long(auto_fit$advanced_tests$friedman$posthoc$tidy, c(
   "from_label", "to_label", "n", "p_raw", "p_holm", "rank_biserial"
-)]
+))]
 
 # ------------------------------------------------------------------
 # Example 2: Audit what mira_info_long() detected before fitting anything
@@ -754,12 +840,15 @@ detected$config$auto_detected
 detected$config$specified_manually
 detected$config$sources
 detected$config$alternatives
+# Per-outcome name provenance is separate from manual column selection.
+detected$config$outcome_names
 
 # The parsed map is the compact audit trail for outcome grouping and time
 # ordering. Candidate tables and covariate classes explain the other choices.
-detected$detected_variables$longitudinal_map[, c(
+detected$detected_variables$longitudinal_map[,
+  metric_columns_long(detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern", "numeric"
-)]
+))]
 detected$detected_variables$id_candidates
 detected$detected_variables$arm_candidates
 detected$detected_variables$covariates_numeric
@@ -812,10 +901,10 @@ explicit_fit$config$specified_manually[c(
 )]
 explicit_fit$change[
   explicit_fit$change$from == "pre" & explicit_fit$change$to == "final",
-  c(
+  metric_columns_long(explicit_fit$change, c(
     "from_label", "to_label", "n", "mean_change",
     "improved_n", "stable_n", "worsened_n", "paired_t_p_adj"
-  ),
+  )),
   drop = FALSE
 ]
 
@@ -850,9 +939,10 @@ regex_detected <- mira_info_long(
   inspect_only = TRUE,
   verbose = FALSE
 )
-regex_detected$detected_variables$longitudinal_map[, c(
+regex_detected$detected_variables$longitudinal_map[,
+  metric_columns_long(regex_detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern"
-)]
+))]
 regex_detected$config$time_vars[["pain"]]
 regex_detected$config$time_labels[["pain"]]
 
@@ -871,7 +961,8 @@ data.frame(
 regex_fit$change[
   regex_fit$change$from == regex_fit$time_vars[[1L]] &
     regex_fit$change$to == regex_fit$time_vars[[length(regex_fit$time_vars)]],
-  c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj"),
+  metric_columns_long(regex_fit$change,
+    c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj")),
   drop = FALSE
 ]
 
@@ -897,33 +988,36 @@ arm_fit$arm_analysis[c("enabled", "arm_variable", "reference_arm", "levels")]
 
 # Values are compared between arms at every visit. The column name states the
 # direction exactly: mean_difference_b_minus_a is arm_b minus arm_a.
-arm_fit$arm_analysis$time_pairwise[, c(
+arm_fit$arm_analysis$time_pairwise[, metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
   "time_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_difference_b_minus_a", "ci_lower", "ci_upper",
   "welch_t_p", "welch_t_p_adj"
-)]
+))]
 
 # Baseline balance is the first-timepoint subset; omnibus p-values form their
 # own across-time families and therefore have their own adjusted columns.
-arm_fit$arm_analysis$baseline_balance[, c(
+arm_fit$arm_analysis$baseline_balance[,
+  metric_columns_long(arm_fit$arm_analysis$baseline_balance, c(
   "arm_a", "arm_b", "mean_difference_b_minus_a", "welch_t_p_adj"
-)]
-arm_fit$arm_analysis$time_omnibus[, c(
+))]
+arm_fit$arm_analysis$time_omnibus[, metric_columns_long(arm_fit$arm_analysis$time_omnibus, c(
   "time_label", "n", "welch_anova_p", "welch_anova_p_adj",
   "kruskal_p_adj"
-)]
+))]
 
 # Change comparisons are baseline-to-follow-up differences. Here a negative
 # difference_in_change_b_minus_a means a larger reduction in Treatment.
-arm_fit$arm_analysis$change_pairwise[, c(
+arm_fit$arm_analysis$change_pairwise[,
+  metric_columns_long(arm_fit$arm_analysis$change_pairwise, c(
   "to_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_change_a", "mean_change_b", "difference_in_change_b_minus_a",
   "ci_lower", "ci_upper", "welch_t_p_adj"
-)]
-arm_fit$arm_analysis$change_descriptives[, c(
+))]
+arm_fit$arm_analysis$change_descriptives[,
+  metric_columns_long(arm_fit$arm_analysis$change_descriptives, c(
   "arm", "to_label", "n", "mean_change",
   "improved_n", "stable_n", "worsened_n"
-)]
+))]
 
 \donttest{
 # ------------------------------------------------------------------
@@ -962,7 +1056,8 @@ if (requireNamespace("lme4", quietly = TRUE)) {
   adjusted_fit$model$global_time_test
   adjusted_fit$model$global_arm_test
   adjusted_fit$model$arm_time_interaction_test
-  adjusted_fit$variability[, c("ICC_model", "ICC")]
+  adjusted_fit$variability[,
+  metric_columns_long(adjusted_fit$variability, c("ICC_model", "ICC"))]
 
   # ----------------------------------------------------------------
   # Example 7: Estimated marginal means and targeted contrasts
@@ -998,7 +1093,8 @@ if (requireNamespace("lme4", quietly = TRUE)) {
     compact_contrasts_long <- function(table) {
       if (is.null(table)) return(NULL)
       keep <- intersect(
-        c("contrast", "estimate", "SE", "df", "p_raw", "p_holm"),
+        metric_columns_long(table,
+          c("contrast", "estimate", "SE", "df", "p_raw", "p_holm")),
         names(table)
       )
       table[, keep, drop = FALSE]
@@ -1055,10 +1151,11 @@ if (requireNamespace("lme4", quietly = TRUE)) {
     adjusted_fit$advanced_models$gee$exchangeable$effect_tests
   }
   if (advanced_status[["random_slope"]]) {
-    adjusted_fit$advanced_models$random_slope[c(
+    slope_result <- adjusted_fit$advanced_models$random_slope
+    slope_result[metric_columns_long(slope_result, c(
       "formula", "converged", "singular",
       "random_intercept_slope_correlation"
-    )]
+    ))]
   }
   if (advanced_status[["nlme_compound_symmetry"]] ||
       advanced_status[["nlme_ar1"]]) {
@@ -1071,37 +1168,39 @@ if (requireNamespace("lme4", quietly = TRUE)) {
   # Likelihood criteria and GEE QIC/CIC are retained on different scales.
   model_comparison <- adjusted_fit$advanced_models$model_comparison
   if (is.data.frame(model_comparison) && nrow(model_comparison) > 0L) {
-    model_comparison[, c(
+    model_comparison[, metric_columns_long(model_comparison, c(
       "model", "AIC", "BIC", "QIC", "CIC", "converged", "singular",
       "object_path"
-    )]
+    ))]
   }
 
   # Effect-size and multiplicity objects point back to their source families.
   paired_dz <- adjusted_fit$effect_sizes$paired_cohens_dz
   if (!is.null(paired_dz)) {
-    paired_dz[, c("from_label", "to_label", "n", "cohens_dz")]
+    paired_dz[, metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))]
   }
-  friedman_family <- adjusted_fit$multiplicity$friedman_posthoc$table
+  # Multiplicity metadata references these canonical tables without copies.
+  adjusted_fit$multiplicity$friedman_posthoc$object_path
+  friedman_family <- adjusted_fit$advanced_tests$friedman$posthoc$tidy
   if (!is.null(friedman_family)) {
-    friedman_family[, c(
+    friedman_family[, metric_columns_long(friedman_family, c(
       "from_label", "to_label", "p_raw", "p_holm", "p_bh"
-    )]
+    ))]
   }
   if (isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
-    time_family <- adjusted_fit$multiplicity$time_pairwise$table
+    time_family <- adjusted_fit$advanced_tests$emmeans$time$pairwise_tidy
     if (!is.null(time_family)) {
-      time_family[, c("contrast", "p_raw", "p_holm", "p_bh")]
+      time_family[, metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))]
     }
   }
 
   # Sensitivity rows align methods by scientific question and give the exact
   # source path. They may use different samples or hypotheses, so this table
   # must not be interpreted as a vote among p-values.
-  adjusted_fit$sensitivity[, c(
+  adjusted_fit$sensitivity[, metric_columns_long(adjusted_fit$sensitivity, c(
     "question", "method", "statistic", "df", "p_raw", "effect_size",
     "effect_size_type", "n", "object_path"
-  )]
+  ))]
 }
 }
 
@@ -1165,16 +1264,17 @@ baseline_to_final_long <- function(result) {
   result$change[
     result$change$from == result$time_vars[[1L]] &
       result$change$to == result$time_vars[[length(result$time_vars)]],
-    c(
+    metric_columns_long(result$change, c(
       "from_label", "to_label", "n", "mean_change",
       "improved_n", "stable_n", "worsened_n"
-    ),
+    )),
     drop = FALSE
   ]
 }
 lapply(
   multi_fit$outcomes,
-  function(result) result$descriptives[, c("label", "n", "mean", "sd")]
+  function(result) result$descriptives[,
+  metric_columns_long(result$descriptives, c("label", "n", "mean", "sd"))]
 )
 lapply(multi_fit$outcomes, baseline_to_final_long)
 
@@ -1192,7 +1292,9 @@ response_counts_long <- function(result) {
   lapply(
     result$outcomes,
     function(outcome_result) {
-      table(outcome_result$trajectories$clinical_direction, useNA = "ifany")
+      trajectory <- outcome_result$trajectories
+      table(trajectory[[metric_columns_long(trajectory, "clinical_direction")]],
+            useNA = "ifany")
     }
   )
 }
@@ -1233,9 +1335,9 @@ missing_fit <- mira_info_long(
 missing_fit$overview[c(
   "n_patients", "complete_profiles", "complete_profiles_pct"
 )]
-missing_fit$descriptives[, c(
+missing_fit$descriptives[, metric_columns_long(missing_fit$descriptives, c(
   "label", "n", "missing", "non_finite", "unavailable"
-)]
+))]
 missing_fit$missing$by_time
 
 # Identify affected subjects without printing all rows.
@@ -1244,10 +1346,12 @@ missing_fit$missing$by_patient[affected, , drop = FALSE]
 
 # Each paired comparison has its own pairwise-complete N. Friedman instead
 # uses complete profiles across all visits, reported in its tidy row.
-missing_fit$change[, c(
+missing_fit$change[, metric_columns_long(missing_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "paired_t_p_adj"
-)]
-missing_fit$advanced_tests$friedman$tidy[, c("n", "n_timepoints", "p_raw")]
+))]
+missing_fit$advanced_tests$friedman$tidy[,
+  metric_columns_long(missing_fit$advanced_tests$friedman$tidy,
+    c("n", "n_timepoints", "p_raw"))]
 
 # Per-outcome adaptation records show usable counts and any requested module
 # disabled because of insufficient data.

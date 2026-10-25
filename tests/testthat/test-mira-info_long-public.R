@@ -96,9 +96,9 @@ test_that("inspection reports resolved configuration and exits before analysis",
   x <- visible$value
   expect_s3_class(x, "mira_detect_long")
   expect_identical(class(x), c("mira_detect_long", "list"))
-  expect_named(x, c("call", "version", "config", "data_overview",
+  expect_named(x, c("call", "config", "data_overview",
                     "detected_variables", "diagnostics"))
-  expect_identical(x$version, "4.0.0")
+  expect_false("version" %in% names(x))
   expect_identical(x$config$id, "subject_id")
   expect_false(x$config$id_generated)
   expect_identical(x$config$outcomes, "pain")
@@ -269,8 +269,8 @@ test_that("single and multi-outcome public results have stable shape", {
   single <- mira_info_long(data, id = "subject_id", analyses = "none", verbose = FALSE,
                       covariates = character(0))
   expect_s3_class(single, "mira_info_long")
-  expect_identical(single$version, "4.0.0")
-  expect_named(single$outcomes, "pain")
+  expect_false("version" %in% names(single))
+  expect_false("outcomes" %in% names(single))
   expect_true(all(c("descriptives", "missing", "change", "variability",
                     "trajectories", "long_data", "config", "diagnostics") %in% names(single)))
   expect_identical(single$overview$n_patients, 8L)

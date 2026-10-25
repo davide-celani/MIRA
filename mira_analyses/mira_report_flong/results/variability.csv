@@ -1,0 +1,2 @@
+"outcome","symptom_grand_mean","symptom_between_subject_sd","symptom_within_subject_sd","symptom_ICC","symptom_ICC_model","symptom_ICC_anova_complete_profiles","symptom_ms_between","symptom_ms_within","symptom_df_between","symptom_df_within"
+"symptom",27.9819044614593,5.43564322596726,1.81081497241215,0.958547051357388,0.958547051357388,0.85123010802005,88.6386518400111,4.8795399766548,41,84

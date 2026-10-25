@@ -272,7 +272,7 @@ test_that("mira_info_long keeps Friedman inference while model-based modules are
     score_t1 = c(2, 4, 3, 5, 7, 6),
     score_t2 = c(4, 5, 6, 7, 8, 9)
   )
-  result <- mira_info_long(
+  result <- mira_test_info_base(
     data, id = "patient", time_vars = c("score_t0", "score_t1", "score_t2"),
     outcomes = "score", analyses = "none", verbose = FALSE
   )
@@ -303,7 +303,7 @@ test_that("mira_info_long fits the main and advanced models on sufficient repeat
     score_t1 = c(4, 6, 5, 6, 8, 9, 7, 10, 8, 11, 9, 12),
     score_t2 = c(6, 7, 7, 8, 9, 11, 8, 12, 10, 13, 11, 14)
   )
-  result <- mira_info_long(
+  result <- mira_test_info_base(
     data, id = "patient", time_vars = c("score_t0", "score_t1", "score_t2"),
     outcomes = "score", analyses = "model", verbose = FALSE
   )
@@ -326,7 +326,7 @@ test_that("mira_info_long fits the main and advanced models on sufficient repeat
   ])))
   expect_s3_class(result$sensitivity, "data.frame")
   expect_identical(result$multiplicity$primary_method, "holm")
-  expect_equal(result$multiplicity$friedman_posthoc$table$p_primary,
+  expect_equal(MIRA:::.mira_result_path_long(result, result$multiplicity$friedman_posthoc$object_path)$p_primary,
                stats::p.adjust(result$advanced_tests$friedman$posthoc$tidy$p_raw,
                                method = "holm"))
   # On these complete repeated data, base geepack::geeglm() can estimate the
@@ -335,7 +335,7 @@ test_that("mira_info_long fits the main and advanced models on sufficient repeat
 
   fixture <- mira_advanced_asymmetric_fixture()
   reference <- fixture$reference
-  asymmetric <- mira_info_long(
+  asymmetric <- mira_test_info_base(
     fixture$data, id = "subject_id", outcomes = "score",
     time_vars = fixture$time_vars, time_labels = fixture$labels,
     arm = "arm", reference_arm = "Z_control", covariates = "x",
@@ -491,7 +491,7 @@ test_that("blank categorical covariates use the same subjects across model famil
   for (as_factor in c(FALSE, TRUE)) {
     input <- data
     if (as_factor) input$sex <- factor(input$sex)
-    result <- mira_info_long(input, id = "patient", outcomes = "score",
+    result <- mira_test_info_base(input, id = "patient", outcomes = "score",
                         covariates = "sex", analyses = "model", verbose = FALSE)
 
     expect_equal(result$overview$n_patients, 12L)

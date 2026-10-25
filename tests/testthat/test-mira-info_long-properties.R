@@ -19,7 +19,7 @@ mira_info_property_run <- function(data, ...) {
   )
   dots <- list(...)
   args[names(dots)] <- dots
-  do.call(mira_info_long, args)
+  do.call(mira_test_info_base, args)
 }
 
 mira_info_property_order <- function(x, by) {
@@ -254,7 +254,7 @@ test_that("moderate deterministic data complete with structural and numerical sa
     check.names = FALSE
   )
 
-  result <- mira_info_long(
+  result <- mira_test_info_base(
     data,
     id = "patient_id",
     outcomes = "score",

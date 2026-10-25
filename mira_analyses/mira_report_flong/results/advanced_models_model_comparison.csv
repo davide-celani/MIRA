@@ -1,0 +1,8 @@
+"model","formula","correlation_structure","n","n_subjects","symptom_AIC","symptom_BIC","symptom_logLik","symptom_QIC","symptom_CIC","converged","singular","object_path"
+"mixed_random_intercept","value ~ time_factor + (1 | patient_factor)","random intercept",126,42,573.063448570921,587.244858105679,-281.531724285461,,,TRUE,FALSE,"$model$fitted_model"
+"mixed_random_slope","value ~ time_factor + (1 + time_ordinal | patient_factor)","random intercept + ordinal-time slope",126,42,575.429705650601,595.283678999261,-280.7148528253,,,FALSE,TRUE,"$advanced_models$random_slope$model"
+"nlme_compound_symmetry","value ~ time_factor","compound symmetry",126,42,575.063448570921,591.936554703156,-281.531724285461,,,TRUE,,"$advanced_models$nlme$compound_symmetry$model"
+"nlme_ar1","value ~ time_factor","AR(1)",126,42,574.849843931725,591.722950063959,-281.424921965862,,,TRUE,,"$advanced_models$nlme$ar1$model"
+"gee_independence","value ~ time_factor","independence",126,42,,,,3743.47085069773,2.99999999999999,TRUE,,"$advanced_models$gee$independence$model"
+"gee_exchangeable","value ~ time_factor","exchangeable",126,42,,,,3743.47085069773,2.99999999999999,TRUE,,"$advanced_models$gee$exchangeable$model"
+"gee_ar1","value ~ time_factor","ar1",126,42,,,,3743.47085069773,3,TRUE,,"$advanced_models$gee$ar1$model"

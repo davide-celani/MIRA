@@ -163,7 +163,7 @@ test_that("performed FALSE is authoritative while performed TRUE preserves empty
   expect_identical(nrow(node$children$tidy$value), 0L)
 })
 
-test_that("equivalent aliases and duplicate model objects appear only once", {
+test_that("equal values do not establish semantic duplication in arbitrary modules", {
   cfg <- report_test_cfg()
   shared <- data.frame(term = c("time", "arm"), estimate = c(1.5, -0.25))
   different <- data.frame(term = "interaction", estimate = 0.75)
@@ -175,7 +175,8 @@ test_that("equivalent aliases and duplicate model objects appear only once", {
     coefficient_tests = different
   )
   node <- .mira_report_prune_long(module, "module", "outcome$advanced_tests$module", cfg)
-  expect_identical(names(node$children), c("summary", "fixed_effects"))
+  expect_identical(names(node$children),
+                   c("summary", "tidy", "fixed_effects", "coefficient_tests"))
   expect_identical(node$children$summary$value, shared)
   expect_identical(node$children$fixed_effects$value, different)
 
@@ -191,7 +192,7 @@ test_that("equivalent aliases and duplicate model objects appear only once", {
     list(performed = TRUE, model = fitted, object = fitted),
     "fit", "outcome$advanced_models$fit", cfg
   )
-  expect_named(model_node$children, "model")
+  expect_named(model_node$children, c("model", "object"))
 })
 
 test_that("model comparison requires a nonblank fitted-object path", {
@@ -247,7 +248,7 @@ test_that("NLME keeps only genuinely fitted correlation structures", {
   expect_false("ar1" %in% names(node$children))
   expect_false("declared_without_fit" %in% names(node$children))
   expect_identical(node$children$comparison$value$model, "compound_symmetry")
-  expect_named(node$children$compound_symmetry$children, c("model", "summary"))
+  expect_named(node$children$compound_symmetry$children, c("model", "object", "summary"))
 
   unavailable <- nlme
   unavailable$performed <- FALSE
@@ -366,7 +367,6 @@ test_that("max_depth is enforced at the recursive boundary", {
 test_that("an empty mira_info_multi_long has no synthetic outcome", {
   empty_multi <- structure(
     list(
-      version = "4.0.0",
       config = list(id = "patient", outcomes = character()),
       data_overview = data.frame(records = 4L, variables = 3L),
       detected_variables = list(outcomes = character()),

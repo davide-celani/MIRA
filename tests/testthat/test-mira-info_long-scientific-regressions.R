@@ -21,11 +21,11 @@ test_that("response-derived and ordinal model columns cannot be adjustment covar
   for (name in reserved) {
     input <- data
     input[[name]] <- seq_len(nrow(input)) + 100
-    expect_error(mira_info_long(input, id = "subject_id", outcomes = "score",
+    expect_error(mira_test_info_base(input, id = "subject_id", outcomes = "score",
       covariates = name, inspect_only = TRUE, analyses = "none", verbose = FALSE),
       "reserved for internal", info = name)
   }
-  automatic <- mira_info_long(data, id = "subject_id", outcomes = "score",
+  automatic <- mira_test_info_base(data, id = "subject_id", outcomes = "score",
     inspect_only = TRUE, analyses = "none", verbose = FALSE)
   expect_identical(automatic$config$covariates, "age")
   expect_false(any(c("patient_mean", "time_ordinal") %in%
@@ -197,7 +197,7 @@ test_that("public CR2 diagnoses reduced and unavailable interaction hypotheses i
     if (no_interaction) input$score_t1[7:12] <- NA_real_
     # Missing arm-by-visit cells are legitimate public inputs. Only t1 has
     # both arms in the first case; neither follow-up does in the second.
-    result <- mira_info_long(input, id = "subject_id", outcomes = "score",
+    result <- mira_test_info_base(input, id = "subject_id", outcomes = "score",
       time_vars = c("score_t0", "score_t1", "score_t2"), arm = "arm",
       reference_arm = "control", covariates = character(0),
       analyses = c("model", "arm_tests"), verbose = FALSE)
@@ -384,7 +384,7 @@ test_that("rescaling an observed outcome preserves every GEE Wald hypothesis", {
 test_that("Friedman statistic and Kendall W have a hand-ranked tie-correction oracle", {
   data <- data.frame(subject_id = 1:4, score_t0 = c(1, 2, 6, 1),
     score_t1 = c(1, 4, 5, 2), score_t2 = c(3, 3, 5, 3))
-  result <- mira_info_long(data, id = "subject_id", outcomes = "score",
+  result <- mira_test_info_base(data, id = "subject_id", outcomes = "score",
     covariates = character(0), analyses = "none", verbose = FALSE)
   # Ranks: (1.5,1.5,3),(1,3,2),(3,1.5,1.5),(1,2,3).
   # Rank sums=(6.5,8,9.5), Q_uncorrected=9/8, tie correction=7/8,

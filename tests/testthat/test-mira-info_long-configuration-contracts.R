@@ -113,7 +113,7 @@ test_that("unnamed groups use requested outcome names with independent time labe
   expect_identical(result$config$outcomes, c("Pain score", "Stress score"))
   expect_identical(unname(result$config$time_labels[["Pain score"]]), c("Before", "After"))
   expect_identical(unname(result$config$time_labels[["Stress score"]]), c("Start", "End"))
-  expect_equal(result$outcomes[["Stress score"]]$trajectories$absolute_change,
+  expect_equal(result$outcomes[["Stress score"]]$trajectories[["Stress score_absolute_change"]],
                data$last - data$first)
   expect_error(config_contract_info(data, time_vars = groups, outcomes = "one"),
                "unnamed time_vars list requires one outcome per element")
@@ -433,9 +433,9 @@ test_that("custom parsing without temporal metadata preserves authoritative manu
   expect_identical(result$config$time_vars$score, c("score_t1", "score_t0"))
   expect_identical(result$time_vars, result$config$time_vars$score)
   expect_identical(unname(result$time_labels), c("Start", "End"))
-  expect_equal(result$change$mean_change, mean(data$score_t0 - data$score_t1))
-  expect_equal(result$trajectories$baseline, data$score_t1)
-  expect_equal(result$trajectories$final, data$score_t0)
+  expect_equal(result$change$score_mean_change, mean(data$score_t0 - data$score_t1))
+  expect_equal(result$trajectories$score_baseline, data$score_t1)
+  expect_equal(result$trajectories$score_final, data$score_t0)
   expect_identical(result$diagnostics$warnings, character(0))
 })
 

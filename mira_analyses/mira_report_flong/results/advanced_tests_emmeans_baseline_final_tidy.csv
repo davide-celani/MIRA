@@ -1,0 +1,2 @@
+"contrast","symptom_estimate","symptom_SE","symptom_df","symptom_lower.CL","symptom_upper.CL","symptom_t.ratio","symptom_p_raw","symptom_p_primary","symptom_p_bonferroni","symptom_p_holm","symptom_p_bh","symptom_p_by","primary_method"
+"final - baseline",-3.80628877387494,0.244908816029227,82.0000000000003,-4.29349042640823,-3.31908712134165,-15.5416568320705,3.66935606428181e-26,3.66935606428181e-26,3.66935606428181e-26,3.66935606428181e-26,3.66935606428181e-26,3.66935606428181e-26,"holm"

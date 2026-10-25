@@ -86,6 +86,6 @@ test_that("a report built from mira_info_long preserves the result and exports i
   expect_true("friedman" %in% names(nodes$advanced_tests$children))
   manifest <- utils::read.csv(report$results_manifest)
   expect_true("outcome$descriptives" %in% manifest$path)
-  expect_true("outcome$advanced_tests$friedman$summary" %in% manifest$path)
+  expect_true("outcome$advanced_tests$friedman$tidy" %in% manifest$path)
   expect_true(all(file.exists(report$result_files)))
 })

@@ -96,8 +96,8 @@ test_that("a real single-outcome result is preserved in payload and scientific C
       report, "outcome$descriptives", "score"
     )
     expect_equal(descriptives$n, fit$descriptives$n)
-    expect_equal(descriptives$mean, fit$descriptives$mean, tolerance = 1e-12)
-    expect_equal(descriptives$sd, fit$descriptives$sd, tolerance = 1e-12)
+    expect_equal(descriptives$score_mean, fit$descriptives$score_mean, tolerance = 1e-12)
+    expect_equal(descriptives$score_sd, fit$descriptives$score_sd, tolerance = 1e-12)
 
     missing <- report_integration_read_export(
       report, "outcome$missing$by_time", "score"
@@ -107,11 +107,11 @@ test_that("a real single-outcome result is preserved in payload and scientific C
                  fit$missing$by_time$unavailable_pct, tolerance = 1e-12)
 
     change <- report_integration_read_export(report, "outcome$change", "score")
-    expect_true(is.numeric(change$paired_t_p))
+    expect_true(is.numeric(change$score_paired_t_p))
     expect_equal(change$n, fit$change$n)
-    expect_equal(change$mean_change, fit$change$mean_change, tolerance = 1e-12)
-    expect_equal(change$paired_t_p, fit$change$paired_t_p, tolerance = 1e-12)
-    expect_false(any(grepl("<", as.character(change$paired_t_p), fixed = TRUE)))
+    expect_equal(change$score_mean_change, fit$change$score_mean_change, tolerance = 1e-12)
+    expect_equal(change$score_paired_t_p, fit$change$score_paired_t_p, tolerance = 1e-12)
+    expect_false(any(grepl("<", as.character(change$score_paired_t_p), fixed = TRUE)))
   })
 })
 
@@ -346,9 +346,9 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
     # displayed place is the rounding bound, distinct from numerical tolerance.
     expect_identical(descriptives$time, names(raw))
     expect_equal(as.numeric(descriptives$n), rep(6, 3), tolerance = 0)
-    expect_true(all(abs(as.numeric(descriptives$mean) - vapply(raw, mean, numeric(1L))) <=
+    expect_true(all(abs(as.numeric(descriptives[["score mean"]]) - vapply(raw, mean, numeric(1L))) <=
                       0.0005000001))
-    expect_true(all(abs(as.numeric(descriptives$sd) - vapply(raw, stats::sd, numeric(1L))) <=
+    expect_true(all(abs(as.numeric(descriptives[["score sd"]]) - vapply(raw, stats::sd, numeric(1L))) <=
                       0.0005000001))
     change <- report_test_html_table(html, "Within-participant changes")
     report_test_contrast_keys(change, names(raw))
@@ -358,8 +358,8 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
       statistic <- mean(differences) / (stats::sd(differences) / sqrt(length(differences)))
       expected_p <- 2 * stats::pt(-abs(statistic), df = length(differences) - 1L)
       expected_label <- if (expected_p < 0.001) "<0.001" else sprintf("%.3f", expected_p)
-      expect_identical(change[["paired t p"]][[i]], expected_label)
-      expect_lte(abs(as.numeric(change[["mean change"]][[i]]) - mean(differences)),
+      expect_identical(change[["score paired t p"]][[i]], expected_label)
+      expect_lte(abs(as.numeric(change[["score mean change"]][[i]]) - mean(differences)),
                   0.0005000001)
     }
     references <- regmatches(html, gregexpr("(?:src|href)=[\"'][^\"']*[\"']", html,
@@ -372,7 +372,7 @@ test_that("Quarto renders a minimal HTML report when its package and CLI are ava
 test_that("Quarto DOCX output contains scientific table cells", {
   report_test_require_quarto()
   data <- report_test_inference_data()
-  fit <- report_integration_fit(data, alpha = 0.10)
+  fit <- report_integration_fit(data, outcomes = NULL, alpha = 0.10)
   report_integration_with_dir(function(output_dir) {
     report <- report_test_run(
       fit, output_dir = output_dir, format = "docx", sections = c("descriptives", "change"),

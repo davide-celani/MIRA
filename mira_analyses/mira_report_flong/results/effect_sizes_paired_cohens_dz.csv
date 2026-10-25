@@ -1,0 +1,4 @@
+"from","from_label","to","to_label","n","symptom_cohens_dz"
+"pre","Baseline","week4","Week 4",42,-2.02736607382602
+"pre","Baseline","final","Week 12",42,-2.47255838807641
+"week4","Week 4","final","Week 12",42,-0.804912089325353

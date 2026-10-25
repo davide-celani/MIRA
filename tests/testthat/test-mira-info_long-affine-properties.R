@@ -8,7 +8,7 @@ affine_info_data <- function() {
 
 affine_info_run <- function(data, direction = "higher", threshold = 0.5,
                             reference = "control") {
-  mira_info_long(data, id = "subject_id", outcomes = "score",
+  mira_test_info_base(data, id = "subject_id", outcomes = "score",
     time_vars = c("score_t0", "score_t1", "score_t2"),
     time_labels = c("Base", "Mid", "Final"), arm = "arm", reference_arm = reference,
     covariates = character(0), improvement_direction = direction,

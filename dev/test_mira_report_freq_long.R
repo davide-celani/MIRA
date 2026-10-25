@@ -101,8 +101,7 @@ correlation_run <- run_example("02_correlations", correlation_fit,
                                absent = c("outcome\\$arm_analysis\\$", "outcome\\$outliers\\$"))
 
 # 3. Two arms and a categorical gender covariate, with all available analyses.
-# This case exercises the classed ANOVA and covariance matrices that previously
-# caused a CSV export error in R 4.4.
+# This case exercises export of classed ANOVA and covariance matrices.
 set.seed(202601)
 n <- 48L
 arm <- factor(rep(c("Control", "Treatment"), each = n / 2),
@@ -175,10 +174,12 @@ sparse_run <- run_example("05_sparse_data", sparse_fit,
 # 6. A new result not known to the report's label map. The adaptive traversal
 # should still display and export its table without changing report code.
 extended_fit <- core_fit
-extended_fit$outcomes[[1L]]$new_analysis <- list(
+extended_fit$new_analysis <- list(
   results = data.frame(metric = c("A", "B"), estimate = c(0, 1.25))
 )
 extended_run <- run_example("06_new_component", extended_fit,
-                            expected = "outcome\\$new_analysis\\$results$")
+                            expected = c("outcome\\$new_analysis\\$results$",
+                                         "outcome\\$descriptives$",
+                                         "outcome\\$change$"))
 
 cat("All examples passed. Set render_reports <- TRUE for HTML reports.\n")

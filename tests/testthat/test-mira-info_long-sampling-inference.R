@@ -14,7 +14,7 @@ sampling_info_run <- function(data, ...) {
                covariates = character(0), analyses = "none", verbose = FALSE)
   dots <- list(...)
   args[names(dots)] <- dots
-  do.call(mira_info_long, args)
+  do.call(mira_test_info_base, args)
 }
 
 test_that("mixed missing profiles preserve observation accounting", {
@@ -81,7 +81,7 @@ test_that("contrasts use pairwise subjects while Friedman uses complete profiles
   expect_equal(friedman$posthoc$tidy$n, result$change$n)
   expect_equal(friedman$posthoc$tidy$p_raw, result$change$wilcoxon_p)
   expect_equal(friedman$posthoc$tidy$p_primary, stats::p.adjust(friedman$posthoc$tidy$p_raw, "BY"))
-  expect_equal(result$multiplicity$friedman_posthoc$table, friedman$posthoc$tidy)
+  expect_equal(MIRA:::.mira_result_path_long(result, result$multiplicity$friedman_posthoc$object_path), friedman$posthoc$tidy)
 })
 
 test_that("incomplete-profile variability and complete-profile ICC target different samples", {

@@ -16,7 +16,6 @@ report_test_mira <- function(outcome = "score") {
     dimnames = list(c("t0", "t1"), c("t0", "t1"))
   )
   result <- list(
-    version = "4.0.0",
     config = list(
       id = "patient",
       outcomes = outcome,
@@ -88,7 +87,6 @@ report_test_multi <- function(include_error = FALSE) {
   }
   structure(
     list(
-      version = "4.0.0",
       config = list(outcomes = names(outcomes)),
       data_overview = data.frame(records = 6L, variables = 5L),
       detected_variables = list(outcomes = names(outcomes)),
@@ -105,7 +103,6 @@ report_test_multi <- function(include_error = FALSE) {
 report_test_detect <- function() {
   structure(
     list(
-      version = "4.0.0",
       config = list(
         id = "patient",
         outcomes = "score",

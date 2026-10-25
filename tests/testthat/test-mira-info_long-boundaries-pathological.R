@@ -1,5 +1,5 @@
 mira_boundary_fit <- function(data, analyses = "none") {
-  mira_info_long(
+  mira_test_info_base(
     data,
     id = "subject_id",
     time_vars = c("score_t0", "score_t1"),
@@ -11,7 +11,7 @@ mira_boundary_fit <- function(data, analyses = "none") {
 }
 
 mira_boundary_arm_fit <- function(data) {
-  mira_info_long(
+  mira_test_info_base(
     data,
     id = "subject_id",
     time_vars = c("score_t0", "score_t1"),
@@ -248,7 +248,7 @@ test_that("core summaries handle two rows, all missing values, and constants", {
   expect_identical(
     names(all_missing$change),
     c(
-      "from", "to", "from_label", "to_label", "n", "mean_from",
+      "from", "from_label", "to", "to_label", "n", "mean_from",
       "mean_to", "mean_change", "sd_change", "se_change", "ci_lower",
       "ci_upper", "cohens_dz", "increased_n", "increased_pct",
       "decreased_n", "decreased_pct", "stable_n", "stable_pct",
@@ -289,7 +289,7 @@ test_that("entirely tied Friedman profiles are unavailable with a visible reason
   # the global Friedman statistic and Kendall W unidentifiable.
   data <- data.frame(subject_id = 1:4, score_t0 = c(2, 5, 9, 14),
     score_t1 = c(2, 5, 9, 14), score_t2 = c(2, 5, 9, 14))
-  expect_no_warning(result <- mira_info_long(data, id = "subject_id",
+  expect_no_warning(result <- mira_test_info_base(data, id = "subject_id",
     outcomes = "score", covariates = character(0), analyses = "none",
     verbose = FALSE))
   global <- result$advanced_tests$friedman
@@ -297,14 +297,14 @@ test_that("entirely tied Friedman profiles are unavailable with a visible reason
                    "all complete repeated profiles are tied.")
   expect_false(global$performed)
   expect_identical(global$reason_skipped, reason)
-  expect_identical(global$tidy, data.frame(statistic = NA_real_, df = NA_real_,
-    p_raw = NA_real_, kendalls_w = NA_real_, n = 4L, n_timepoints = 3L))
-  expect_identical(global$summary, global$tidy)
+  expect_identical(global$tidy, data.frame(n = 4L, n_timepoints = 3L, kendalls_w = NA_real_,
+    statistic = NA_real_, df = NA_real_, p_raw = NA_real_))
+  expect_false("summary" %in% names(global))
   expect_identical(result$effect_sizes$friedman$kendalls_w, NA_real_)
   # Preserve the raw engine evidence without misclassifying its htest object
   # as a usable inference or inventing an engine error/warning.
   expect_s3_class(global$test, "htest")
-  expect_identical(global$object, global$test)
+  expect_false("object" %in% names(global))
   expect_null(global$error)
   expect_length(global$errors, 0L)
   expect_identical(global$warnings, character(0))
@@ -333,7 +333,7 @@ test_that("entirely tied Friedman profiles are unavailable with a visible reason
 test_that("one non-tied complete profile restores estimable Friedman inference", {
   data <- data.frame(subject_id = 1:4, score_t0 = c(2, 5, 9, 14),
     score_t1 = c(2, 5, 9, 15), score_t2 = c(2, 5, 9, 16))
-  result <- mira_info_long(data, id = "subject_id", outcomes = "score",
+  result <- mira_test_info_base(data, id = "subject_id", outcomes = "score",
     covariates = character(0), analyses = "none", verbose = FALSE)
   # Three rank profiles (2,2,2), one (1,2,3): rank sums (7,8,9),
   # Q_uncorrected=1/2 and C=1-3*24/(4*24)=1/4. Thus Q=2,
@@ -425,7 +425,7 @@ test_that("explicit configuration preserves non-syntactic column names", {
   variables <- c("Outcome baseline", "Outcome - week 4")
   labels <- stats::setNames(c("Baseline", "Week 4"), variables)
 
-  expect_no_warning(result <- mira_info_long(
+  expect_no_warning(result <- mira_test_info_base(
     data,
     id = "patient id",
     time_vars = list("Outcome score" = variables),
@@ -455,8 +455,8 @@ test_that("explicit configuration preserves non-syntactic column names", {
   expect_identical(
     names(result$long_data),
     c(
-      "patient", "outcome", "time", "time_index", "time_label", "arm",
-      "value", "age (years)", "covariate+1", "patient_mean"
+      "patient", "outcome", "arm", "time", "time_index", "time_label",
+      "value", "patient_mean", "age (years)", "covariate+1"
     )
   )
   expect_identical(nrow(result$long_data), 12L)

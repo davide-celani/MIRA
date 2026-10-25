@@ -41,7 +41,7 @@ outcome names, unique after case-and-punctuation normalization. \code{NULL} and
 \code{"auto"} select all unambiguous detected groups. Explicit names select
 detected groups by normalized name, label an explicitly supplied single
 \code{time_vars} group, or provide labels for an unnamed \code{time_vars} list. As a
-compatibility convenience, when \code{time_vars} is \code{NULL} and \code{outcomes}
+column-selection convenience, when \code{time_vars} is \code{NULL} and \code{outcomes}
 contains at least two values that are all column names, those values are
 treated as \code{time_vars} rather than as outcome-family names. The
 implementation also accepts \code{character(0)} as an explicit selection and
@@ -50,9 +50,10 @@ returns an empty \code{mira_info_multi_long} container.}
 \item{time_vars}{\code{NULL} (the default), a character vector of at least two
 longitudinal column names, or a list of such vectors, one per outcome. All
 selected columns must exist, be numeric, and be distinct within each outcome
-group. A named list uses its element names as outcome names. For an unnamed
-list, \code{outcomes} may supply one name per element; otherwise names are
-inferred from the columns where possible. A character vector whose names
+group. Non-empty list-element names explicitly declare outcome names,
+including in a partially named list. Unnamed elements use corresponding
+\code{outcomes} names when supplied; otherwise their names are inferred from
+the columns where possible. A character vector whose names
 all parse into more than one outcome family is split into those families.
 With \code{NULL}, all unambiguous automatically detected outcome groups are used.
 Explicit groups are ordered by parsed time values when every value is
@@ -91,7 +92,8 @@ column names; \code{character(0)} explicitly selects none. Explicit columns must
 exist, be unique, and not overlap selected or detected longitudinal
 variables, the chosen ID or arm, retained ID/arm candidates, or reserved
 internal columns (\code{patient}, \code{outcome}, \code{time}, \code{time_index}, \code{time_label},
-\code{arm}, \code{value}, \code{patient_factor}, \code{time_factor}, \code{arm_factor}, \code{patient_mean}, and \code{time_ordinal}). With
+\code{arm}, \code{value}, \code{patient_factor}, \code{time_factor}, \code{arm_factor},
+\code{patient_mean}, and \code{time_ordinal}). With
 \code{NULL} or \code{"auto"}, eligible numeric and low-cardinality categorical columns
 are detected after excluding ID-, arm-, and longitudinal-like variables.
 Every candidate needs at least two distinct non-missing values; factor,
@@ -157,7 +159,7 @@ warnings are unaffected.}
 }
 \value{
 Invisibly returns an object with classes \code{mira_detect_long} and \code{list}.
-It contains \code{call}, the output-schema \code{version}, resolved \code{config}, a
+It contains \code{call}, resolved \code{config}, a
 \code{data_overview}, \code{detected_variables}, and configuration \code{diagnostics}.
 If \code{verbose = TRUE}, the corresponding detection report is printed first.
 }
@@ -173,6 +175,10 @@ analysis is performed.
 result can be requested from \code{mira_info_long()} with \code{inspect_only = TRUE}, which
 additionally resolves the optional-analysis switches accepted by that
 function.
+\code{config$outcome_names} records each outcome's key, declared name (or \code{NULL}),
+name source, and display label. It distinguishes naming an outcome from merely
+selecting its temporal source columns; see \code{\link[=mira_info_long]{mira_info_long()}} for the metric
+naming rule used when analyses are requested.
 }
 \seealso{
 \code{\link[=mira_info_long]{mira_info_long()}}

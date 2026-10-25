@@ -1,0 +1,4 @@
+"from","from_label","to","to_label","n","symptom_rank_biserial"
+"pre","Baseline","week4","Week 4",42,-1
+"pre","Baseline","final","Week 12",42,-1
+"week4","Week 4","final","Week 12",42,-0.736434108527132

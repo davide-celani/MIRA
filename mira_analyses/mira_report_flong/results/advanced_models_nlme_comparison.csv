@@ -1,0 +1,3 @@
+"model","correlation_structure","symptom_AIC","symptom_BIC","symptom_logLik","converged"
+"compound_symmetry","compound symmetry",575.063448570921,591.936554703156,-281.531724285461,TRUE
+"ar1","AR(1)",574.849843931725,591.722950063959,-281.424921965862,TRUE

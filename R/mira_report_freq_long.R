@@ -54,7 +54,6 @@
 .mira_report_human_name_long <- function(x) {
   labels <- c(
     call = "Analysis call",
-    version = "MIRA version",
     settings = "Analysis settings",
     overview = "Overview",
     config = "Resolved configuration",
@@ -174,6 +173,21 @@
         collapse = " ")
 }
 
+.mira_report_metric_name_long <- function(x, base) {
+  map <- attr(x, "mira_metric_names", exact = TRUE)
+  candidate <- if (base %in% names(map)) unname(map[[base]]) else base
+  if (length(candidate) == 1L && candidate %in% names(x)) candidate else NULL
+}
+
+.mira_report_base_names_long <- function(x) {
+  result <- names(x)
+  map <- attr(x, "mira_metric_names", exact = TRUE)
+  index <- match(result, unname(map))
+  mapped <- !is.na(index)
+  result[mapped] <- names(map)[index[mapped]]
+  result
+}
+
 .mira_report_prepare_table_long <- function(x, digits = 3L, format_p = TRUE) {
   if (is.table(x)) x <- as.data.frame(x, stringsAsFactors = FALSE)
 
@@ -267,8 +281,13 @@
   if (format_p) {
     p_columns <- grepl(
       "((^|[._])p([._]|$)|(^|[._])p[._]?value([._]|$)|^pr\\()",
-      names(x), ignore.case = TRUE, perl = TRUE
+      .mira_report_base_names_long(x), ignore.case = TRUE, perl = TRUE
     )
+    # A mapped MIRA table classifies metrics explicitly; an identifier whose
+    # source name contains "p_value" is still an identifier. Native external
+    # tables without that map continue to use their own conventional names.
+    metric_map <- attr(x, "mira_metric_names", exact = TRUE)
+    if (!is.null(metric_map)) p_columns <- p_columns & names(x) %in% unname(metric_map)
     for (j in which(p_columns)) {
       if (is.numeric(x[[j]]) || is.integer(x[[j]])) {
         x[[j]] <- .mira_report_format_p_long(x[[j]], digits = digits)
@@ -317,7 +336,8 @@
         value_widths, probs = 0.85, names = FALSE, type = 7, na.rm = TRUE
       ))
     }
-    numeric_column <- .mira_report_numeric_column_long(x[[j]], column_name)
+    numeric_column <- .mira_report_numeric_column_long(
+      x[[j]], .mira_report_base_names_long(x)[[j]])
     cap <- if (numeric_column) 14 else 34
     max(4, min(cap, max(header, typical, na.rm = TRUE)))
   }, numeric(1L))
@@ -372,7 +392,8 @@
   usable_fraction <- max(0.82, 0.965 - 0.0135 * length(widths))
   fractions <- usable_fraction * widths / sum(widths)
   vapply(seq_along(x), function(j) {
-    direction <- if (.mira_report_numeric_column_long(x[[j]], names(x)[[j]])) {
+    direction <- if (.mira_report_numeric_column_long(
+      x[[j]], .mira_report_base_names_long(x)[[j]])) {
       "\\raggedleft"
     } else {
       "\\raggedright"
@@ -728,8 +749,10 @@
       is.environment(x) || inherits(x, "mira_info_error_long")) return(NULL)
   # These fields describe the machinery or source data, not analytical output.
   if (key %in% c("call", "outcomes", "long_data", "reason_skipped",
-                 "performed", "enabled", "package", "status", "object_path",
+                 "performed", "enabled", "package", "status",
                  "plot_error", "disabled", "failed_outcomes")) return(NULL)
+  multiplicity_path <- grepl("^outcome\\$multiplicity(\\$|$)", path)
+  if (identical(key, "object_path") && !multiplicity_path) return(NULL)
   if (identical(key, "data") &&
       grepl("(^|\\$)(model|advanced_tests|advanced_models|robustness)(\\$|$)",
             path)) return(NULL)
@@ -762,8 +785,9 @@
   if (is.list(x)) {
     if (!length(x)) return(NULL)
     if ("performed" %in% names(x) && identical(x$performed, FALSE)) return(NULL)
-    if (grepl("(^|\\$)multiplicity(\\$|$)", path) &&
-        "table" %in% names(x) && is.null(x$table)) return(NULL)
+    if (multiplicity_path && "object_path" %in% names(x) &&
+        (length(x$object_path) != 1L || is.na(x$object_path) ||
+         !nzchar(x$object_path))) return(NULL)
     if (identical(key, "nlme") && "performed" %in% names(x) &&
         !isTRUE(x$performed)) return(NULL)
     if (identical(key, "arm_analysis") && !isTRUE(x$enabled)) return(NULL)
@@ -777,9 +801,6 @@
     children <- list()
     for (i in seq_along(x)) {
       child_key <- if (is.na(nms[i]) || !nzchar(nms[i])) paste0("item_", i) else nms[i]
-      if (child_key %in% c("model", "object") && "model" %in% nms &&
-          "object" %in% nms && !is.null(x$model) &&
-          identical(x$model, x$object) && identical(child_key, "object")) next
       child_value <- x[[i]]
       if (identical(child_key, "summary") &&
           inherits(child_value, "summary.merMod") &&
@@ -794,16 +815,10 @@
       }
       child <- .mira_report_prune_long(child_value, child_key, paste0(path, "$", child_key),
                                   cfg, depth + 1L, active)
-      aliases <- c("summary", "tidy", "fixed_effects", "coefficient_tests")
-      if (!is.null(child) && child$key %in% aliases &&
-          any(vapply(children, function(previous) {
-            previous$key %in% aliases && previous$kind == child$kind &&
-              previous$kind == "table" && identical(previous$value, child$value)
-          }, logical(1L)))) next
       if (!is.null(child)) children[[child_key]] <- child
     }
     if (!length(children)) return(NULL)
-    if ((failed || key %in% c("outliers", "plots", "multiplicity")) &&
+    if ((failed || key %in% c("outliers", "plots")) &&
         !any(vapply(children, .mira_report_node_has_result_long, logical(1L)))) return(NULL)
     return(list(kind = "group", key = key, path = path, children = children))
   }
@@ -817,17 +832,17 @@
 }
 
 .mira_report_order_long <- function(keys) {
-  scientific <- c("settings", "time_vars", "time_labels", "overview",
-                  "descriptives", "missing", "change", "arm_analysis",
-                  "correlations", "variability", "trajectories", "model",
-                  "advanced_tests", "advanced_models", "robustness", "effect_sizes",
-                  "multiplicity", "sensitivity", "outliers", "plots", "diagnostics")
+  scientific <- c("settings", "time_vars", "time_labels", "overview", "missing",
+                  "descriptives", "change", "arm_analysis", "trajectories",
+                  "correlations", "variability", "model", "advanced_tests",
+                  "advanced_models", "effect_sizes", "multiplicity", "robustness",
+                  "sensitivity", "outliers", "diagnostics", "plots")
   c(scientific[scientific %in% keys], keys[!keys %in% scientific])
 }
 
 .mira_report_outcome_tree_long <- function(outcome, cfg) {
   if (inherits(outcome, "mira_info_error_long") || !is.list(outcome)) return(list())
-  skip <- c("call", "version", "config", "data_overview",
+  skip <- c("call", "config", "data_overview",
             "detected_variables", "outcome", "outcome_display",
             "outcomes", "long_data", "plot_error")
   keys <- .mira_report_order_long(setdiff(names(outcome), skip))
@@ -837,11 +852,12 @@
     component <- outcome[[key]]
     if (identical(key, "outliers") && is.list(component)) {
       desc <- outcome$descriptives
+      desc_n <- .mira_report_metric_name_long(desc, "n")
       if (is.list(component$by_time) && is.data.frame(desc) &&
-          all(c("time", "n") %in% names(desc))) {
+          "time" %in% names(desc) && !is.null(desc_n)) {
         for (name in names(component$by_time)) {
           tab <- component$by_time[[name]]
-          count <- desc$n[match(name, desc$time)]
+          count <- desc[[desc_n]][match(name, desc$time)]
           if (is.data.frame(tab) && nrow(tab) == 0L &&
               length(count) == 1L && !is.na(count) && count < 4L) {
             component$by_time[[name]] <- NULL
@@ -849,12 +865,13 @@
         }
       }
       changes <- outcome$change
+      change_n <- .mira_report_metric_name_long(changes, "n")
       if (is.list(component$change) && is.data.frame(changes) &&
-          all(c("from", "to", "n") %in% names(changes))) {
+          all(c("from", "to") %in% names(changes)) && !is.null(change_n)) {
         comparison <- paste(changes$from, changes$to, sep = "_to_")
         for (name in names(component$change)) {
           tab <- component$change[[name]]
-          count <- changes$n[match(name, comparison)]
+          count <- changes[[change_n]][match(name, comparison)]
           if (is.data.frame(tab) && nrow(tab) == 0L &&
               length(count) == 1L && !is.na(count) && count < 4L) {
             component$change[[name]] <- NULL
@@ -1005,9 +1022,10 @@
   rows <- list()
   for (name in names(outcomes)) {
     desc <- outcomes[[name]]$descriptives
-    if (!is.data.frame(desc) || nrow(desc) < 2L || !"mean" %in% names(desc)) next
-    first <- suppressWarnings(as.numeric(desc$mean[1L]))
-    last <- suppressWarnings(as.numeric(desc$mean[nrow(desc)]))
+    metric <- .mira_report_metric_name_long(desc, "mean")
+    if (!is.data.frame(desc) || nrow(desc) < 2L || is.null(metric)) next
+    first <- suppressWarnings(as.numeric(desc[[metric]][1L]))
+    last <- suppressWarnings(as.numeric(desc[[metric]][nrow(desc)]))
     if (!is.finite(first) || !is.finite(last)) next
     rows[[length(rows) + 1L]] <- data.frame(outcome = name,
       mean_first_visit = first, mean_last_visit = last,
@@ -1211,6 +1229,7 @@
     ".mira_report_human_name_long", ".mira_report_markdown_text_long",
     ".mira_report_format_p_long",
     ".mira_report_format_number_long", ".mira_report_inline_long",
+    ".mira_report_metric_name_long", ".mira_report_base_names_long",
     ".mira_report_prepare_table_long", ".mira_report_numeric_column_long",
     ".mira_report_column_widths_long", ".mira_report_partition_columns_long",
     ".mira_report_latex_alignment_long", ".mira_report_latex_breaks_long",
@@ -1382,6 +1401,29 @@
 #' the original MIRA object, the report runtime, a machine-readable table
 #' archive, and a manifest. It can then render any combination of HTML, PDF,
 #' and DOCX output.
+#'
+#' Metric names and column order are taken from the analytical object. An
+#' explicitly declared outcome gives its metrics the prefix
+#' \code{<declared_outcome>_}; inferred outcomes retain generic metric names.
+#' Declaring an outcome through \code{outcomes} or a named \code{time_vars}
+#' list differs from selecting source columns: selecting columns alone leaves
+#' the outcome name inferred. Arguments supplied through \code{data} and
+#' \code{...} retain this distinction. Each outcome in a multi-outcome result
+#' follows its own convention and keeps its declared order.
+#'
+#' The runtime resolves metric fields through the object's canonical name map,
+#' including during descriptive conclusions and p-value formatting. Thus names
+#' containing underscores or words such as \code{mean} and \code{p_value} do
+#' not change which statistic is used. For example, the same rule yields
+#' \code{Mobility_mean} and \code{daily_change_mean} for two declared outcomes,
+#' and \code{mean} when either name was inferred from source columns.
+#'
+#' Report sections follow context, data quality, descriptives, changes,
+#' models, robustness and diagnostics, then figures. Multiplicity families
+#' retain their adjustment metadata and point to the canonical result table;
+#' the analytical archive exports that table at its owning component path.
+#' Native external model objects and supplementary user objects keep their
+#' own field names and metadata.
 #'
 #' @param x \code{NULL}; an object inheriting from \code{mira_info_long},
 #'   \code{mira_info_multi_long}, or \code{mira_detect_long}; or a data frame. A data frame

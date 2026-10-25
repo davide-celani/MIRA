@@ -120,7 +120,7 @@ test_that("public mixed-model estimates match complete balanced cell means and M
   y <- model_oracle_measurements()
   data <- data.frame(subject_id = seq_len(nrow(y)), score_t0 = y[, 1L],
                      score_t1 = y[, 2L], score_t2 = y[, 3L])
-  result <- suppressMessages(mira_info_long(data, id = "subject_id", outcomes = "score",
+  result <- suppressMessages(mira_test_info_base(data, id = "subject_id", outcomes = "score",
     covariates = character(0), analyses = "model", verbose = FALSE))
   fitted <- result$model$fitted_model
   expect_true(inherits(fitted, "merMod"))

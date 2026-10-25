@@ -1,0 +1,5 @@
+"variable","class","numeric","unique_n","missing_n","missing_pct"
+"case_id","character",FALSE,42,0,0
+"pre","numeric",TRUE,42,0,0
+"week4","numeric",TRUE,42,0,0
+"final","numeric",TRUE,42,0,0

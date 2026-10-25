@@ -25,10 +25,10 @@ test_that("bounded finite-pair cases match arithmetic and preserve subject pairi
     warning_message <- paste0(non_finite,
       " Inf/-Inf values in longitudinal variables will be treated as NA in analyses.")
     if (non_finite > 0L) {
-      expect_warning(result <- do.call(mira_info_long, c(list(data = data), args)),
+      expect_warning(result <- do.call(mira_test_info_base, c(list(data = data), args)),
                      warning_message, fixed = TRUE)
     } else {
-      expect_no_warning(result <- do.call(mira_info_long, c(list(data = data), args)))
+      expect_no_warning(result <- do.call(mira_test_info_base, c(list(data = data), args)))
     }
     finite <- is.finite(values)
     expect_equal(result$descriptives$n, colSums(finite), info = label)
@@ -66,10 +66,10 @@ test_that("bounded finite-pair cases match arithmetic and preserve subject pairi
     renamed <- data[permutation, c("subject_id", rev(vars)), drop = FALSE]
     renamed$subject_id <- paste0("renamed_", permutation * 17L)
     if (non_finite > 0L) {
-      expect_warning(changed <- do.call(mira_info_long, c(list(data = renamed), args)),
+      expect_warning(changed <- do.call(mira_test_info_base, c(list(data = renamed), args)),
                      warning_message, fixed = TRUE)
     } else {
-      expect_no_warning(changed <- do.call(mira_info_long, c(list(data = renamed), args)))
+      expect_no_warning(changed <- do.call(mira_test_info_base, c(list(data = renamed), args)))
     }
     expect_equal(changed$change, result$change, tolerance = 1e-12, info = label)
     expect_equal(changed$descriptives, result$descriptives, tolerance = 1e-12, info = label)

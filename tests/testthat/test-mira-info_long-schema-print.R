@@ -59,28 +59,20 @@ test_that("single-outcome public schema preserves exact order, classes, and type
   x <- mira_schema_print_single_20260918()
 
   expect_identical(class(x), c("mira_info_long", "list"))
-  expect_identical(names(x), c(
-    "call", "version", "settings", "overview", "outcome", "outcome_display",
-    "time_vars", "time_labels", "descriptives", "missing", "change",
-    "arm_analysis", "correlations", "variability", "trajectories", "model",
-    "advanced_tests", "advanced_models", "robustness", "effect_sizes",
-    "multiplicity", "sensitivity", "outliers", "plots", "plot_error",
-    "long_data", "config", "data_overview", "detected_variables",
-    "diagnostics", "outcomes"
-  ))
-  expect_identical(mira_schema_print_types_20260918(x), c(
-    call = "language", version = "character", settings = "list",
-    overview = "list", outcome = "character", outcome_display = "character",
-    time_vars = "character", time_labels = "character", descriptives = "list",
-    missing = "list", change = "list", arm_analysis = "list",
-    correlations = "list", variability = "list", trajectories = "list",
-    model = "list", advanced_tests = "list", advanced_models = "list",
-    robustness = "list", effect_sizes = "list", multiplicity = "list",
-    sensitivity = "list", outliers = "list", plots = "list",
-    plot_error = "NULL", long_data = "list", config = "list",
-    data_overview = "list", detected_variables = "list", diagnostics = "list",
-    outcomes = "list"
-  ))
+  expected_top_types <- c(
+    call = "language", config = "list", settings = "list",
+    outcome = "character", outcome_display = "character",
+    time_vars = "character", time_labels = "character",
+    data_overview = "list", detected_variables = "list", overview = "list",
+    missing = "list", descriptives = "list", change = "list",
+    trajectories = "list", arm_analysis = "list", correlations = "list",
+    variability = "list", model = "list", advanced_tests = "list",
+    advanced_models = "list", effect_sizes = "list", multiplicity = "list",
+    robustness = "list", sensitivity = "list", outliers = "list",
+    diagnostics = "list", plots = "list", plot_error = "NULL", long_data = "list"
+  )
+  expect_identical(names(x), names(expected_top_types))
+  expect_identical(mira_schema_print_types_20260918(x), expected_top_types)
 
   expect_identical(names(x$settings), c(
     "alpha", "confidence_level", "confidence_percent", "p_adjust_method",
@@ -113,23 +105,18 @@ test_that("single-outcome public schema preserves exact order, classes, and type
     arm_analysis = "logical"
   ))
 
-  expect_identical(names(x$descriptives), c(
-    "time", "label", "n", "missing", "missing_pct", "non_finite",
-    "non_finite_pct", "unavailable", "unavailable_pct", "mean", "sd",
-    "variance", "se", "ci_lower", "ci_upper", "median", "q1", "q3", "iqr",
-    "min", "max", "cv_percent", "score_mean", "score_sd", "score_median",
-    "score_ci_lower", "score_ci_upper"
-  ))
-  expect_identical(mira_schema_print_types_20260918(x$descriptives), c(
+  descriptive_types <- c(
     time = "character", label = "character", n = "integer", missing = "integer",
     missing_pct = "double", non_finite = "integer", non_finite_pct = "double",
-    unavailable = "integer", unavailable_pct = "double", mean = "double",
-    sd = "double", variance = "double", se = "double", ci_lower = "double",
-    ci_upper = "double", median = "double", q1 = "double", q3 = "double",
-    iqr = "double", min = "double", max = "double", cv_percent = "double",
-    score_mean = "double", score_sd = "double", score_median = "double",
-    score_ci_lower = "double", score_ci_upper = "double"
-  ))
+    unavailable = "integer", unavailable_pct = "double",
+    score_mean = "double", score_sd = "double", score_variance = "double",
+    score_se = "double", score_ci_lower = "double", score_ci_upper = "double",
+    score_median = "double", score_q1 = "double", score_q3 = "double",
+    score_iqr = "double", score_min = "double", score_max = "double",
+    score_cv_percent = "double"
+  )
+  expect_identical(names(x$descriptives), names(descriptive_types))
+  expect_identical(mira_schema_print_types_20260918(x$descriptives), descriptive_types)
 
   expect_identical(names(x$missing), c("by_time", "by_patient"))
   expect_identical(mira_schema_print_types_20260918(x$missing$by_time), c(
@@ -142,28 +129,21 @@ test_that("single-outcome public schema preserves exact order, classes, and type
     patient = "character", missing_n = "double", non_finite_n = "double",
     unavailable_n = "double", unavailable_pct = "double"
   ))
-  expect_identical(names(x$change), c(
-    "from", "to", "from_label", "to_label", "n", "mean_from", "mean_to",
-    "mean_change", "sd_change", "se_change", "ci_lower", "ci_upper",
-    "cohens_dz", "increased_n", "increased_pct", "decreased_n",
-    "decreased_pct", "stable_n", "stable_pct", "improved_n", "improved_pct",
-    "worsened_n", "worsened_pct", "paired_t_p", "wilcoxon_p",
-    "paired_t_p_adj", "wilcoxon_p_adj", "score_change", "score_mean_from",
-    "score_mean_to"
-  ))
-  expect_identical(mira_schema_print_types_20260918(x$change), c(
-    from = "character", to = "character", from_label = "character",
-    to_label = "character", n = "integer", mean_from = "double",
-    mean_to = "double", mean_change = "double", sd_change = "double",
-    se_change = "double", ci_lower = "double", ci_upper = "double",
-    cohens_dz = "double", increased_n = "integer", increased_pct = "double",
-    decreased_n = "integer", decreased_pct = "double", stable_n = "integer",
-    stable_pct = "double", improved_n = "integer", improved_pct = "double",
-    worsened_n = "integer", worsened_pct = "double", paired_t_p = "double",
-    wilcoxon_p = "double", paired_t_p_adj = "double",
-    wilcoxon_p_adj = "double", score_change = "double",
-    score_mean_from = "double", score_mean_to = "double"
-  ))
+  change_types <- c(
+    from = "character", from_label = "character", to = "character",
+    to_label = "character", n = "integer",
+    score_mean_from = "double", score_mean_to = "double",
+    score_mean_change = "double", score_sd_change = "double",
+    score_se_change = "double", score_ci_lower = "double", score_ci_upper = "double",
+    score_cohens_dz = "double", score_increased_n = "integer", score_increased_pct = "double",
+    score_decreased_n = "integer", score_decreased_pct = "double", score_stable_n = "integer",
+    score_stable_pct = "double", score_improved_n = "integer", score_improved_pct = "double",
+    score_worsened_n = "integer", score_worsened_pct = "double",
+    score_paired_t_p = "double", score_paired_t_p_adj = "double",
+    score_wilcoxon_p = "double", score_wilcoxon_p_adj = "double"
+  )
+  expect_identical(names(x$change), names(change_types))
+  expect_identical(mira_schema_print_types_20260918(x$change), change_types)
 
   expect_identical(names(x$arm_analysis), c(
     "enabled", "arm_variable", "reference_arm", "levels", "counts",
@@ -192,7 +172,7 @@ test_that("single-outcome public schema preserves exact order, classes, and type
   ))
   expect_identical(names(x$outliers), c("note", "by_time", "change"))
   expect_identical(names(x$config), c(
-    "id", "id_generated", "outcomes", "time_vars", "time_labels", "arm",
+    "id", "id_generated", "outcomes", "outcome_names", "time_vars", "time_labels", "arm",
     "reference_arm", "covariates", "covariates_detected", "covariates_numeric",
     "covariates_categorical", "improvement_direction", "stable_threshold",
     "variable_pattern", "auto_detected", "specified_manually", "sources",
@@ -205,7 +185,7 @@ test_that("single-outcome public schema preserves exact order, classes, and type
     "covariates_numeric", "covariates_categorical"
   ))
   expect_identical(names(x$diagnostics), c("warnings", "adaptation"))
-  expect_identical(names(x$outcomes), "score")
+  expect_false("outcomes" %in% names(x))
   expect_identical(levels(x$long_data$time_label), c("Baseline", "Middle", "Final"))
   expect_identical(typeof(x$long_data$time_label), "integer")
 })
@@ -225,36 +205,13 @@ test_that("zero-row change preserves its distinct typed schema", {
   nonempty <- mira_schema_print_single_20260918()
 
   expect_identical(nrow(empty$change), 0L)
-  expect_identical(names(empty$change), c(
-    "from", "to", "from_label", "to_label", "n", "mean_from", "mean_to",
-    "mean_change", "sd_change", "se_change", "ci_lower", "ci_upper",
-    "cohens_dz", "increased_n", "increased_pct", "decreased_n",
-    "decreased_pct", "stable_n", "stable_pct", "improved_n", "improved_pct",
-    "worsened_n", "worsened_pct", "paired_t_p", "paired_t_p_adj",
-    "wilcoxon_p", "wilcoxon_p_adj"
-  ))
-  expect_identical(mira_schema_print_types_20260918(empty$change), c(
-    from = "character", to = "character", from_label = "character",
-    to_label = "character", n = "integer", mean_from = "double",
-    mean_to = "double", mean_change = "double", sd_change = "double",
-    se_change = "double", ci_lower = "double", ci_upper = "double",
-    cohens_dz = "double", increased_n = "integer", increased_pct = "double",
-    decreased_n = "integer", decreased_pct = "double", stable_n = "integer",
-    stable_pct = "double", improved_n = "integer", improved_pct = "double",
-    worsened_n = "integer", worsened_pct = "double", paired_t_p = "double",
-    paired_t_p_adj = "double", wilcoxon_p = "double",
-    wilcoxon_p_adj = "double"
-  ))
-
-  # Characterize the current compatibility distinction rather than normalizing it:
-  # adjusted t precedes raw Wilcoxon only in the empty schema, and aliases are absent.
-  expect_identical(names(empty$change)[24:27],
-                   c("paired_t_p", "paired_t_p_adj", "wilcoxon_p", "wilcoxon_p_adj"))
-  expect_identical(names(nonempty$change)[24:27],
-                   c("paired_t_p", "wilcoxon_p", "paired_t_p_adj", "wilcoxon_p_adj"))
-  expect_false(any(grepl("^score_", names(empty$change))))
-  expect_identical(tail(names(nonempty$change), 3L),
-                   c("score_change", "score_mean_from", "score_mean_to"))
+  expect_identical(names(empty$change), names(nonempty$change))
+  expect_identical(mira_schema_print_types_20260918(empty$change),
+                   mira_schema_print_types_20260918(nonempty$change))
+  expect_identical(tail(names(empty$change), 4L),
+    c("score_paired_t_p", "score_paired_t_p_adj", "score_wilcoxon_p", "score_wilcoxon_p_adj"))
+  expect_false(any(c("mean_change", "score_change") %in% names(empty$change)))
+  expect_false(any(c("mean_change", "score_change") %in% names(nonempty$change)))
 })
 
 test_that("inspect-only, multi-outcome, and failed-outcome schemas are exact", {
@@ -267,11 +224,11 @@ test_that("inspect-only, multi-outcome, and failed-outcome schemas are exact", {
   )
   expect_identical(class(inspect), c("mira_detect_long", "list"))
   expect_identical(names(inspect), c(
-    "call", "version", "config", "data_overview", "detected_variables",
+    "call", "config", "data_overview", "detected_variables",
     "diagnostics"
   ))
   expect_identical(mira_schema_print_types_20260918(inspect), c(
-    call = "language", version = "character", config = "list",
+    call = "language", config = "list",
     data_overview = "list", detected_variables = "list", diagnostics = "list"
   ))
   expect_identical(names(inspect$diagnostics), "warnings")
@@ -281,13 +238,13 @@ test_that("inspect-only, multi-outcome, and failed-outcome schemas are exact", {
   multi <- mira_schema_print_multi_20260918()
   expect_identical(class(multi), c("mira_info_multi_long", "mira_info_long", "list"))
   expect_identical(names(multi), c(
-    "call", "version", "config", "data_overview", "detected_variables",
-    "outcomes", "diagnostics"
+    "call", "config", "data_overview", "detected_variables",
+    "diagnostics", "outcomes"
   ))
   expect_identical(mira_schema_print_types_20260918(multi), c(
-    call = "language", version = "character", config = "list",
-    data_overview = "list", detected_variables = "list", outcomes = "list",
-    diagnostics = "list"
+    call = "language", config = "list",
+    data_overview = "list", detected_variables = "list", diagnostics = "list",
+    outcomes = "list"
   ))
   expect_identical(names(multi$outcomes), c("score", "fatigue"))
   expect_true(all(vapply(
@@ -326,7 +283,7 @@ test_that("inspect-only, multi-outcome, and failed-outcome schemas are exact", {
   failed_summary <- summary(failed_multi)
   expect_identical(class(failed_summary), c("summary.mira_info_multi_long", "list"))
   expect_identical(names(failed_summary),
-                   c("version", "config", "outcomes", "failed_outcomes"))
+                   c("config", "outcomes", "failed_outcomes"))
   expect_identical(failed_summary$outcomes$bad, failure)
   expect_identical(failed_summary$failed_outcomes, "bad")
 })
@@ -479,7 +436,7 @@ test_that("multi, error, and summary print methods return invisibly", {
   summary_multi <- summary(multi)
   expect_identical(class(summary_multi), c("summary.mira_info_multi_long", "list"))
   expect_identical(names(summary_multi),
-                   c("version", "config", "outcomes", "failed_outcomes"))
+                   c("config", "outcomes", "failed_outcomes"))
   summary_multi_print <- mira_schema_print_capture_20260918(
     print(summary_multi, digits = 2)
   )

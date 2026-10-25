@@ -2,6 +2,15 @@
 
 devtools::load_all()
 
+# Resolve canonical metric bases for inferred and explicitly declared outcomes.
+metric_columns_long <- function(table, base) {
+  map <- attr(table, "mira_metric_names", exact = TRUE)
+  index <- match(base, names(map))
+  mapped <- !is.na(index)
+  base[mapped] <- unname(map[index[mapped]])
+  base
+}
+
 
 
 # ------------------------------------------------------------------
@@ -56,21 +65,21 @@ data.frame(
   variable = auto_fit$time_vars,
   label = unname(auto_fit$time_labels)
 )
-utils::head(auto_fit$long_data[, c(
+utils::head(auto_fit$long_data[, metric_columns_long(auto_fit$long_data, c(
   "patient", "outcome", "time", "time_index", "time_label", "value"
-)])
+))])
 
 # Per-timepoint availability and descriptive statistics.
-auto_fit$descriptives[, c(
+auto_fit$descriptives[, metric_columns_long(auto_fit$descriptives, c(
   "label", "n", "missing", "mean", "sd", "ci_lower", "ci_upper"
-)]
+))]
 
 # Every ordered to-minus-from comparison is in $change. The adjusted columns
 # belong to the paired-t and paired-Wilcoxon families, respectively.
-auto_fit$change[, c(
+auto_fit$change[, metric_columns_long(auto_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "cohens_dz",
   "paired_t_p", "paired_t_p_adj", "wilcoxon_p_adj"
-)]
+))]
 
 # Select the clinically common baseline-to-final row without relying on row
 # position. This remains reliable if more visits are added later.
@@ -80,29 +89,29 @@ baseline_final <- auto_fit$change[
   ,
   drop = FALSE
 ]
-baseline_final[, c(
+baseline_final[, metric_columns_long(baseline_final, c(
   "n", "mean_from", "mean_to", "mean_change", "ci_lower", "ci_upper"
-)]
+))]
 
 # Variability and the preferred available ICC are kept in a one-row table.
-auto_fit$variability[, c(
+auto_fit$variability[, metric_columns_long(auto_fit$variability, c(
   "between_subject_sd", "within_subject_sd",
   "ICC_anova_complete_profiles", "ICC_model", "ICC"
-)]
+))]
 
 # $trajectories contains one baseline-to-final record per input row.
-utils::head(auto_fit$trajectories[, c(
+utils::head(auto_fit$trajectories[, metric_columns_long(auto_fit$trajectories, c(
   "patient", "baseline", "final", "absolute_change", "direction"
-)])
+))])
 table(auto_fit$trajectories$direction, useNA = "ifany")
 
 # Friedman is attempted with base R even though model fitting was disabled.
-auto_fit$advanced_tests$friedman$tidy[, c(
+auto_fit$advanced_tests$friedman$tidy[, metric_columns_long(auto_fit$advanced_tests$friedman$tidy, c(
   "statistic", "df", "p_raw", "kendalls_w", "n", "n_timepoints"
-)]
-auto_fit$advanced_tests$friedman$posthoc$tidy[, c(
+))]
+auto_fit$advanced_tests$friedman$posthoc$tidy[, metric_columns_long(auto_fit$advanced_tests$friedman$posthoc$tidy, c(
   "from_label", "to_label", "n", "p_raw", "p_holm", "rank_biserial"
-)]
+))]
 
 # ------------------------------------------------------------------
 # Example 2: Audit what mira_info_long() detected before fitting anything
@@ -142,7 +151,7 @@ trial <- data.frame(
 detected <- mira_info_long(
   trial,
   analyses = "all",
-  verbose = FALSE
+  verbose = TRUE
 )
 
 
@@ -167,12 +176,14 @@ detected$config$auto_detected
 detected$config$specified_manually
 detected$config$sources
 detected$config$alternatives
+# Per-outcome name provenance is separate from manual column selection.
+detected$config$outcome_names
 
 # The parsed map is the compact audit trail for outcome grouping and time
 # ordering. Candidate tables and covariate classes explain the other choices.
-detected$detected_variables$longitudinal_map[, c(
+detected$detected_variables$longitudinal_map[, metric_columns_long(detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern", "numeric"
-)]
+))]
 detected$detected_variables$id_candidates
 detected$detected_variables$arm_candidates
 detected$detected_variables$covariates_numeric
@@ -232,10 +243,10 @@ explicit_fit$config$specified_manually[c(
 )]
 explicit_fit$change[
   explicit_fit$change$from == "pre" & explicit_fit$change$to == "final",
-  c(
+  metric_columns_long(explicit_fit$change, c(
     "from_label", "to_label", "n", "mean_change",
     "improved_n", "stable_n", "worsened_n", "paired_t_p_adj"
-  ),
+  )),
   drop = FALSE
 ]
 
@@ -270,9 +281,9 @@ regex_detected <- mira_info_long(
   inspect_only = TRUE,
   verbose = FALSE
 )
-regex_detected$detected_variables$longitudinal_map[, c(
+regex_detected$detected_variables$longitudinal_map[, metric_columns_long(regex_detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern"
-)]
+))]
 regex_detected$config$time_vars[["pain"]]
 regex_detected$config$time_labels[["pain"]]
 
@@ -280,7 +291,7 @@ regex_fit <- mira_info_long(
   regex_data,
   variable_pattern = obs_pattern,
   outcomes = "pain",
-  analyses = "none",
+  analyses = "plots",
   verbose = FALSE
 )
 data.frame(
@@ -291,7 +302,8 @@ data.frame(
 regex_fit$change[
   regex_fit$change$from == regex_fit$time_vars[[1L]] &
     regex_fit$change$to == regex_fit$time_vars[[length(regex_fit$time_vars)]],
-  c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj"),
+  metric_columns_long(regex_fit$change,
+    c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj")),
   drop = FALSE
 ]
 
@@ -317,33 +329,33 @@ arm_fit$arm_analysis[c("enabled", "arm_variable", "reference_arm", "levels")]
 
 # Values are compared between arms at every visit. The column name states the
 # direction exactly: mean_difference_b_minus_a is arm_b minus arm_a.
-arm_fit$arm_analysis$time_pairwise[, c(
+arm_fit$arm_analysis$time_pairwise[, metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
   "time_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_difference_b_minus_a", "ci_lower", "ci_upper",
   "welch_t_p", "welch_t_p_adj"
-)]
+))]
 
 # Baseline balance is the first-timepoint subset; omnibus p-values form their
 # own across-time families and therefore have their own adjusted columns.
-arm_fit$arm_analysis$baseline_balance[, c(
+arm_fit$arm_analysis$baseline_balance[, metric_columns_long(arm_fit$arm_analysis$baseline_balance, c(
   "arm_a", "arm_b", "mean_difference_b_minus_a", "welch_t_p_adj"
-)]
-arm_fit$arm_analysis$time_omnibus[, c(
+))]
+arm_fit$arm_analysis$time_omnibus[, metric_columns_long(arm_fit$arm_analysis$time_omnibus, c(
   "time_label", "n", "welch_anova_p", "welch_anova_p_adj",
   "kruskal_p_adj"
-)]
+))]
 
 # Change comparisons are baseline-to-follow-up differences. Here a negative
 # difference_in_change_b_minus_a means a larger reduction in Treatment.
-arm_fit$arm_analysis$change_pairwise[, c(
+arm_fit$arm_analysis$change_pairwise[, metric_columns_long(arm_fit$arm_analysis$change_pairwise, c(
   "to_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_change_a", "mean_change_b", "difference_in_change_b_minus_a",
   "ci_lower", "ci_upper", "welch_t_p_adj"
-)]
-arm_fit$arm_analysis$change_descriptives[, c(
+))]
+arm_fit$arm_analysis$change_descriptives[, metric_columns_long(arm_fit$arm_analysis$change_descriptives, c(
   "arm", "to_label", "n", "mean_change",
   "improved_n", "stable_n", "worsened_n"
-)]
+))]
 
 
 # ------------------------------------------------------------------
@@ -382,7 +394,7 @@ if (requireNamespace("lme4", quietly = TRUE)) {
   adjusted_fit$model$global_time_test
   adjusted_fit$model$global_arm_test
   adjusted_fit$model$arm_time_interaction_test
-  adjusted_fit$variability[, c("ICC_model", "ICC")]
+  adjusted_fit$variability[, metric_columns_long(adjusted_fit$variability, c("ICC_model", "ICC"))]
 
   # ----------------------------------------------------------------
   # Example 7: Estimated marginal means and targeted contrasts
@@ -418,7 +430,8 @@ if (requireNamespace("lme4", quietly = TRUE)) {
     compact_contrasts_long <- function(table) {
       if (is.null(table)) return(NULL)
       keep <- intersect(
-        c("contrast", "estimate", "SE", "df", "p_raw", "p_holm"),
+        metric_columns_long(table,
+          c("contrast", "estimate", "SE", "df", "p_raw", "p_holm")),
         names(table)
       )
       table[, keep, drop = FALSE]
@@ -475,10 +488,11 @@ if (requireNamespace("lme4", quietly = TRUE)) {
     adjusted_fit$advanced_models$gee$exchangeable$effect_tests
   }
   if (advanced_status[["random_slope"]]) {
-    adjusted_fit$advanced_models$random_slope[c(
+    slope_result <- adjusted_fit$advanced_models$random_slope
+    slope_result[metric_columns_long(slope_result, c(
       "formula", "converged", "singular",
       "random_intercept_slope_correlation"
-    )]
+    ))]
   }
   if (advanced_status[["nlme_compound_symmetry"]] ||
       advanced_status[["nlme_ar1"]]) {
@@ -491,37 +505,37 @@ if (requireNamespace("lme4", quietly = TRUE)) {
   # Likelihood criteria and GEE QIC/CIC are retained on different scales.
   model_comparison <- adjusted_fit$advanced_models$model_comparison
   if (is.data.frame(model_comparison) && nrow(model_comparison) > 0L) {
-    model_comparison[, c(
+    model_comparison[, metric_columns_long(model_comparison, c(
       "model", "AIC", "BIC", "QIC", "CIC", "converged", "singular",
       "object_path"
-    )]
+    ))]
   }
 
   # Effect-size and multiplicity objects point back to their source families.
   paired_dz <- adjusted_fit$effect_sizes$paired_cohens_dz
   if (!is.null(paired_dz)) {
-    paired_dz[, c("from_label", "to_label", "n", "cohens_dz")]
+    paired_dz[, metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))]
   }
-  friedman_family <- adjusted_fit$multiplicity$friedman_posthoc$table
+  friedman_family <- adjusted_fit$advanced_tests$friedman$posthoc$tidy
   if (!is.null(friedman_family)) {
-    friedman_family[, c(
+    friedman_family[, metric_columns_long(friedman_family, c(
       "from_label", "to_label", "p_raw", "p_holm", "p_bh"
-    )]
+    ))]
   }
   if (isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
-    time_family <- adjusted_fit$multiplicity$time_pairwise$table
+    time_family <- adjusted_fit$advanced_tests$emmeans$time$pairwise_tidy
     if (!is.null(time_family)) {
-      time_family[, c("contrast", "p_raw", "p_holm", "p_bh")]
+      time_family[, metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))]
     }
   }
 
   # Sensitivity rows align methods by scientific question and give the exact
   # source path. They may use different samples or hypotheses, so this table
   # must not be interpreted as a vote among p-values.
-  adjusted_fit$sensitivity[, c(
+  adjusted_fit$sensitivity[, metric_columns_long(adjusted_fit$sensitivity, c(
     "question", "method", "statistic", "df", "p_raw", "effect_size",
     "effect_size_type", "n", "object_path"
-  )]
+  ))]
 }
 
 
@@ -585,16 +599,16 @@ baseline_to_final_long <- function(result) {
   result$change[
     result$change$from == result$time_vars[[1L]] &
       result$change$to == result$time_vars[[length(result$time_vars)]],
-    c(
+    metric_columns_long(result$change, c(
       "from_label", "to_label", "n", "mean_change",
       "improved_n", "stable_n", "worsened_n"
-    ),
+    )),
     drop = FALSE
   ]
 }
 lapply(
   multi_fit$outcomes,
-  function(result) result$descriptives[, c("label", "n", "mean", "sd")]
+  function(result) result$descriptives[, metric_columns_long(result$descriptives, c("label", "n", "mean", "sd"))]
 )
 lapply(multi_fit$outcomes, baseline_to_final_long)
 
@@ -612,7 +626,9 @@ response_counts_long <- function(result) {
   lapply(
     result$outcomes,
     function(outcome_result) {
-      table(outcome_result$trajectories$clinical_direction, useNA = "ifany")
+      trajectory <- outcome_result$trajectories
+      table(trajectory[[metric_columns_long(trajectory, "clinical_direction")]],
+            useNA = "ifany")
     }
   )
 }
@@ -653,9 +669,9 @@ missing_fit <- mira_info_long(
 missing_fit$overview[c(
   "n_patients", "complete_profiles", "complete_profiles_pct"
 )]
-missing_fit$descriptives[, c(
+missing_fit$descriptives[, metric_columns_long(missing_fit$descriptives, c(
   "label", "n", "missing", "non_finite", "unavailable"
-)]
+))]
 missing_fit$missing$by_time
 
 # Identify affected subjects without printing all rows.
@@ -664,10 +680,10 @@ missing_fit$missing$by_patient[affected, , drop = FALSE]
 
 # Each paired comparison has its own pairwise-complete N. Friedman instead
 # uses complete profiles across all visits, reported in its tidy row.
-missing_fit$change[, c(
+missing_fit$change[, metric_columns_long(missing_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "paired_t_p_adj"
-)]
-missing_fit$advanced_tests$friedman$tidy[, c("n", "n_timepoints", "p_raw")]
+))]
+missing_fit$advanced_tests$friedman$tidy[, metric_columns_long(missing_fit$advanced_tests$friedman$tidy, c("n", "n_timepoints", "p_raw"))]
 
 # Per-outcome adaptation records show usable counts and any requested module
 # disabled because of insufficient data.

@@ -207,6 +207,29 @@ a reproducibility bundle containing Quarto source, a serialized payload with
 the original MIRA object, the report runtime, a machine-readable table
 archive, and a manifest. It can then render any combination of HTML, PDF,
 and DOCX output.
+
+Metric names and column order are taken from the analytical object. An
+explicitly declared outcome gives its metrics the prefix
+\code{<declared_outcome>_}; inferred outcomes retain generic metric names.
+Declaring an outcome through \code{outcomes} or a named \code{time_vars}
+list differs from selecting source columns: selecting columns alone leaves
+the outcome name inferred. Arguments supplied through \code{data} and
+\code{...} retain this distinction. Each outcome in a multi-outcome result
+follows its own convention and keeps its declared order.
+
+The runtime resolves metric fields through the object's canonical name map,
+including during descriptive conclusions and p-value formatting. Thus names
+containing underscores or words such as \code{mean} and \code{p_value} do
+not change which statistic is used. For example, the same rule yields
+\code{Mobility_mean} and \code{daily_change_mean} for two declared outcomes,
+and \code{mean} when either name was inferred from source columns.
+
+Report sections follow context, data quality, descriptives, changes,
+models, robustness and diagnostics, then figures. Multiplicity families
+retain their adjustment metadata and point to the canonical result table;
+the analytical archive exports that table at its owning component path.
+Native external model objects and supplementary user objects keep their
+own field names and metadata.
 }
 \details{
 \code{mira_report_freq_long()} has two input workflows. With a precomputed MIRA

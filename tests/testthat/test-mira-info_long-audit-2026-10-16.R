@@ -50,7 +50,7 @@ test_that("asymmetric arm samples have independent Welch, Hedges and finite-fami
     score_t2 = c(4, 1, 10, NA, 5, 12, 10, 19, -40, 2000),
     stringsAsFactors = FALSE
   )
-  expect_warning(result <- mira_info_long(data, id = "subject_id", outcomes = "score",
+  expect_warning(result <- mira_test_info_base(data, id = "subject_id", outcomes = "score",
     time_vars = c("score_t0", "score_t1", "score_t2"), arm = "arm",
     reference_arm = "control", covariates = character(0), analyses = "arm_tests",
     alpha = 0.1, p_adjust_method = "holm", verbose = FALSE),
@@ -147,7 +147,7 @@ test_that("mixed and independence GEE models retain the exact complete ID and vi
     stringsAsFactors = FALSE)
   data$site[[2L]] <- " "
   data$arm[[11L]] <- " "
-  expect_warning(result <- mira_info_long(data, id = "subject_id", outcomes = "score",
+  expect_warning(result <- mira_test_info_base(data, id = "subject_id", outcomes = "score",
     time_vars = c("score_t0", "score_t1", "score_t2"),
     time_labels = c("Base", "Mid", "Final"), arm = "arm", reference_arm = "control",
     covariates = c("age", "site"), analyses = c("model", "arm_tests"), verbose = FALSE),
@@ -237,7 +237,7 @@ test_that("literal covariate names retain both adjustment columns in primary and
     score_t1 = y[, 2L], score_t2 = y[, 3L],
     first_adjustment = c(4, 6, 2, 5, 3, 9, 8, 7),
     second_adjustment = c(5, 3, 8, 6, 9, 7, 2, 4), check.names = FALSE)
-  run <- function(input, variables) mira_info_long(input, id = "subject_id", outcomes = "score",
+  run <- function(input, variables) mira_test_info_base(input, id = "subject_id", outcomes = "score",
     time_vars = c("score_t0", "score_t1", "score_t2"), covariates = variables,
     analyses = "model", verbose = FALSE)
   original <- run(data, c("first_adjustment", "second_adjustment"))

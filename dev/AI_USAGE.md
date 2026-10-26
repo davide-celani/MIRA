@@ -1,5 +1,21 @@
 # AI assistance record
 
+## CmdStan CI timeout correction: 2026-10-26
+
+OpenAI Codex inspected the supplied setup-r-dependencies log and public GitHub
+run 40307665205 for commit 5de4bb3. GitHub explicitly reported the job's
+30-minute limit was exceeded; setup-r consumed about 20 minutes and the
+dependency step was cancelled before CmdStan installation or tests ran.
+Assistance increased the job budget to 60 minutes, restricted dependency
+types to the same check profile used elsewhere, and replaced the unnecessary
+devtools wrapper with testthat::test_local using the same filter and failure
+setting. Local validation is distinct from an observed successful rerun of
+the modified workflow: YAML/R syntax and configuration checks passed, and the
+same local test filter passed 161 expectations with zero failures/warnings
+and one explicit CmdStan skip (the local sampling flag was false). The CI
+sampling flag remains true. No commit, staging, push or remote rerun was performed;
+human review remains pending.
+
 ## Longitudinal test audit: 2026-10-26
 
 OpenAI Codex assisted with the requested local audit of `mira_info_long()` and

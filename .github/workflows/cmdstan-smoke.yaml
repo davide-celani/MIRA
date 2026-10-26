@@ -12,7 +12,8 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # R setup, system dependencies and CmdStan compilation share this budget.
+    timeout-minutes: 60
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       MIRA_RUN_CMDSTAN_TESTS: 'true'
@@ -25,7 +26,8 @@ jobs:
           extra-repositories: https://stan-dev.r-universe.dev
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::devtools
+          # Install test dependencies without pulling in unrelated Enhances.
+          dependencies: 'c("Depends", "Imports", "LinkingTo", "Suggests")'
           needs: check
       - name: Install CmdStan
         shell: Rscript {0}
@@ -38,4 +40,4 @@ jobs:
         run: |
           cmdstanr::set_cmdstan_path(Sys.getenv("CMDSTAN"))
           cmdstanr::cmdstan_version()
-          devtools::test(filter = "dynamic-covariates_long", stop_on_failure = TRUE)
+          testthat::test_local(filter = "dynamic-covariates_long", stop_on_failure = TRUE)

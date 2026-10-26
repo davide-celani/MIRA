@@ -1156,8 +1156,20 @@
     }
   )
 
+  # An afex fit can exist even when every ANOVA effect has undefined F/p.
+  # Retain engine evidence, but require an estimable effect for availability.
+  estimable <- if (is.null(tidy) || nrow(tidy) == 0L) logical(0) else {
+    is.finite(tidy$statistic) & is.finite(tidy$df_num) &
+      is.finite(tidy$df_den) & is.finite(tidy$p_value) &
+      tidy$df_num > 0 & tidy$df_den > 0
+  }
+  performed <- any(estimable)
+  reason_skipped <- if (performed) NULL else {
+    "Repeated-measures ANOVA returned no finite estimable ANOVA effect."
+  }
+
   list(
-    performed = TRUE,
+    performed = performed,
     package = "afex",
     object = object,
     summary = full_summary,
@@ -1178,7 +1190,7 @@
     warnings = warnings,
     error = NULL,
     errors = errors,
-    reason_skipped = NULL
+    reason_skipped = reason_skipped
   )
 }
 
@@ -5533,7 +5545,7 @@
 
 .mira_resolve_direction_long <- function(value, outcome) {
   if (is.null(value)) value <- "auto"
-  if (!is.character(value) || anyNA(value)) {
+  if (!is.character(value) || length(value) == 0L || anyNA(value)) {
     stop("improvement_direction must be 'auto', 'higher', 'lower', 'unknown', or a named vector.",
          call. = FALSE)
   }
@@ -5578,7 +5590,7 @@
                          identical(value, "auto"))) {
     return(list(value = 0, automatic = TRUE, reason = "safe_zero_fallback"))
   }
-  if (!is.numeric(value) || anyNA(value) || any(!is.finite(value))) {
+  if (!is.numeric(value) || length(value) == 0L || anyNA(value) || any(!is.finite(value))) {
     stop("stable_threshold must be NULL, 'auto', or a numeric value >= 0.", call. = FALSE)
   }
   selected <- value
@@ -5610,7 +5622,7 @@
   raw <- as.character(data[[arm]])
   raw[is.na(raw) | !nzchar(trimws(raw))] <- NA_character_
   observed <- unique(raw[!is.na(raw)])
-  if (length(observed) == 0L) {
+  if (length(observed) == 0L && is.null(reference_arm)) {
     return(list(value = NULL, automatic = is.null(reference_arm),
                 warnings = sprintf("Treatment-arm variable '%s' contains no observed groups.", arm)))
   }
@@ -6313,7 +6325,12 @@ mira_detect_long <- function(data,
 #'   trends use timepoint order and do not assert equal chronological spacing;
 #' - type-III repeated-measures ANOVA with `afex`, including uncorrected,
 #'   Greenhouse-Geisser, and Huynh-Feldt tables, Mauchly information when
-#'   available, and partial/generalized eta-squared output;
+#'   available, and partial/generalized eta-squared output. If no ANOVA effect
+#'   has a finite F statistic, positive finite numerator/denominator degrees
+#'   of freedom, and a finite p-value, `performed = FALSE` and `reason_skipped`
+#'   describes non-estimability. The raw fit, native tables, standardized
+#'   table, and captured diagnostics remain available. At least one estimable
+#'   effect keeps `performed = TRUE`; other rows may still be unavailable;
 #' - Gaussian GEE fits with `geepack` under independence, exchangeable, and
 #'   AR(1) working correlations, sandwich standard errors, and joint Wald tests;
 #' - a random-intercept-and-ordinal-time-slope model with `lme4`, including

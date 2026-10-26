@@ -122,8 +122,10 @@ export.}
 two, converted to an integer for rendering. It is an upper bound per
 displayed table block, not a request to discard columns. Wide tables are
 split into blocks. Comparison tables repeat \code{from}, \code{to} and
-any \code{arm}, \code{arm_a}, \code{arm_b} identifiers when the column limit
-leaves room for these keys and a statistic; otherwise the first one or
+any \code{arm}, \code{arm_a}, \code{arm_b} identifiers. Arm comparisons at
+a single visit repeat \code{time} and the arm identifiers. These keys are
+repeated when the column limit leaves room for them and a statistic;
+otherwise the first one or
 two columns, typically identifiers, are repeated. Columns retain their
 original relative order. Width heuristics can produce smaller blocks;
 PDF blocks are capped at eight columns and non-HTML, non-LaTeX blocks at seven.}
@@ -254,8 +256,9 @@ or unperformed modules, empty non-result structures, all-missing correlation
 matrices, duplicate equivalent model tables, and models without a fitted
 object. Primary-model, plotting, and failed advanced-module errors or
 warnings can instead appear under diagnostics, with recorded reasons when
-available. A non-estimable Friedman test also appears there with its reason,
-even when its engine returned an object without an error or warning.
+available. A non-estimable Friedman test or repeated-measures ANOVA also
+appears there with its reason when the engine returned an object without an
+error or warning.
 Disabled modules with only a skip reason remain omitted.
 Headings and inline metadata preserve labels as literal text, including
 characters with special meaning in Markdown or HTML.

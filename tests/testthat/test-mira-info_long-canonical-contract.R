@@ -1,4 +1,5 @@
 canonical_contract_data <- function() {
+  withr::local_preserve_seed()
   set.seed(78321)
   n <- 24L
   subject <- rnorm(n, 12, 2)
@@ -13,9 +14,48 @@ canonical_contract_fit <- function(data, declared = NULL, analyses = "none") {
     covariates = character(0), analyses = analyses, verbose = FALSE,
     improvement_direction = "higher", stable_threshold = 0)
   if (!is.null(declared)) args$outcomes <- declared
+  withr::local_preserve_seed()
   set.seed(9432)
   MIRA:::.mira_eval_long(do.call(mira_info_long, args))
 }
+
+test_that("canonical fixtures preserve the caller RNG kind and seed presence", {
+  original_kind <- RNGkind()
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_seed) original_seed <- get(".Random.seed", envir = .GlobalEnv)
+  withr::defer({
+    do.call(RNGkind, as.list(original_kind))
+    if (had_seed) assign(".Random.seed", original_seed, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  })
+  RNGkind("L'Ecuyer-CMRG", "Inversion", "Rejection")
+  set.seed(20261026)
+  seed <- .Random.seed
+  kind <- RNGkind()
+  data <- canonical_contract_data()
+  expect_identical(.Random.seed, seed)
+  expect_identical(RNGkind(), kind)
+  expect_identical(canonical_contract_data(), data)
+  captured <- canonical_contract_fit(data)
+  expect_null(captured$error)
+  expect_identical(.Random.seed, seed)
+  expect_identical(RNGkind(), kind)
+  invalid <- data
+  invalid$patient[2L] <- invalid$patient[1L]
+  expect_match(canonical_contract_fit(invalid)$error, "[Dd]uplicat")
+  expect_identical(.Random.seed, seed)
+
+  rm(".Random.seed", envir = .GlobalEnv)
+  expect_identical(canonical_contract_data(), data)
+  expect_false(exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+  expect_null(canonical_contract_fit(data)$error)
+  expect_false(exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+  expect_match(canonical_contract_fit(invalid)$error, "[Dd]uplicat")
+  expect_false(exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+  expect_identical(RNGkind(), kind)
+})
 
 test_that("canonical fields are unique while distinct equal and unavailable metrics survive", {
   data <- data.frame(patient = 1:4, marker_t0 = rep(7, 4), marker_t1 = rep(7, 4))

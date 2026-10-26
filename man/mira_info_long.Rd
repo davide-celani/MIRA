@@ -546,7 +546,12 @@ follow-up contrasts, labelled in the result as an approximation. Polynomial
 trends use timepoint order and do not assert equal chronological spacing;
 \item type-III repeated-measures ANOVA with \code{afex}, including uncorrected,
 Greenhouse-Geisser, and Huynh-Feldt tables, Mauchly information when
-available, and partial/generalized eta-squared output;
+available, and partial/generalized eta-squared output. If no ANOVA effect
+has a finite F statistic, positive finite numerator/denominator degrees
+of freedom, and a finite p-value, \code{performed = FALSE} and \code{reason_skipped}
+describes non-estimability. The raw fit, native tables, standardized
+table, and captured diagnostics remain available. At least one estimable
+effect keeps \code{performed = TRUE}; other rows may still be unavailable;
 \item Gaussian GEE fits with \code{geepack} under independence, exchangeable, and
 AR(1) working correlations, sandwich standard errors, and joint Wald tests;
 \item a random-intercept-and-ordinal-time-slope model with \code{lme4}, including

@@ -91,3 +91,22 @@ test_that("PDF verifier requires readable pages and keyed scientific rows", {
     expect_error(report_test_pdf_science(bad), "keyed scientific table cells", fixed = TRUE)
   }
 })
+
+test_that("PDF verifier rejects extra scientific rows before comparing their cells", {
+  header <- "Descriptive statistics time n mean sd p value"
+  baseline <- "t0 6 10.250 1.500 <0.001"
+  final <- "t1 6 11.750 1.250 0.050"
+  good <- paste(header, baseline, final)
+  # Page breaks and row order do not identify the scientific comparison.
+  # A visit mentioned in prose is not another scientific table row.
+  expect_no_error(report_test_pdf_science(c(paste(header, final), baseline)))
+  expect_no_error(report_test_pdf_science(paste(good,
+    "Notes: t0 denotes baseline and t1 denotes final.")))
+  for (extra in c(baseline, final, "t0 6 99.750 1.500 <0.001",
+                  "t1 6 11.750 9.250 0.050", "t0 6 NA 1.500 <0.001",
+                  "t0 6 Inf 1.500 <0.001", "t2 6 11.750 1.250 0.050")) {
+    expect_error(report_test_pdf_science(paste(good, extra)),
+      "keyed scientific table cells", fixed = TRUE,
+      info = paste("Additional scientific row:", extra))
+  }
+})

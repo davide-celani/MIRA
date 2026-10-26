@@ -26,19 +26,30 @@ validate <- function() {
             identical(saved$change, fit$change))
   # Hand totals: visit sums=64,78,97; final-baseline differences sum=33,
   # sum of squared differences=165 -> variance=33/8, SE=sqrt(33)/8.
-  stopifnot(max(abs(fit$descriptives$mean - c(8, 9.75, 12.125))) < 1e-12)
+  # The explicit outcome declaration prefixes these metrics. Check shape and
+  # finiteness first so absent columns cannot satisfy stopifnot(logical(0)).
+  stopifnot(identical(fit$descriptives$time, c("score_t0", "score_t1", "score_t2")),
+    length(fit$descriptives$score_mean) == 3L,
+    all(is.finite(fit$descriptives$score_mean)),
+    max(abs(fit$descriptives$score_mean - c(8, 9.75, 12.125))) < 1e-12,
+    nrow(fit$change) == 3L, !anyDuplicated(fit$change[c("from", "to")]))
   final <- fit$change[fit$change$from == "score_t0" & fit$change$to == "score_t2", ]
   expected_ci <- 33 / 8 + c(-1, 1) * stats::qt(0.975, 7) * sqrt(33) / 8
-  stopifnot(final$n == 8L, abs(final$mean_change - 33 / 8) < 1e-12,
-    max(abs(c(final$ci_lower, final$ci_upper) - expected_ci)) < 1e-12,
-    abs(final$paired_t_p - 2 * stats::pt(-sqrt(33), 7)) < 1e-12)
+  observed <- c(final$score_mean_change, final$score_ci_lower,
+    final$score_ci_upper, final$score_paired_t_p)
+  stopifnot(nrow(final) == 1L, final$n == 8L, length(observed) == 4L,
+    all(is.finite(observed)), abs(final$score_mean_change - 33 / 8) < 1e-12,
+    max(abs(c(final$score_ci_lower, final$score_ci_upper) - expected_ci)) < 1e-12,
+    abs(final$score_paired_t_p - 2 * stats::pt(-sqrt(33), 7)) < 1e-12)
   manifest <- utils::read.csv(report$results_manifest, stringsAsFactors = FALSE)
   stopifnot(all(file.exists(file.path(report$output_dir, manifest$file))),
             !any(grepl("^([A-Za-z]:|/|\\\\)", manifest$file)))
   change_file <- manifest$file[manifest$path == "outcome$change"]
   stopifnot(length(change_file) == 1L)
   csv <- utils::read.csv(file.path(source_dir, change_file), check.names = FALSE)
-  stopifnot(is.numeric(csv$paired_t_p), max(abs(csv$paired_t_p - fit$change$paired_t_p)) < 1e-12,
+  stopifnot(is.numeric(csv$score_paired_t_p),
+            length(csv$score_paired_t_p) == 3L,
+            max(abs(csv$score_paired_t_p - fit$change$score_paired_t_p)) < 1e-12,
             identical(names(csv), names(fit$change)), nrow(csv) == 3L)
   relocated <- file.path(output, "relocated bundle")
   dir.create(relocated)

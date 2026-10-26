@@ -1,5 +1,14 @@
 # MIRA (development version)
 
+- Repeat complete visit and treatment-arm identifiers in split report tables,
+  preserving the identity of each between-arm comparison.
+- Mark wholly non-estimable repeated-measures ANOVA as unavailable while
+  retaining its raw fit and diagnostics, including its reason in reports.
+- Validate explicit reference arms even when all group values are missing,
+  and identify empty outcome settings with argument-specific errors.
+- Strengthen marginal-contrast oracles and PDF duplicate-row detection;
+  restore RNG isolation in test fixtures and repair prefixed-metric checks
+  in the scientific and bundle validation scripts.
 - Preserve literal backticks and backslashes in longitudinal adjustment
   covariate names, preventing distinct selected columns from collapsing into
   a different model specification.

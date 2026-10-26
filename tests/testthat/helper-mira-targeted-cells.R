@@ -126,18 +126,32 @@ report_test_pdf_science <- function(pages) {
   }
   tokens <- strsplit(trimws(text), " ", fixed = TRUE)[[1L]]
   visits <- c("t0", "t1")
+  # Identify row keys before validating their values. Counting only correct
+  # rows would silently accept an extra row with the same key and wrong cells.
+  # This verifier intentionally handles the simple t0/t1 fixture, including
+  # page breaks; ordinary mentions of visit labels in prose are not rows.
+  numeric_cell <- "^(?:[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[+-]?Inf|NaN|NA)$"
+  starts <- which(grepl("^t[0-9]+$", tokens))
+  starts <- starts[vapply(starts, function(index) {
+    index + 4L <= length(tokens) &&
+      all(grepl(numeric_cell, tokens[index + 1:3], perl = TRUE))
+  }, logical(1L))]
+  keys <- tokens[starts]
+  if (length(keys) != length(visits) || anyDuplicated(keys) ||
+      !setequal(keys, visits)) {
+    stop(paste("PDF keyed scientific table cells require every expected visit",
+      "exactly once."), call. = FALSE)
+  }
   expected <- rbind(c(10.25, 1.5), c(11.75, 1.25))
   p <- c("<0.001", "0.050")
   for (i in seq_along(visits)) {
-    hits <- which(tokens == visits[[i]])
-    valid <- vapply(hits, function(index) {
-      if (index + 4L > length(tokens)) return(FALSE)
-      cells <- tokens[index + 1:4]
-      if (cells[[1L]] != "6" || cells[[4L]] != p[[i]] ||
-          !all(grepl("^[+-]?[0-9]+(?:\\.[0-9]+)?$", cells[2:3], perl = TRUE))) return(FALSE)
-      all(abs(as.numeric(cells[2:3]) - expected[i, ]) <= 0.0005000001)
-    }, logical(1L))
-    if (sum(valid) != 1L) stop("PDF is missing keyed scientific table cells.", call. = FALSE)
+    index <- starts[match(visits[[i]], keys)]
+    cells <- tokens[index + 1:4]
+    if (cells[[1L]] != "6" || cells[[4L]] != p[[i]] ||
+        !all(grepl("^[+-]?[0-9]+(?:\\.[0-9]+)?$", cells[2:3], perl = TRUE)) ||
+        any(abs(as.numeric(cells[2:3]) - expected[i, ]) > 0.0005000001)) {
+      stop("PDF is missing keyed scientific table cells.", call. = FALSE)
+    }
   }
   invisible(TRUE)
 }

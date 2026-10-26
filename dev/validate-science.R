@@ -33,18 +33,28 @@ study <- function() {
       fit <- mira_info_long(data, id = "patient", outcomes = "score",
         time_vars = c("score_t0", "score_t1"), covariates = character(),
         analyses = "none", alpha = alpha, verbose = FALSE)
+      stopifnot(nrow(fit$change) == 1L,
+        identical(fit$change$from, "score_t0"),
+        identical(fit$change$to, "score_t1"), fit$change$n == n)
       row <- fit$change[1L, ]
       # Independent per-replicate arithmetic confirms the package estimate
       # and CI before aggregating statistical performance.
       center <- sum(change) / n
       se <- sqrt(sum((change - center)^2) / (n - 1L)) / sqrt(n)
       ci <- center + c(-1, 1) * stats::qt(0.975, n - 1L) * se
-      if (max(abs(c(row$mean_change, row$ci_lower, row$ci_upper) - c(center, ci))) > 1e-10) {
+      # outcomes = "score" declares a metric prefix. Require all expected
+      # cells before arithmetic: numeric(0) must never pass a verifier.
+      observed <- c(row$score_mean_change, row$score_ci_lower, row$score_ci_upper)
+      expected_p <- 2 * stats::pt(-abs(center / se), n - 1L)
+      if (length(observed) != 3L || any(!is.finite(observed)) ||
+          length(row$score_paired_t_p) != 1L || !is.finite(row$score_paired_t_p) ||
+          max(abs(observed - c(center, ci))) > 1e-10 ||
+          abs(row$score_paired_t_p - expected_p) > 1e-10) {
         stop(sprintf("Arithmetic mismatch: seed=2026101201 target=%g replicate=%d", target, replicate))
       }
       index <- index + 1L
-      rows[[index]] <- data.frame(target, replicate, n, estimate = row$mean_change,
-        lower = row$ci_lower, upper = row$ci_upper, p = row$paired_t_p)
+      rows[[index]] <- data.frame(target, replicate, n, estimate = row$score_mean_change,
+        lower = row$score_ci_lower, upper = row$score_ci_upper, p = row$score_paired_t_p)
     }
   }
   draws <- do.call(rbind, rows)

@@ -1,5 +1,20 @@
 # AI assistance record
 
+## Longitudinal test audit: 2026-10-26
+
+OpenAI Codex assisted with the requested local audit of `mira_info_long()` and
+`mira_report_freq_long()`, using parallel statistical, report and suite reviews.
+Assistance covered complete test-suite inventory, independent contrast oracles,
+minimal fixes for RM-ANOVA availability, report comparison keys and empty-input
+validation, PDF verifier sensitivity, RNG isolation, and repair of the scientific
+and bundle validation scripts. Source and isolated installed-package tests,
+build/check, explicit rendering profiles and controlled corruptions are recorded
+in `TEST_AUDIT_LONG.md`, including environmental failures and remaining limits.
+No commit, staging, push, release, PR or external communication was performed.
+No new dependency was installed. Human review remains pending; this record
+does not assert human verification, universal statistical validity or a JOSS
+editorial outcome. Earlier dated reports retain their own provenance.
+
 ## Bibliographic identity session: 2026-10-14
 
 OpenAI Codex inspected local citation metadata and existing release workflows,

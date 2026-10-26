@@ -351,12 +351,16 @@
     return(list(seq_len(column_n)))
   }
 
-  comparison_keys <- match(c("from", "to"), names(x))
+  visit_keys <- match(c("from", "to"), names(x))
   group_keys <- which(names(x) %in% c("arm", "arm_a", "arm_b"))
-  comparison_keys <- c(group_keys, comparison_keys)
-  if (max_columns > length(comparison_keys) && !anyNA(comparison_keys)) {
-    # Labels may separate these columns in the canonical output. Every block
-    # needs both visits and any arm identities, regardless of their width.
+  comparison_keys <- if (!anyNA(visit_keys)) {
+    c(group_keys, visit_keys)
+  } else if ("time" %in% names(x) && length(group_keys)) {
+    c(match("time", names(x)), group_keys)
+  } else integer()
+  if (length(comparison_keys) && max_columns > length(comparison_keys)) {
+    # A comparison needs both visits or its single visit and all arm identities.
+    # Repeating only time/index would leave different arm pairs indistinguishable.
     key_columns <- comparison_keys
   } else {
     key_n <- min(2L, max_columns - 1L, column_n - 1L)
@@ -914,11 +918,12 @@
         details <- component[intersect(c("error", "warnings"), names(component))]
         details <- Filter(function(value) length(value) > 0L &&
                             !all(is.na(value)), details)
-        nonestimable_test <- inherits(component$test, "htest") &&
-          length(component$reason_skipped) > 0L
+        nonestimable_test <- length(component$reason_skipped) > 0L &&
+          (inherits(component$test, "htest") ||
+             inherits(component$object, "afex_aov"))
         if (length(details) || nonestimable_test) {
           # Disabled modules with only a reason remain omitted. An actual
-          # failure, including a non-estimable htest without an engine error,
+          # failure, including a non-estimable test without an engine error,
           # carries its recorded non-estimability explanation.
           if (length(component$reason_skipped)) details$reason <- component$reason_skipped
           node <- .mira_report_prune_long(details, path,
@@ -1512,8 +1517,10 @@
 #'   two, converted to an integer for rendering. It is an upper bound per
 #'   displayed table block, not a request to discard columns. Wide tables are
 #'   split into blocks. Comparison tables repeat \code{from}, \code{to} and
-#'   any \code{arm}, \code{arm_a}, \code{arm_b} identifiers when the column limit
-#'   leaves room for these keys and a statistic; otherwise the first one or
+#'   any \code{arm}, \code{arm_a}, \code{arm_b} identifiers. Arm comparisons at
+#'   a single visit repeat \code{time} and the arm identifiers. These keys are
+#'   repeated when the column limit leaves room for them and a statistic;
+#'   otherwise the first one or
 #'   two columns, typically identifiers, are repeated. Columns retain their
 #'   original relative order. Width heuristics can produce smaller blocks;
 #'   PDF blocks are capped at eight columns and non-HTML, non-LaTeX blocks at seven.
@@ -1570,8 +1577,9 @@
 #' matrices, duplicate equivalent model tables, and models without a fitted
 #' object. Primary-model, plotting, and failed advanced-module errors or
 #' warnings can instead appear under diagnostics, with recorded reasons when
-#' available. A non-estimable Friedman test also appears there with its reason,
-#' even when its engine returned an object without an error or warning.
+#' available. A non-estimable Friedman test or repeated-measures ANOVA also
+#' appears there with its reason when the engine returned an object without an
+#' error or warning.
 #' Disabled modules with only a skip reason remain omitted.
 #' Headings and inline metadata preserve labels as literal text, including
 #' characters with special meaning in Markdown or HTML.

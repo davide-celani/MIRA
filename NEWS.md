@@ -1,5 +1,21 @@
 # MIRA (development version)
 
+- Add joint Kenward-Roger F tests, unadjusted unweighted relative marginal
+  effects with asymptotic ATS/WTS, and an unstructured Gaussian MMRM with
+  REML/Satterthwaite inference, preserving all existing longitudinal methods.
+  Declare `pbkrtest`, `nparLD >= 2.3.3`, and `mmrm >= 0.3.17` dependencies.
+- Integrate the new methods into metric naming, print/summary methods,
+  sensitivity comparisons, MMRM contrast multiplicity, and report CSV/RDS
+  exports. Preserve native objects and expose requested non-estimability
+  reasons without presenting disabled modules as fitted results.
+- Preserve incomplete subject-by-visit schedules for the unadjusted rank
+  module independently of model covariate filtering; retain MMRM's selected
+  visit order and report native likelihood-criterion conventions explicitly.
+- Add independent subject-level KR/MMRM and rank-effect oracles, adapter and
+  sample-isolation checks, and real report-runtime/HTML table assertions.
+- Restore the caller's numeric display precision after native object printing
+  in reports, including GEE printers that change the global `digits` option.
+
 - Repeat complete visit and treatment-arm identifiers in split report tables,
   preserving the identity of each between-arm comparison.
 - Mark wholly non-estimable repeated-measures ANOVA as unavailable while

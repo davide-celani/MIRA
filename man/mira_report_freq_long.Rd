@@ -212,7 +212,8 @@ a reproducibility bundle containing Quarto source, a serialized payload with
 the original MIRA object, the report runtime, a machine-readable table
 archive, and a manifest. It can then render any combination of HTML, PDF,
 and DOCX output.
-
+}
+\details{
 Metric names and column order are taken from the analytical object. An
 explicitly declared outcome gives its metrics the prefix
 \code{<declared_outcome>_}; inferred outcomes retain generic metric names.
@@ -235,8 +236,14 @@ retain their adjustment metadata and point to the canonical result table;
 the analytical archive exports that table at its owning component path.
 Native external model objects and supplementary user objects keep their
 own field names and metadata.
-}
-\details{
+
+Requested Kenward-Roger, rank longitudinal, and MMRM modules are included
+with their standardized tables, native fits, assumptions, and actual sample
+information. Unavailable requested modules retain their diagnostic reasons;
+disabled modules are omitted. MMRM contrast families keep their canonical
+adjustment references. See \code{\link[=mira_info_long]{mira_info_long()}} for the methods and assumptions.
+Native text printing preserves the caller's numeric display precision.
+
 \code{mira_report_freq_long()} has two input workflows. With a precomputed MIRA
 object, it reports that object without refitting or recomputing its analyses.
 With \code{data}, it first calls \code{\link[=mira_info_long]{mira_info_long()}} and then reports the result.

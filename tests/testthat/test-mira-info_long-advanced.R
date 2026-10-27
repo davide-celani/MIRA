@@ -317,10 +317,14 @@ test_that("mira_info_long fits the main and advanced models on sufficient repeat
   expect_true(result$advanced_tests$friedman$performed)
   expect_s3_class(result$advanced_tests$rm_anova$tidy, "data.frame")
   expect_s3_class(result$advanced_models$model_comparison, "data.frame")
-  expect_setequal(result$advanced_models$model_comparison$model,
+  comparison_models <- result$advanced_models$model_comparison$model
+  expect_identical(anyDuplicated(comparison_models), 0L)
+  expect_setequal(comparison_models[comparison_models != "mmrm_unstructured"],
                   c("mixed_random_intercept", "mixed_random_slope",
                     "nlme_compound_symmetry", "nlme_ar1", "gee_independence",
                     "gee_exchangeable", "gee_ar1"))
+  expect_identical(sum(comparison_models == "mmrm_unstructured"),
+    as.integer(isTRUE(result$advanced_models$mmrm$performed)))
   expect_true(all(is.na(result$advanced_models$model_comparison$AIC[
     grepl("^gee_", result$advanced_models$model_comparison$model)
   ])))

@@ -119,6 +119,83 @@ removed from detection, analysis, summaries, report-generated content and
 directly related documentation. Package/dependency/environment versions and
 native or arbitrary user metadata are outside this removal.
 
+## Additional longitudinal methodology contracts
+
+The existing mixed-model/LRT, Friedman, RM-ANOVA, GEE, random-slope, nlme,
+CR2, effect-size, and contrast branches retain their roles. The additional
+modules are independently protected and are requested by the model switch.
+`requested = FALSE` distinguishes a disabled module from requested inference
+that could not be estimated. Inspection does not evaluate these adapters.
+
+| Canonical path | Owned scientific fields | Native boundary / diagnostics |
+|---|---|---|
+| `advanced_tests$kenward_roger$tidy` | `statistic`, `df_num`, `df_den`, `F_scaling`, `p_raw` | `tests` retains `KRmodcomp` objects; `constraints` and `effect_diagnostics` preserve the tested restriction and requested/tested/dropped coefficients. |
+| `advanced_tests$rank_longitudinal$effects` | `relative_effect`, `SE`, `ci_lower`, `ci_upper` | Cell arm/visit identifiers and subject/observation/missing counts stay generic; `object` retains the native `nparld_fit`. |
+| `advanced_tests$rank_longitudinal$tests` | `statistic`, `df_num`, `df_den`, `p_raw` | `question`, native `term`, ATS/WTS `method`, `distribution`, estimability, and notes remain metadata. |
+| `advanced_models$mmrm$coefficients`, `$effect_tests` | Standardized coefficient estimates, SE/df/intervals/statistics/raw p-values and joint F tests | Native `model`/`summary`, residual `covariance`, `pair_coverage`, and actual engine `data` remain distinct objects. |
+| `advanced_models$mmrm` and `$emmeans` | Model-fit metrics and standardized adjusted contrast families | Native means/Tukey/Dunnett summaries retain their package contracts; redundant top-level emmeans `object`/`summary`/`tidy` aliases are removed. |
+
+The naming map prefixes only the owned fields with the exact declared
+outcome name, including spaces or underscores. Counts, method names,
+question labels, factor levels, and canonical source paths remain generic.
+The fitted engine objects are terminal print nodes and are never recursively
+renamed or traversed into CSV exports.
+
+Kenward-Roger tests use the primary Gaussian fit's model frame and actual
+subject count. The F statistic is the scaled `Fstat` reported by `pbkrtest`,
+not `FstatU`. TIME selects all model terms containing time, ARM all terms
+containing arm, and TIME_X_ARM their intersections; interactions are therefore
+included in the TIME and ARM joint nulls. Rank-deficient hypotheses visibly
+list dropped coefficients and distinguish a reduced test from a completely
+unavailable question. Convergence, nonsingularity, and positive residual
+variance are prerequisites. These tests complement likelihood ratios and CR2
+without changing either method's null or results.
+
+The rank module targets `H0p` unweighted relative marginal effects against
+the equally weighted factorial-cell reference distribution. Its ATS/WTS
+factorial hypotheses differ from the Gaussian joint coefficient hypotheses.
+It uses subject-level cell weights, pointwise logit intervals, asymptotic
+F/chi-squared approximations, and no permutation test. Its estimator covariance
+is the native sqrt-N asymptotic covariance divided by the number of independent
+observed subjects; effect SE is the square root of that covariance's diagonal.
+The raw native scaled quantities remain in `object`. ATS has `df_den = 1e10`
+from the engine approximation; a WTS denominator df is structurally `NA`.
+
+Rank data come from the original resolved subject-by-visit schedule, including
+explicit missing response rows. Subjects with no finite response are excluded;
+partially observed profiles retain their available cells. Required IDs and
+arms must be usable, but selected adjustment covariates do not filter this
+unadjusted sample. The missing-response assumption is MCAR. Larger relative
+effects denote larger measurements, independently of clinical direction.
+
+MMRM uses the prepared model sample and the resolved visit levels, including
+baseline as a response when selected. It has a Gaussian marginal mean with
+the selected covariates/arm terms and a common unstructured covariance across
+arms, with visit-specific variances and no additional subject random effect.
+It does not constrain baseline arm means to equality. REML estimation and
+Satterthwaite coefficient/joint inference are separate from the KR module.
+Incomplete responses are used without imputation under an ignorable MAR
+assumption and suitable mean/covariance specification; missing model predictors
+can still remove observations. Neither MMRM nor the rank module implements an
+MNAR sensitivity analysis.
+
+MMRM requires nonempty modeled visits, unique subject/visit records, a full-rank
+fixed design, observed overlap for every visit pair, convergence, and finite,
+numerically full-rank covariance estimates. A wholly unavailable requested
+visit must not be silently dropped and reinterpreted as a new baseline.
+`data`, `n`, and `n_subjects` describe the engine analysis frame. Native REML
+criteria are retained: the penalty counts covariance parameters and BIC uses
+the independent subject count. `ic_penalty_parameters`, `bic_sample_size`, and
+`criteria_note` expose these conventions. Combined likelihood criteria are not
+harmonized across mmrm/lme4/nlme and do not establish a shared ranking scale.
+
+Each successful method adds finite sensitivity rows with its canonical source
+path. MMRM contrast families have separate multiplicity metadata pointing to
+their owning adjusted tables. No new pooled adjustment spans these global
+tests or methods. Reports keep disabled methods absent, include the recorded
+reason when a requested method is unavailable, and preserve actual native
+objects in the saved payload without exporting their internal machinery.
+
 ## Verification strategy
 
 Testthat covers provenance and arbitrary names, exact family schemas, semantic

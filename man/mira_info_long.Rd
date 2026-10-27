@@ -279,10 +279,11 @@ wide input row.}
 \item{model}{The primary fitted model and summary, fixed-effect ANOVA,
 global likelihood-ratio tests, convergence/singularity diagnostics,
 warnings/error, and requested, used, or skipped covariates.}
-\item{advanced_tests}{Structured \code{emmeans}, repeated-measures ANOVA, and
-Friedman modules.}
-\item{advanced_models}{The random-slope, \code{nlme}, and GEE modules plus a
-model-comparison table and paths to available fit objects.}
+\item{advanced_tests}{Structured \code{emmeans}, repeated-measures ANOVA,
+Friedman, \code{kenward_roger}, and \code{rank_longitudinal} modules.}
+\item{advanced_models}{The random-slope, \code{nlme}, GEE, and unstructured
+\code{mmrm} modules plus a model-comparison table with engine-specific
+likelihood-criterion conventions and paths to available fit objects.}
 \item{robustness}{The \code{club_sandwich} CR2 module.}
 \item{effect_sizes}{Paired Cohen's \code{dz}, paired rank-biserial correlations,
 ANOVA eta-squared measures, Kendall's W, mixed-model R-squared modules,
@@ -564,7 +565,8 @@ correlations, with AR(1) indexed by ordered timepoint number; and
 tests and HTZ joint Wald tests.
 }
 
-For GEE and CR2 joint tests, \code{TIME} selects every fixed-effect coefficient
+For GEE, CR2, Kenward-Roger, and MMRM joint coefficient tests, \code{TIME}
+selects every fixed-effect coefficient
 assigned to model terms involving the time factor (including interactions),
 \code{ARM} analogously selects coefficients in terms involving the arm factor,
 and \code{TIME_X_ARM} selects terms involving both factors. Covariate names do not
@@ -596,6 +598,78 @@ comparison aid, not a voting rule for scientific conclusions, and the rows
 can use different analysis samples or null hypotheses.
 }
 
+\section{Additional longitudinal perspectives}{
+
+When \code{model} is enabled, three further modules supplement the existing
+mixed-model, ANOVA, Friedman, GEE, residual-correlation, and CR2 results.
+Each module is protected separately and records \code{requested}, \code{performed},
+its actual analysis sample, and a failure or non-estimability explanation.
+\code{inspect_only = TRUE} performs no fitting. A resolved false model switch,
+for example with \code{analyses = "none"}, disables all three modules.
+
+\code{advanced_tests$kenward_roger} uses \code{pbkrtest::KRmodcomp()} for approximate
+joint F tests of the primary Gaussian random-intercept fit. Its \code{tidy} table
+contains the scaled F statistic, numerator and denominator degrees of
+freedom, \code{F_scaling}, raw p-value, observations, and independent subjects.
+\code{TIME} jointly tests all retained coefficients in terms involving time;
+\code{ARM} analogously includes all arm terms; \code{TIME_X_ARM} selects their
+interactions. TIME and ARM therefore include interaction coefficients when
+present. These are model-based coefficient hypotheses, rather than robust
+covariance corrections or averaged marginal contrasts. The module requires
+established convergence, a nonsingular fit, and positive residual variance.
+Rank-deficient hypotheses expose requested, tested, and dropped coefficients
+in \code{effect_diagnostics}; a reduced hypothesis is labelled explicitly, and a
+wholly unavailable hypothesis has no finite test result. Native tests,
+restriction matrices, and the fitted analysis frame are retained.
+
+\code{advanced_tests$rank_longitudinal} uses the formula interface of
+\verb{nparLD >= 2.3.3} with unweighted relative marginal effects (\code{H0p}),
+subject-level cell weights, asymptotic ANOVA-type (ATS) and Wald-type (WTS)
+tests, and pointwise logit confidence intervals at level \code{1 - alpha}.
+Its reference distribution weights the resolved time cells, and arm-by-time
+cells when enabled, equally. An effect greater than 0.5 denotes larger
+responses relative to that reference, independently of clinical direction.
+These factorial effect hypotheses differ from the Gaussian joint coefficient
+hypotheses; they do not test mean equality. Selected adjustment covariates
+are not used. The original subject-by-visit schedule retains missing response
+rows, and incomplete profiles contribute observed cells under an MCAR
+assumption; general MAR and MNAR mechanisms are not handled. Subjects with
+no finite response are excluded. \code{effects} reports cell counts, estimator
+SE, and pointwise intervals; \code{tests} identifies ATS/WTS and their null
+questions. If the native covariance estimates the covariance of the
+sqrt-N-scaled effect estimator, MIRA stores \code{covariance = Sigma / N} and
+\code{SE = sqrt(diag(Sigma) / N)}, where N counts independent observed subjects.
+The native object remains unchanged. ATS uses the engine's large-denominator
+F approximation (\code{df_den = 1e10}); WTS is asymptotic chi-squared and has no
+denominator degrees of freedom. No permutation test is requested.
+
+\code{advanced_models$mmrm} fits a marginal Gaussian repeated-measures model with
+\verb{mmrm >= 0.3.17}: categorical visits, the resolved mean-model covariates and
+arm terms, an unstructured residual covariance with visit-specific variances
+common across arms, REML estimation, and Satterthwaite inference. It adds no
+subject random effect. Selected baseline measurements are responses; this is
+not a constrained-baseline model or an automatic baseline-covariate analysis.
+Incomplete outcome profiles use available rows complete for the model
+predictors, without imputation. Inference requires a suitable mean/covariance
+specification and an ignorable MAR response-missingness mechanism; it is not
+an MNAR sensitivity analysis. Missing predictors can remove observations.
+The module preserves the requested visit order, requires observed modeled
+visits, one observation per subject and visit, a full-rank fixed design,
+joint observations for every visit pair, convergence, and finite,
+numerically full-rank covariance estimates. It records coefficient and
+joint-effect tests, marginal means and contrast families, covariance,
+visit-pair coverage, actual engine data/counts, and native fit/summary.
+
+MMRM likelihood criteria retain the engine's REML convention: AIC penalizes
+covariance parameters, and BIC uses independent subjects in its logarithmic
+penalty. \code{ic_penalty_parameters}, \code{bic_sample_size}, and \code{criteria_note}
+record that convention. The values are not harmonized with lme4/nlme
+criteria; the combined comparison table is not a cross-engine ranking rule.
+All three perspectives enter \code{sensitivity} with their own sample, hypothesis,
+and source path. Raw global tests are not pooled into a new adjustment family.
+MMRM contrast adjustments remain within their respective contrast families.
+}
+
 \section{Treatment-arm analyses}{
 
 Arm analyses require a resolved arm, \code{arm_tests = TRUE}, at least two observed
@@ -622,7 +696,9 @@ descriptive and pairwise-change tables remain unadjusted; adjustment applies
 only to the model-based results. In the repeated-measures ANOVA, categorical
 covariates are between-subject factors and numeric covariates are supplied as
 covariates. The same resolved covariates are used, when possible, by the
-primary mixed model, marginal means, random-slope model, GEE, and \code{nlme} fits.
+primary mixed model, marginal means, random-slope model, GEE, \code{nlme}, and
+MMRM fits. The rank longitudinal module remains unadjusted and does not
+exclude subjects because a selected adjustment covariate is missing.
 Character and logical values are converted to factors; non-finite numeric
 covariate values and blank character or factor values become missing.
 Covariates with fewer than two usable values are omitted from the primary
@@ -658,7 +734,8 @@ omnibus families, and Welch and Wilcoxon pairwise families for observed values
 and changes. Advanced contrast and Friedman post-hoc tables define additional
 scientifically distinct families. Their tables preserve raw p-values and
 store primary, Bonferroni, Holm, BH, and BY adjustments. Global
-likelihood-ratio, ANOVA, GEE, and sensitivity-table p-values are not pooled
+likelihood-ratio, ANOVA, GEE, CR2, Kenward-Roger, rank ATS/WTS, MMRM joint,
+and sensitivity-table p-values are not pooled
 into a single adjustment family.
 }
 
@@ -668,7 +745,9 @@ Base summaries and rank tests use R's \code{stats} package. Optional capabilitie
 require \code{ggplot2} (plots), \code{lme4} (mixed models), \code{lmerTest} (used in place of
 \code{lme4::lmer()} when present), \code{emmeans} (marginal means and contrasts), \code{afex}
 (repeated-measures ANOVA), \code{geepack} (GEE), \code{nlme} (residual correlation
-models), \code{clubSandwich} (CR2 inference), and \code{performance} (Nakagawa
+models), \code{clubSandwich} (CR2 inference), \code{pbkrtest} (Kenward-Roger joint
+tests), \verb{nparLD >= 2.3.3} (relative marginal effects), \verb{mmrm >= 0.3.17}
+(unstructured marginal repeated measures), and \code{performance} (Nakagawa
 R-squared). Except for plotting, each advanced module records \code{performed},
 package, warnings, error, and/or \code{reason_skipped} information. Absence of one
 package does not prevent independent modules from being attempted. Absence of
@@ -1435,6 +1514,12 @@ rbind(
 # Core summaries remain enabled under analyses = "none". On a real analysis,
 # the base-R Friedman branch is also attempted independently of model =.
 cfg_none$config$analyses$core
+}
+\references{
+\href{https://hojsgaard.github.io/pbkrtest/reference/kr-modcomp.html}{pbkrtest joint Kenward-Roger tests};
+\href{https://openpharma.github.io/mmrm/v0.3.17/articles/methodological_introduction.html}{mmrm methodology};
+\href{https://openpharma.github.io/mmrm/v0.3.17/reference/mmrm_tmb_methods.html}{mmrm likelihood-criterion conventions};
+\href{https://cran.r-project.org/web/packages/nparLD/refman/nparLD.html}{nparLD formula interface and effect hypotheses}.
 }
 \seealso{
 \code{\link[=mira_detect_long]{mira_detect_long()}} for configuration inspection without analysis,

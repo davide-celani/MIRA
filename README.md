@@ -170,6 +170,50 @@ report <- mira_report_freq_long(
 )
 ```
 
+With the model module enabled, `mira_info_long()` also attempts three
+complementary analyses. Existing methods remain available.
+
+| Result | Additional perspective | Main interpretation |
+|---|---|---|
+| `advanced_tests$kenward_roger` | Approximate Kenward-Roger joint F tests for the primary mixed model | Gaussian model-based inference; TIME and ARM include their interaction coefficients. |
+| `advanced_tests$rank_longitudinal` | Unweighted relative marginal effects and ATS/WTS with `nparLD >= 2.3.3` | Unadjusted factorial rank effects, with MCAR missingness assumptions and pointwise logit intervals. |
+| `advanced_models$mmrm` | Gaussian marginal model with `mmrm >= 0.3.17`, unstructured covariance, REML, and Satterthwaite inference | Visit variances/correlations are estimated separately, with covariance common across arms; incomplete responses require ignorable MAR. |
+
+For example, using the simulated data above:
+
+```r
+exploration_models <- mira_info_long(
+  wide_data,
+  id = "patient",
+  time_vars = c("BCVA_t0", "BCVA_t1", "BCVA_t2"),
+  arm = "arm",
+  reference_arm = "Control",
+  covariates = "age",
+  analyses = c("model", "arm_tests"),
+  verbose = FALSE
+)
+
+exploration_models$advanced_tests$kenward_roger$tidy
+exploration_models$advanced_tests$rank_longitudinal$effects
+exploration_models$advanced_tests$rank_longitudinal$tests
+exploration_models$advanced_models$mmrm$effect_tests
+exploration_models$advanced_models$mmrm$emmeans$baseline_final$tidy
+```
+
+These methods answer different questions and may use different subjects.
+Relative effects above 0.5 mean larger responses, rather than clinical
+improvement. MMRM treats selected baseline measurements as responses and does
+not automatically impose baseline equality or adjust for baseline response.
+No method here supplies an MNAR sensitivity analysis. MMRM's native AIC/BIC
+conventions differ from lme4/nlme, so their values do not define a common
+cross-engine ranking. See `?mira_info_long` for assumptions and diagnostics.
+
+The three modules are conditional on data adequacy, preserve failure reasons,
+and flow through printing, summaries, `sensitivity`, report tables, and
+CSV/RDS exports. Pass `exploration_models` to `mira_report_freq_long()` to
+include them. A resolved false model switch, for example with
+`analyses = "none"`, disables these additions; inspection performs no fitting.
+
 ## Data and model assumptions
 
 The Bayesian interface expects wide data with one row and one unique `patient`

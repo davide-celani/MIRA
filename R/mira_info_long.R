@@ -558,6 +558,37 @@
   list(value = value, warnings = captured_warnings, error = captured_error)
 }
 
+# ------------------------------------------------------------
+# PROTECTED EXTENDED-METHOD EXECUTION
+# ------------------------------------------------------------
+
+# Additional inferential perspectives are isolated from the established
+# analyses. A failure in one adapter must not discard independent results.
+.mira_protected_method_long <- function(expr, package, requested) {
+  if (!isTRUE(requested)) {
+    result <- .mira_skipped_module_long(package,
+      "Extended longitudinal methods were disabled by model = FALSE.")
+  } else {
+    evaluated <- .mira_eval_long(expr)
+    if (!is.null(evaluated$error)) {
+      result <- .mira_skipped_module_long(package,
+        "The requested extended method could not be completed.")
+      result$error <- evaluated$error
+      result$warnings <- evaluated$warnings
+    } else {
+      result <- evaluated$value
+      if (!is.list(result) || !is.logical(result$performed) ||
+          length(result$performed) != 1L || is.na(result$performed)) {
+        result <- .mira_skipped_module_long(package,
+          "The requested extended method returned an invalid module result.")
+      }
+      result$warnings <- unique(c(result$warnings, evaluated$warnings))
+    }
+  }
+  result$requested <- isTRUE(requested)
+  result
+}
+
 .mira_quote_formula_name_long <- function(x) {
   encodeString(x, quote = "`")
 }
@@ -1299,6 +1330,225 @@
   )
 }
 
+# ------------------------------------------------------------
+# RANK-BASED LONGITUDINAL INFERENCE (nparLD)
+# ------------------------------------------------------------
+
+# Rank-based longitudinal inference complements, rather than replaces, the
+# complete-profile Friedman branch and the adjusted Gaussian models.
+.mira_run_rank_longitudinal_long <- function(long_data, time_levels,
+                                              arm_enabled, arm_levels,
+                                              confidence_level) {
+  empty_effects <- data.frame(arm = character(0), time = character(0),
+    time_index = integer(0), time_label = character(0),
+    n_subjects = integer(0), n = integer(0), missing_n = integer(0),
+    relative_effect = numeric(0), SE = numeric(0),
+    ci_lower = numeric(0), ci_upper = numeric(0), stringsAsFactors = FALSE)
+  empty_tests <- data.frame(question = character(0), term = character(0),
+    method = character(0), distribution = character(0), statistic = numeric(0),
+    df_num = numeric(0), df_den = numeric(0), p_raw = numeric(0),
+    estimable = logical(0), note = character(0), stringsAsFactors = FALSE)
+  formula <- stats::as.formula(if (isTRUE(arm_enabled)) {
+    "value ~ arm_factor * time_factor"
+  } else "value ~ time_factor", env = baseenv())
+  result <- list(performed = FALSE, package = "nparLD", package_version = NA_character_,
+    formula = formula, hypothesis = "H0p", effect = "unweighted",
+    estimand = "Relative marginal Mann-Whitney effects against the equally weighted mixture of the requested time cells and, when enabled, treatment-arm cells.",
+    unadjusted = TRUE, missingness_assumption = "MCAR", confidence_level = confidence_level,
+    ci_method = "logit", n_subjects = 0L, n_observations = 0L,
+    excluded_subjects = character(0), data = data.frame(), object = NULL,
+    effects = empty_effects, tests = empty_tests, covariance = NULL,
+    warnings = character(0), error = NULL, reason_skipped = NULL,
+    note = paste("This rank analysis does not adjust for selected covariates.",
+      "Missing responses remain explicit; no imputation is performed.",
+      "Rank inference assumes responses are missing completely at random (MCAR); general MAR and MNAR mechanisms are not addressed.",
+      "Relative effects above 0.5 indicate larger responses, not clinical improvement.",
+      "ATS uses the engine's large-denominator F approximation (df_den=1e10).",
+      "SE and covariance describe the effect estimator; native nparLD scaled standard errors are retained only in object."))
+  skip <- function(reason, error = NULL) {
+    result$reason_skipped <- reason
+    result["error"] <- list(error)
+    result
+  }
+  if (!requireNamespace("nparLD", quietly = TRUE)) {
+    return(skip("Package 'nparLD' (>= 2.3.3) is not installed."))
+  }
+  result$package_version <- as.character(utils::packageVersion("nparLD"))
+  if (utils::packageVersion("nparLD") < "2.3.3") {
+    return(skip("Rank longitudinal inference requires nparLD >= 2.3.3; older releases use a different API."))
+  }
+  required <- c("patient", "time_index", "time_label", "value",
+    if (isTRUE(arm_enabled)) "arm")
+  if (!is.data.frame(long_data) || !all(required %in% names(long_data))) {
+    return(skip("Rank longitudinal inference requires subject, visit, and response columns."))
+  }
+  if (length(time_levels) < 2L || anyNA(time_levels) || anyDuplicated(time_levels)) {
+    return(skip("Rank longitudinal inference requires at least two distinct resolved visits."))
+  }
+  columns <- intersect(c("patient", "time", "time_index", "time_label", "arm", "value"),
+    names(long_data))
+  data <- long_data[!is.na(long_data$patient), columns, drop = FALSE]
+  data$patient <- as.character(data$patient)
+  data$time_label <- as.character(data$time_label)
+  data$value[!is.finite(data$value)] <- NA_real_
+  if (isTRUE(arm_enabled)) {
+    data$arm <- as.character(data$arm)
+    data$arm[is.na(data$arm) | !nzchar(trimws(data$arm))] <- NA_character_
+    data <- data[!is.na(data$arm), , drop = FALSE]
+    assignments <- split(data$arm, data$patient)
+    if (any(vapply(assignments, function(x) length(unique(x)) != 1L, logical(1L)))) {
+      result$data <- data
+      return(skip("Rank longitudinal inference requires one constant treatment arm per subject."))
+    }
+  }
+  result$data <- data
+  if (!nrow(data)) return(skip("No subjects have usable identifiers and required arm values."))
+  if (anyDuplicated(data[c("patient", "time_label")])) {
+    return(skip("Duplicate subject-by-visit records are not supported by this rank module; no replicate structure is inferred."))
+  }
+  # An entirely unobserved profile is not an independent observed unit. Remove
+  # that whole profile, never isolated unavailable visits from retained profiles.
+  any_observed <- tapply(is.finite(data$value), data$patient, any)
+  result$excluded_subjects <- names(any_observed)[!any_observed]
+  data <- data[!data$patient %in% result$excluded_subjects, , drop = FALSE]
+  result$data <- data
+  if (!nrow(data)) return(skip("No subjects have any finite responses for rank inference."))
+  data$patient_factor <- factor(data$patient, levels = unique(data$patient))
+  data$time_factor <- factor(data$time_label, levels = time_levels)
+  if (anyNA(data$time_factor)) return(skip("Rank data contain visits outside the resolved chronology."))
+  if (anyNA(data$time_index) || any(data$time_index != as.integer(data$time_factor))) {
+    return(skip("Rank visit indices do not match the resolved chronological labels."))
+  }
+  result$n_subjects <- as.integer(nlevels(data$patient_factor))
+  result$n_observations <- as.integer(sum(is.finite(data$value)))
+  schedule <- table(data$patient_factor, data$time_factor)
+  if (any(schedule != 1L)) {
+    return(skip("Rank inference requires the full subject-by-visit schedule, including explicit NA rows for unavailable responses."))
+  }
+  if (isTRUE(arm_enabled)) {
+    data$arm_factor <- factor(data$arm, levels = arm_levels)
+    if (length(arm_levels) < 2L || anyNA(data$arm_factor)) {
+      return(skip("Rank arm inference requires at least two resolved observed arms."))
+    }
+    if (anyDuplicated(as.vector(outer(arm_levels, time_levels, paste, sep = ":")))) {
+      return(skip("Arm and visit labels create ambiguous native rank-cell keys."))
+    }
+    subjects_by_arm <- table(data$arm_factor[!duplicated(data$patient)])
+    if (any(subjects_by_arm < 2L)) {
+      return(skip("Rank covariance estimation requires at least two observed subjects in every arm."))
+    }
+    observed_by_cell <- tapply(is.finite(data$value), list(data$arm_factor, data$time_factor), sum)
+  } else {
+    if (nlevels(data$patient_factor) < 2L) {
+      return(skip("Rank covariance estimation requires at least two observed subjects."))
+    }
+    observed_by_cell <- tapply(is.finite(data$value), data$time_factor, sum)
+  }
+  data <- data[order(data$patient_factor, data$time_index), , drop = FALSE]
+  rownames(data) <- NULL
+  result$data <- data
+  result$n_subjects <- as.integer(nlevels(data$patient_factor))
+  result$n_observations <- as.integer(sum(is.finite(data$value)))
+  # This adapter requires a minimal within-cell sample for uncertainty, even
+  # where the engine could regularize a less informative cell numerically.
+  if (any(!is.finite(observed_by_cell)) || any(observed_by_cell < 2L)) {
+    return(skip("Rank inference requires at least two finite observations in every requested arm-by-visit cell."))
+  }
+  if (length(unique(data$value[is.finite(data$value)])) < 2L) {
+    return(skip("Rank inference is unavailable because all finite responses are tied."))
+  }
+  # With complete, exactly static profiles the within-subject hypothesis has
+  # no sampling variation. Do not let covariance regularization or tiny signed
+  # floating-point residuals turn it into a valid-looking time test. Missing
+  # profiles are excluded from this guard because cell composition can change.
+  static_complete <- all(is.finite(data$value)) &&
+    all(vapply(split(data$value, data$patient), function(x) length(unique(x)) == 1L,
+      logical(1L)))
+  fitted <- .mira_eval_long(nparLD::nparLD(formula = formula, data = data,
+    subject = "patient_factor", effect = "unweighted", hypothesis = "H0p",
+    cell.weights = "subjects", alpha = 1 - confidence_level,
+    CI.method = "logit", covariance = TRUE, contrast = NULL, perm.test = FALSE))
+  result$warnings <- fitted$warnings
+  result["error"] <- list(fitted$error)
+  result["object"] <- list(fitted$value)
+  if (is.null(fitted$value)) {
+    return(skip("Rank longitudinal estimation failed; the remaining analyses are unaffected.", fitted$error))
+  }
+  extracted <- .mira_eval_long({
+    fit <- fitted$value
+    native <- stats::effects(fit)
+    Sigma <- as.matrix(nparLD::covariance(fit))
+    if (as.integer(fit$N.info) != result$n_subjects ||
+        nrow(Sigma) != nrow(native) || ncol(Sigma) != nrow(native)) {
+      stop("nparLD sample size or covariance dimensions do not match the fitted effects.")
+    }
+    if (any(!is.finite(Sigma)) || any(diag(Sigma) < 0)) {
+      stop("nparLD returned a non-finite covariance or a negative variance.")
+    }
+    native_time <- as.character(native$time_factor)
+    if (anyNA(match(native_time, time_levels))) stop("nparLD returned an unknown visit.")
+    source_map <- if ("time" %in% names(data)) {
+      as.character(data$time[match(time_levels, data$time_label)])
+    } else as.character(time_levels)
+    n <- nrow(native)
+    effects <- data.frame(arm = if (isTRUE(arm_enabled)) as.character(native$arm_factor) else rep(NA_character_, n),
+      time = source_map[match(native_time, time_levels)],
+      time_index = as.integer(match(native_time, time_levels)), time_label = native_time,
+      n_subjects = as.integer(native$Nsubj), n = as.integer(native$Nobs),
+      missing_n = as.integer(native$Nmiss), relative_effect = as.numeric(native$RTE),
+      SE = sqrt(diag(Sigma) / result$n_subjects),
+      ci_lower = as.numeric(native$lower), ci_upper = as.numeric(native$upper),
+      stringsAsFactors = FALSE)
+    rownames(effects) <- NULL
+    terms <- if (isTRUE(arm_enabled)) {
+      c(TIME = "time_factor", ARM = "arm_factor", TIME_X_ARM = "arm_factor:time_factor")
+    } else c(TIME = "time_factor")
+    tables <- list(ATS = nparLD::ATS(fit), WTS = nparLD::WTS(fit))
+    rows <- list()
+    for (question in names(terms)) {
+      term <- terms[[question]]
+      for (method in names(tables)) {
+        table <- tables[[method]]
+        index <- match(term, rownames(table))
+        if (is.na(index)) stop("nparLD returned no unique result for a requested hypothesis.")
+        statistic <- as.numeric(table[index, "Statistic"])
+        df <- as.numeric(table[index, "df"])
+        p <- as.numeric(table[index, "p-value"])
+        estimable <- all(is.finite(c(statistic, df, p))) && statistic >= 0 && df > 0 && p >= 0 && p <= 1
+        no_time_variation <- static_complete && question %in% c("TIME", "TIME_X_ARM")
+        note <- if (no_time_variation) {
+          "Complete profiles have no within-subject variation; this time-related hypothesis is not estimable."
+        } else if (!estimable) {
+          "The engine returned an invalid or non-finite statistic, degrees of freedom, or p-value."
+        } else NA_character_
+        estimable <- estimable && !no_time_variation
+        rows[[length(rows) + 1L]] <- data.frame(question = question, term = term,
+          method = method, distribution = if (method == "ATS") "F approximation" else "chi-squared",
+          statistic = if (estimable) statistic else NA_real_,
+          df_num = if (estimable) df else NA_real_,
+          df_den = if (estimable && method == "ATS") 1e10 else NA_real_,
+          p_raw = if (estimable) p else NA_real_, estimable = estimable,
+          note = note, stringsAsFactors = FALSE)
+      }
+    }
+    list(effects = effects, tests = do.call(rbind, rows),
+      covariance = matrix(as.numeric(Sigma) / result$n_subjects,
+        nrow = nrow(Sigma), dimnames = dimnames(Sigma)))
+  })
+  result$warnings <- unique(c(result$warnings, extracted$warnings))
+  if (!is.null(extracted$error)) {
+    return(skip("Rank results could not be standardized; the native fit is retained for diagnosis.", extracted$error))
+  }
+  result$effects <- extracted$value$effects
+  result$tests <- extracted$value$tests
+  result$covariance <- extracted$value$covariance
+  result$performed <- any(result$tests$estimable)
+  result["reason_skipped"] <- list(if (result$performed) NULL else if (static_complete) {
+    "Rank inference returned no estimable global test; complete profiles have no within-subject variation."
+  } else "Rank inference returned no finite estimable global test.")
+  result
+}
+
 .mira_effect_indices_long <- function(coefficient_names, question, model = NULL,
                                       include_dropped = FALSE) {
   if (is.null(model)) {
@@ -1526,6 +1776,153 @@
       error = function(e) NULL
     )
   )
+}
+
+# ------------------------------------------------------------
+# KENWARD-ROGER FINITE-SAMPLE INFERENCE (pbkrtest)
+# ------------------------------------------------------------
+
+# Model-based small-sample F tests for the primary Gaussian mixed model.
+# These complement, rather than replace, ML LRTs and CR2/HTZ inference.
+.mira_run_kenward_roger_long <- function(model, arm_enabled,
+                                        converged = NULL, singular = NULL) {
+  empty <- data.frame(question = character(0), statistic = numeric(0),
+    df_num = numeric(0), df_den = numeric(0), F_scaling = numeric(0),
+    p_raw = numeric(0), n = integer(0), n_subjects = integer(0),
+    stringsAsFactors = FALSE)
+  result <- list(performed = FALSE, package = "pbkrtest",
+    method = "Kenward-Roger adjusted F-tests",
+    tidy = empty, tests = list(), constraints = list(),
+    effect_diagnostics = list(), data = NULL, n = NA_integer_,
+    n_subjects = NA_integer_, warnings = character(0), error = NULL,
+    errors = list(), reason_skipped = NULL,
+    note = paste("Model-based Gaussian inference, not robust to arbitrary covariance misspecification.",
+      "TIME and ARM jointly test every retained coefficient in their model terms, including interactions.",
+      "No adjustment is pooled across these scientific questions or across methods."))
+  skip <- function(reason) {
+    result$reason_skipped <- reason
+    result
+  }
+  if (is.null(model)) {
+    return(skip("The random-intercept mixed model was not available."))
+  }
+  if (!requireNamespace("pbkrtest", quietly = TRUE)) {
+    return(skip("Package 'pbkrtest' is not installed."))
+  }
+  if (!inherits(model, "lmerMod")) {
+    return(skip("Kenward-Roger inference requires a Gaussian lmer model."))
+  }
+
+  data_eval <- .mira_eval_long(stats::model.frame(model))
+  result$warnings <- data_eval$warnings
+  # Keep an explicit NULL field: removing it would make $error partially
+  # match the separate named list $errors in base R.
+  result["error"] <- list(data_eval$error)
+  if (is.null(data_eval$value)) {
+    return(skip("The mixed-model analysis sample could not be recovered."))
+  }
+  result$data <- data_eval$value
+  result$n <- as.integer(nrow(result$data))
+  groups <- lme4::getME(model, "flist")
+  subject <- if ("patient_factor" %in% names(groups)) groups$patient_factor else {
+    if (length(groups) == 1L) groups[[1L]] else NULL
+  }
+  if (!is.null(subject)) {
+    result$n_subjects <- as.integer(length(unique(subject[!is.na(subject)])))
+  }
+  diagnostic <- .mira_lmer_diagnostics_long(model)
+  if (is.null(converged)) converged <- diagnostic$converged
+  if (is.null(singular)) singular <- diagnostic$singular
+  if (!isTRUE(converged)) {
+    return(skip("Kenward-Roger inference was not attempted because mixed-model convergence was not established."))
+  }
+  if (!isFALSE(singular)) {
+    return(skip("Kenward-Roger inference was not attempted because the mixed model was singular or its singularity status was unavailable."))
+  }
+  sigma <- stats::sigma(model)
+  if (length(sigma) != 1L || !is.finite(sigma) || sigma <= 0) {
+    return(skip("Kenward-Roger inference requires a positive finite residual standard deviation."))
+  }
+
+  beta <- lme4::fixef(model)
+  complete_beta <- lme4::fixef(model, add.dropped = TRUE)
+  questions <- c("TIME", if (isTRUE(arm_enabled)) c("ARM", "TIME_X_ARM"))
+  rows <- list()
+  for (question in questions) {
+    requested <- names(complete_beta)[.mira_effect_indices_long(
+      names(complete_beta), question, model = model, include_dropped = TRUE)]
+    if (!length(requested)) next
+    indices <- .mira_effect_indices_long(names(beta), question, model = model)
+    tested <- names(beta)[indices]
+    dropped <- setdiff(requested, tested)
+    reduced <- length(dropped) > 0L
+    note <- if (reduced) {
+      paste0(if (length(tested)) {
+        paste0("Reduced hypothesis: tests ", length(tested), " of ", length(requested),
+          " requested coefficients; tested: ", paste(tested, collapse = ", "), ". ")
+      } else "Hypothesis not estimable: no requested coefficient remains; no test or p-value. ",
+      "Dropped coefficients: ", paste(dropped, collapse = ", "), ".")
+    } else NULL
+    item <- list(requested_coefficients = requested, tested_coefficients = tested,
+      dropped_coefficients = dropped, hypothesis_reduced = reduced,
+      estimable = FALSE, reason_skipped = NULL, note = note)
+    row <- data.frame(question = question, statistic = NA_real_,
+      df_num = NA_real_, df_den = NA_real_, F_scaling = NA_real_,
+      p_raw = NA_real_, n = result$n, n_subjects = result$n_subjects,
+      stringsAsFactors = FALSE)
+    if (!length(indices)) {
+      item$reason_skipped <- "No retained coefficient is available for this hypothesis after rank-deficient columns were dropped."
+    } else {
+      restriction <- diag(length(beta))[indices, , drop = FALSE]
+      dimnames(restriction) <- list(tested, names(beta))
+      result$constraints[[question]] <- restriction
+      evaluated <- .mira_eval_long(pbkrtest::KRmodcomp(model, restriction))
+      result$warnings <- unique(c(result$warnings, evaluated$warnings))
+      result$tests[question] <- list(evaluated$value)
+      if (!is.null(evaluated$error)) result$errors[[question]] <- evaluated$error
+      if (is.null(evaluated$value)) {
+        item$reason_skipped <- "Kenward-Roger estimation failed for this hypothesis."
+      } else {
+        extracted <- .mira_eval_long(pbkrtest::getKR(evaluated$value))
+        result$warnings <- unique(c(result$warnings, extracted$warnings))
+        if (!is.null(extracted$error)) result$errors[[question]] <- extracted$error
+        values <- extracted$value
+        required <- c("Fstat", "ndf", "ddf", "F.scaling", "p.value")
+        usable <- is.list(values) && all(required %in% names(values)) &&
+          all(vapply(values[required], function(x) is.numeric(x) &&
+            length(x) == 1L && is.finite(x), logical(1L)))
+        if (usable) {
+          usable <- values$Fstat >= 0 && values$ndf > 0 && values$ddf > 0 &&
+            values$F.scaling > 0 && values$p.value >= 0 && values$p.value <= 1
+        }
+        if (usable) {
+          row$statistic <- as.numeric(values$Fstat)
+          row$df_num <- as.numeric(values$ndf)
+          row$df_den <- as.numeric(values$ddf)
+          row$F_scaling <- as.numeric(values$F.scaling)
+          row$p_raw <- as.numeric(values$p.value)
+          item$estimable <- TRUE
+        } else {
+          item$reason_skipped <- "Kenward-Roger returned no finite estimable F-test for this hypothesis."
+        }
+      }
+    }
+    if (!isTRUE(item$estimable) && length(item$reason_skipped)) {
+      item$note <- paste(c(item$note, item$reason_skipped), collapse = " ")
+    }
+    result$effect_diagnostics[[question]] <- item
+    rows[[length(rows) + 1L]] <- row
+  }
+  if (length(rows)) result$tidy <- do.call(rbind, rows)
+  result$performed <- any(vapply(result$effect_diagnostics,
+    function(x) isTRUE(x$estimable), logical(1L)))
+  if (!result$performed) {
+    result$reason_skipped <- if (!length(rows)) {
+      "No time or arm hypothesis was present in the mixed-model fixed effects."
+    } else "No requested Kenward-Roger hypothesis produced finite estimable inference."
+    if (length(result$errors)) result$error <- result$errors[[1L]]
+  }
+  result
 }
 
 .mira_run_random_slope_long <- function(data,
@@ -1767,6 +2164,243 @@
     error = NULL,
     reason_skipped = NULL
   )
+}
+
+# ------------------------------------------------------------
+# MARGINAL MMRM WITH UNSTRUCTURED COVARIANCE (mmrm)
+# ------------------------------------------------------------
+
+# Marginal repeated-measures analysis: no subject random effect is added to
+# the unstructured within-subject covariance. This is a distinct model from
+# the random-intercept/random-slope and GEE modules.
+.mira_run_mmrm_long <- function(data,
+                                fixed_formula,
+                                arm_enabled,
+                                confidence_level,
+                                primary_method) {
+  result <- list(
+    performed = FALSE, package = "mmrm", model = NULL, summary = NULL,
+    formula = fixed_formula, mean_formula = fixed_formula,
+    method = "REML", df_method = "Satterthwaite",
+    covariance_structure = "unstructured covariance with visit-specific variances",
+    covariance_scope = "common across treatment arms",
+    covariance = NULL, coefficients = NULL, effect_tests = NULL,
+    effect_diagnostics = list(), emmeans = NULL, data = NULL,
+    data_source = "not fitted", n = nrow(data),
+    n_subjects = if ("patient_factor" %in% names(data)) {
+      length(unique(data$patient_factor[!is.na(data$patient_factor)]))
+    } else 0L,
+    n_timepoints = 0L, covariance_parameters = 0L, pair_coverage = NULL,
+    converged = FALSE, covariance_rank = NA_integer_,
+    covariance_rank_tolerance = sqrt(.Machine$double.eps),
+    start_method = NULL, start_fallback_reason = NULL,
+    AIC = NA_real_, BIC = NA_real_, logLik = NA_real_,
+    ic_penalty_parameters = NA_integer_, bic_sample_size = NA_integer_,
+    criteria_note = paste("Native mmrm REML criteria: AIC penalizes covariance parameters only;",
+      "BIC uses the number of independent subjects. These are not harmonized with lme4/nlme criteria."),
+    warnings = character(0), error = NULL, errors = list(), reason_skipped = NULL,
+    note = paste(
+      "Marginal Gaussian model on the resolved visits, including baseline when selected.",
+      "Incomplete visits are retained under an ignorable MAR assumption; no imputation is performed.",
+      "The mean formula uses the same selected covariates and arm terms as the other model modules."
+    )
+  )
+  unavailable <- function(reason, error = NULL) {
+    result$reason_skipped <- reason
+    result["error"] <- list(error)
+    result$emmeans <- .mira_skipped_module_long("emmeans", reason)
+    result
+  }
+  if (!requireNamespace("mmrm", quietly = TRUE)) {
+    return(unavailable("Package 'mmrm' is not installed."))
+  }
+  if (utils::packageVersion("mmrm") < "0.3.17") {
+    return(unavailable("Unstructured MMRM requires mmrm >= 0.3.17."))
+  }
+  required <- c("patient_factor", "time_factor", "value")
+  if (!is.data.frame(data) || !all(required %in% names(data)) || !nrow(data)) {
+    return(unavailable("MMRM requires non-empty prepared subject-by-visit model data."))
+  }
+  if (anyNA(data[required]) || any(!is.finite(data$value))) {
+    return(unavailable("MMRM prepared model data contain unavailable subject, visit or response values."))
+  }
+  if (!is.factor(data$time_factor)) {
+    return(unavailable("MMRM requires an ordered mapping supplied as time_factor levels."))
+  }
+  visits <- levels(data$time_factor)
+  result$n_timepoints <- length(visits)
+  result$covariance_parameters <- as.integer(length(visits) * (length(visits) + 1L) / 2L)
+  if (length(visits) < 2L || any(table(data$time_factor) == 0L)) {
+    return(unavailable("MMRM needs at least two observed visit levels and no empty modeled visit level."))
+  }
+  if (anyDuplicated(data[c("patient_factor", "time_factor")])) {
+    return(unavailable("MMRM requires one observation per subject and visit; duplicate subject-visit records were not aggregated."))
+  }
+  incidence <- table(data$patient_factor, data$time_factor) > 0L
+  coverage <- crossprod(incidence)
+  storage.mode(coverage) <- "integer"
+  result$pair_coverage <- coverage
+  if (any(coverage[upper.tri(coverage)] == 0L)) {
+    return(unavailable("Unstructured MMRM covariance is not identifiable: a visit pair has no subject observed at both visits."))
+  }
+  design_eval <- .mira_eval_long({
+    frame <- stats::model.frame(fixed_formula, data = data, na.action = stats::na.fail)
+    design <- stats::model.matrix(fixed_formula, frame)
+    list(design = design, terms = stats::terms(fixed_formula), frame = frame)
+  })
+  result$warnings <- design_eval$warnings
+  if (is.null(design_eval$value)) {
+    return(unavailable("The MMRM fixed-effect design could not be constructed.", design_eval$error))
+  }
+  design <- design_eval$value$design
+  if (any(!is.finite(design)) || qr(design)$rank < ncol(design) || nrow(design) <= ncol(design)) {
+    return(unavailable("MMRM requires a finite full-rank fixed-effect design with positive residual degrees of freedom."))
+  }
+  # Use the factor levels, not row position, to identify the residual covariance
+  # entries. mmrm itself subsets the shared covariance for each observed profile.
+  model_formula <- stats::update.formula(fixed_formula,
+    . ~ . + us(time_factor | patient_factor))
+  environment(model_formula) <- asNamespace("mmrm")
+  result$formula <- model_formula
+  # The public empirical initializer improves scaling for heterogeneous visit
+  # variances. In incomplete data its pairwise covariance can be indefinite;
+  # only initialization then falls back to the standard engine initializer.
+  # Pass numeric starts rather than a closure capturing the analytical object.
+  initialized <- .mira_eval_long(mmrm::emp_start(y_vector = data$value,
+    x_matrix = design, full_frame = data, visit_var = "time_factor",
+    subject_var = "patient_factor", subject_groups = rep(1L, result$n_subjects)))
+  result$warnings <- unique(c(result$warnings, initialized$warnings))
+  starts <- if (is.null(initialized$value)) mmrm::std_start else initialized$value
+  result$start_method <- if (is.null(initialized$value)) "standard fallback" else "empirical"
+  result$start_fallback_reason <- initialized$error
+  fitted <- .mira_eval_long(mmrm::mmrm(model_formula, data = data,
+    reml = TRUE, control = mmrm::mmrm_control(method = "Satterthwaite",
+      accept_singular = FALSE, start = starts)))
+  result$warnings <- unique(c(result$warnings, fitted$warnings))
+  if (is.null(fitted$value)) {
+    return(unavailable("The unstructured MMRM could not be estimated.", fitted$error))
+  }
+  model <- fitted$value
+  result$model <- model
+  extracted <- .mira_eval_long(list(
+    beta = mmrm::component(model, "beta_est"),
+    covariance = mmrm::component(model, "varcor"),
+    beta_vcov = mmrm::component(model, "beta_vcov"),
+    data = mmrm::component(model, "full_frame"),
+    convergence = mmrm::component(model, "convergence"),
+    convergence_message = mmrm::component(model, "conv_message"),
+    n_subjects = mmrm::component(model, "n_subjects"),
+    n_obs = mmrm::component(model, "n_obs")))
+  result$warnings <- unique(c(result$warnings, extracted$warnings))
+  if (is.null(extracted$value)) {
+    return(unavailable("The fitted MMRM could not provide its analytical components.", extracted$error))
+  }
+  components <- extracted$value
+  beta <- components$beta
+  covariance <- components$covariance
+  beta_vcov <- components$beta_vcov
+  result$data <- components$data
+  result$data_source <- "engine full_frame"
+  result$n <- as.integer(components$n_obs)
+  result$n_subjects <- as.integer(components$n_subjects)
+  result$covariance <- covariance
+  result$convergence_message <- components$convergence_message
+  result$converged <- length(components$convergence) == 1L &&
+    !is.na(components$convergence) && components$convergence == 0L
+  summary_eval <- .mira_eval_long(summary(model))
+  result$summary <- summary_eval$value
+  result$warnings <- unique(c(result$warnings, summary_eval$warnings))
+  if (!is.null(summary_eval$error)) result$errors$summary <- summary_eval$error
+  eigenvalues <- if (is.matrix(covariance) && all(is.finite(covariance))) {
+    tryCatch(eigen((covariance + t(covariance)) / 2,
+      symmetric = TRUE, only.values = TRUE)$values, error = function(e) numeric(0))
+  } else numeric(0)
+  result$covariance_rank <- if (length(eigenvalues) && max(eigenvalues) > 0) {
+    as.integer(sum(eigenvalues > max(eigenvalues) * result$covariance_rank_tolerance))
+  } else 0L
+  valid <- result$converged && length(beta) == ncol(design) &&
+    all(is.finite(beta)) && is.matrix(beta_vcov) &&
+    all(is.finite(beta_vcov)) && all(diag(beta_vcov) > 0) &&
+    length(eigenvalues) == length(visits) &&
+    result$covariance_rank == length(visits)
+  if (!valid) {
+    return(unavailable(paste("MMRM inference is unavailable:",
+      "the fit did not converge or its coefficient/residual covariance was not finite and numerically full rank.")))
+  }
+  result$AIC <- tryCatch(as.numeric(stats::AIC(model)), error = function(e) NA_real_)
+  result$BIC <- tryCatch(as.numeric(stats::BIC(model)), error = function(e) NA_real_)
+  result$logLik <- tryCatch(as.numeric(stats::logLik(model)), error = function(e) NA_real_)
+  result$ic_penalty_parameters <- as.integer(mmrm::component(model, "n_theta"))
+  result$bic_sample_size <- as.integer(result$n_subjects)
+  coefficient_rows <- vector("list", length(beta))
+  for (i in seq_along(beta)) {
+    contrast <- numeric(length(beta))
+    contrast[[i]] <- 1
+    test <- .mira_eval_long(mmrm::df_1d(model, contrast))
+    result$warnings <- unique(c(result$warnings, test$warnings))
+    if (!is.null(test$error)) result$errors[[paste0("coefficient_", names(beta)[[i]])]] <- test$error
+    row <- test$value
+    numeric_field <- function(name) {
+      value <- row[[name]]
+      if (is.null(value) || length(value) != 1L) NA_real_ else as.numeric(value)
+    }
+    estimate <- numeric_field("est")
+    se <- numeric_field("se")
+    df <- numeric_field("df")
+    statistic <- numeric_field("t_stat")
+    p <- numeric_field("p_val")
+    estimable <- all(is.finite(c(estimate, se, df, statistic, p))) && se > 0 && df > 0
+    critical <- if (estimable) stats::qt((1 + confidence_level) / 2, df) else NA_real_
+    coefficient_rows[[i]] <- data.frame(term = names(beta)[[i]], estimate = estimate,
+      SE = se, df = df, lower.CL = estimate - critical * se,
+      upper.CL = estimate + critical * se, t.ratio = statistic, p_raw = p,
+      estimable = estimable, stringsAsFactors = FALSE)
+  }
+  result$coefficients <- do.call(rbind, coefficient_rows)
+  factors <- attr(design_eval$value$terms, "factors")
+  assignments <- attr(design, "assign")[match(names(beta), colnames(design))]
+  involves <- function(variable) {
+    if (is.null(factors) || !variable %in% rownames(factors)) return(rep(FALSE, length(beta)))
+    !is.na(assignments) & assignments %in% which(factors[variable, ] > 0)
+  }
+  time_terms <- involves("time_factor")
+  arm_terms <- involves("arm_factor")
+  effect_rows <- list()
+  for (question in c("TIME", "ARM", "TIME_X_ARM")) {
+    selected <- if (question == "TIME") which(time_terms) else {
+      if (question == "ARM") which(arm_terms) else which(time_terms & arm_terms)
+    }
+    diagnostic <- list(requested_coefficients = names(beta)[selected],
+      tested_coefficients = names(beta)[selected], dropped_coefficients = character(0),
+      hypothesis_reduced = FALSE, reason_skipped = NULL)
+    if (!length(selected)) {
+      diagnostic$reason_skipped <- "No coefficients for this question are present in the resolved mean model."
+      result$effect_diagnostics[[question]] <- diagnostic
+      next
+    }
+    contrasts <- diag(length(beta))[selected, , drop = FALSE]
+    tested <- .mira_eval_long(mmrm::df_md(model, contrasts))
+    result$warnings <- unique(c(result$warnings, tested$warnings))
+    if (!is.null(tested$error)) result$errors[[question]] <- tested$error
+    fields <- unlist(tested$value[c("f_stat", "num_df", "denom_df", "p_val")], use.names = FALSE)
+    estimable <- length(fields) == 4L && all(is.finite(fields)) && fields[[2L]] > 0 && fields[[3L]] > 0
+    if (estimable) {
+      effect_rows[[length(effect_rows) + 1L]] <- data.frame(question = question,
+        statistic = as.numeric(tested$value$f_stat), df_num = as.numeric(tested$value$num_df),
+        df_den = as.numeric(tested$value$denom_df), p_raw = as.numeric(tested$value$p_val),
+        stringsAsFactors = FALSE)
+    } else {
+      diagnostic$reason_skipped <- "The MMRM joint test did not return finite estimable inference."
+    }
+    result$effect_diagnostics[[question]] <- diagnostic
+  }
+  result$effect_tests <- if (length(effect_rows)) do.call(rbind, effect_rows) else data.frame(
+    question = character(0), statistic = numeric(0), df_num = numeric(0),
+    df_den = numeric(0), p_raw = numeric(0), stringsAsFactors = FALSE)
+  result$performed <- any(result$coefficients$estimable)
+  if (!result$performed) return(unavailable("MMRM returned no finite estimable coefficient inference."))
+  result$emmeans <- .mira_run_emmeans_long(model, arm_enabled, primary_method, confidence_level)
+  result
 }
 
 .mira_run_robust_inference_long <- function(model, confidence_level) {
@@ -2275,12 +2909,122 @@
   out
 }
 
+# ------------------------------------------------------------
+# EXTENDED-METHOD SENSITIVITY ROWS
+# ------------------------------------------------------------
+
+.mira_extend_sensitivity_long <- function(existing, kr, rank, mmrm) {
+  rows <- list(existing)
+  append_table <- function(module, table, method, path, note) {
+    if (!isTRUE(module$performed) || !is.data.frame(table) || !nrow(table)) return()
+    for (i in seq_len(nrow(table))) {
+      r <- table[i, , drop = FALSE]
+      if (!all(is.finite(c(r$statistic, r$p_raw)))) next
+      label <- if ("method" %in% names(r)) paste0(method, " (", r$method, ")") else method
+      diagnostic <- module$effect_diagnostics[[r$question]]
+      extra_note <- if (!is.null(diagnostic$note)) diagnostic$note else character(0)
+      rows[[length(rows) + 1L]] <<- .mira_sensitivity_row_long(
+        r$question, label, r$statistic, paste(r$df_num, r$df_den, sep = "/"),
+        r$p_raw, n = if ("n" %in% names(r)) r$n else {
+          if (length(module$n) == 1L) module$n else module$n_subjects
+        },
+        object_path = path, note = paste(c(note, extra_note), collapse = " "))
+    }
+  }
+  append_table(kr, kr$tidy, "Mixed model: Kenward-Roger F test",
+    "$advanced_tests$kenward_roger$tidy",
+    "Gaussian model-based finite-sample joint test; not a robust covariance correction.")
+  append_table(rank, rank$tests, "Nonparametric relative marginal effects",
+    "$advanced_tests$rank_longitudinal$tests",
+    "Unadjusted rank-based marginal effects; not a test of mean change or a causal effect.")
+  append_table(mmrm, mmrm$effect_tests, "MMRM: unstructured/Satterthwaite",
+    "$advanced_models$mmrm$effect_tests",
+    "Marginal Gaussian mean model, common unstructured covariance, ignorable missingness assumption.")
+  if (length(rows) == 1L) return(existing)
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  attr(out, "interpretation") <- attr(existing, "interpretation")
+  out
+}
+
 .mira_multiplicity_family_long <- function(table, primary_method, object_path) {
   list(
     primary_method = primary_method,
     available_adjustments = c("raw", "bonferroni", "holm", "BH", "BY"),
     object_path = if (is.null(table)) NA_character_ else object_path
   )
+}
+
+# ------------------------------------------------------------
+# INTEGRATION OF EXTENDED INFERENCE AND MULTIPLICITY
+# ------------------------------------------------------------
+
+.mira_extend_inference_long <- function(out, long_data, time_levels, arm_enabled,
+                                        arm_levels, confidence_level,
+                                        primary_method, model_enabled,
+                                        mixed_model, mixed_converged,
+                                        mixed_singular) {
+  kr <- .mira_protected_method_long(
+    .mira_run_kenward_roger_long(mixed_model, arm_enabled,
+      converged = mixed_converged, singular = mixed_singular),
+    "pbkrtest", model_enabled)
+  rank <- .mira_protected_method_long(
+    .mira_run_rank_longitudinal_long(long_data, time_levels, arm_enabled,
+      arm_levels, confidence_level), "nparLD", model_enabled)
+  mmrm_data <- out$data
+  if (is.data.frame(mmrm_data) && "time_factor" %in% names(mmrm_data)) {
+    mmrm_data$time_factor <- factor(mmrm_data$time_factor, levels = time_levels)
+  }
+  mmrm <- .mira_protected_method_long(
+    .mira_run_mmrm_long(mmrm_data, out$formula, arm_enabled,
+      confidence_level, primary_method), "mmrm", model_enabled)
+  out$advanced_tests$kenward_roger <- kr
+  out$advanced_tests$rank_longitudinal <- rank
+  out$advanced_models$mmrm <- mmrm
+  out$sensitivity <- .mira_extend_sensitivity_long(out$sensitivity, kr, rank, mmrm)
+  if (isTRUE(mmrm$performed) && is.data.frame(out$advanced_models$model_comparison) &&
+      nrow(out$advanced_models$model_comparison)) {
+    comparison <- out$advanced_models$model_comparison
+    comparison$criterion_convention <- ifelse(grepl("^gee_", comparison$model),
+      "GEE QIC/CIC; not likelihood AIC/BIC.",
+      "Native engine AIC/BIC; parameter counts and BIC sample conventions differ across engines. Do not rank across engine families.")
+    row <- comparison[1L, , drop = FALSE]
+    for (name in names(row)) row[[name]][] <- NA
+    row$model <- "mmrm_unstructured"
+    row$formula <- .mira_formula_text_long(mmrm$formula)
+    row$correlation_structure <- "unstructured; visit-specific variances"
+    row$n <- as.integer(mmrm$n)
+    row$n_subjects <- as.integer(mmrm$n_subjects)
+    row$AIC <- mmrm$AIC
+    row$BIC <- mmrm$BIC
+    row$logLik <- mmrm$logLik
+    row$converged <- isTRUE(mmrm$converged)
+    row$object_path <- "$advanced_models$mmrm$model"
+    row$criterion_convention <- mmrm$criteria_note
+    out$advanced_models$model_comparison <- rbind(comparison, row)
+    rownames(out$advanced_models$model_comparison) <- NULL
+  }
+  if (isTRUE(mmrm$performed) && isTRUE(mmrm$emmeans$performed)) {
+    e <- mmrm$emmeans
+    families <- list(time_pairwise = e$time$pairwise_tidy,
+      baseline_vs_followup = e$baseline_followup$tidy,
+      consecutive_time = e$consecutive$tidy, ordinal_trends = e$trends$tidy,
+      arm_pairwise = e$arm$pairwise_tidy,
+      simple_arm = e$arm_time$simple_arm_tidy,
+      simple_time = e$arm_time$simple_time_tidy,
+      interaction = e$arm_time$interaction_tidy)
+    paths <- c(time_pairwise = "time$pairwise_tidy",
+      baseline_vs_followup = "baseline_followup$tidy", consecutive_time = "consecutive$tidy",
+      ordinal_trends = "trends$tidy", arm_pairwise = "arm$pairwise_tidy",
+      simple_arm = "arm_time$simple_arm_tidy", simple_time = "arm_time$simple_time_tidy",
+      interaction = "arm_time$interaction_tidy")
+    out$multiplicity$mmrm <- lapply(names(families), function(name) {
+      .mira_multiplicity_family_long(families[[name]], primary_method,
+        paste0("$advanced_models$mmrm$emmeans$", paths[[name]]))
+    })
+    names(out$multiplicity$mmrm) <- names(families)
+  }
+  out
 }
 
 .mira_run_advanced_inference_long <- function(analysis_data,
@@ -2301,7 +3045,8 @@
                                          global_arm_test,
                                          interaction_test,
                                          change,
-                                         icc_model) {
+                                         icc_model,
+                                         rank_long_data = long_data) {
   time_levels <- unname(time_labels[time_vars])
   advanced_data <- .mira_prepare_advanced_data_long(
     long_data = long_data,
@@ -2437,7 +3182,7 @@
     )
   )
 
-  list(
+  out <- list(
     advanced_tests = list(
       emmeans = emmeans,
       rm_anova = rm_anova,
@@ -2471,6 +3216,9 @@
     data = advanced_data,
     formula = fixed_formula
   )
+  .mira_extend_inference_long(out, rank_long_data, time_levels, arm_enabled,
+    arm_levels, confidence_level, primary_method, model_enabled,
+    mixed_model, mixed_converged, mixed_singular)
 }
 
 .mira_failed_advanced_long <- function(error, warnings = character(0)) {
@@ -2485,12 +3233,13 @@
     note = character(0), stringsAsFactors = FALSE
   )
   list(
-    advanced_tests = list(emmeans = skipped, rm_anova = skipped, friedman = skipped),
+    advanced_tests = list(emmeans = skipped, rm_anova = skipped, friedman = skipped,
+      kenward_roger = skipped, rank_longitudinal = skipped),
     advanced_models = list(
       random_slope = skipped,
       nlme = list(compound_symmetry = skipped, ar1 = skipped, comparison = NULL),
       gee = list(independence = skipped, exchangeable = skipped, ar1 = skipped),
-      model_comparison = data.frame()
+      model_comparison = data.frame(), mmrm = skipped
     ),
     robustness = list(club_sandwich = skipped),
     effect_sizes = list(),
@@ -4084,7 +4833,8 @@
       global_arm_test = global_arm_test,
       interaction_test = arm_time_interaction_test,
       change = change,
-      icc_model = icc_model
+      icc_model = icc_model,
+      rank_long_data = long_data
     )
   )
   advanced_results <- if (is.null(advanced_eval$value)) {
@@ -5056,7 +5806,9 @@
     sensitivity = c("effect_size", "statistic", "df", "p_raw"),
     response = "patient_mean",
     icc = "ICC",
-    paired_effect = "cohens_dz"
+    paired_effect = "cohens_dz",
+    joint_test = c("statistic", "df_num", "df_den", "F_scaling", "p_raw"),
+    relative_effect = c("relative_effect", "SE", "ci_lower", "ci_upper")
   )
 }
 
@@ -5089,11 +5841,31 @@
   add("advanced_tests$rm_anova$tidy", "rm_anova", "effect")
   add("advanced_tests$friedman$tidy", "friedman", c("n", "n_timepoints"))
   add("advanced_tests$friedman$posthoc$tidy", "rank", c(pair, "n"), "primary_method")
+  add("advanced_tests$kenward_roger$tidy", "joint_test", c("question", "n", "n_subjects"))
+  add("advanced_tests$rank_longitudinal$effects", "relative_effect",
+    c("arm", time, "n_subjects", "n", "missing_n"))
+  add("advanced_tests$rank_longitudinal$tests", "joint_test",
+    c("question", "term", "method", "distribution"), "estimable")
+  add("advanced_models$mmrm$coefficients", "contrast", "term", "estimable")
+  add("advanced_models$mmrm$effect_tests", "joint_test", "question")
+  add("advanced_models$mmrm", "model_fit",
+    c("performed", "package", "model", "summary", "formula", "mean_formula",
+      "method", "df_method", "covariance_structure", "covariance_scope",
+      "covariance", "coefficients", "effect_tests", "effect_diagnostics", "emmeans",
+      "data", "data_source", "n", "n_subjects", "n_timepoints", "covariance_parameters"))
   for (path in c("time$pairwise_tidy", "arm$pairwise_tidy",
       "arm_time$simple_arm_tidy", "arm_time$simple_time_tidy",
       "arm_time$interaction_tidy", "baseline_followup$tidy", "baseline_final$tidy",
       "consecutive$tidy", "trends$tidy")) {
     add(paste0("advanced_tests$emmeans$", path), "contrast",
+      c("contrast", "time_factor", "arm_factor", "arm_factor_pairwise", "time_factor_pairwise"),
+      "primary_method")
+  }
+  for (path in c("time$pairwise_tidy", "arm$pairwise_tidy",
+      "arm_time$simple_arm_tidy", "arm_time$simple_time_tidy",
+      "arm_time$interaction_tidy", "baseline_followup$tidy", "baseline_final$tidy",
+      "consecutive$tidy", "trends$tidy")) {
+    add(paste0("advanced_models$mmrm$emmeans$", path), "contrast",
       c("contrast", "time_factor", "arm_factor", "arm_factor_pairwise", "time_factor_pairwise"),
       "primary_method")
   }
@@ -5188,6 +5960,7 @@
     x <<- .mira_set_result_path_long(x, parts, item)
   }
   remove("advanced_tests$emmeans", c("object", "summary", "tidy"))
+  remove("advanced_models$mmrm$emmeans", c("object", "summary", "tidy"))
   remove("advanced_tests$friedman", c("object", "summary"))
   remove("advanced_tests$rm_anova", "n")
   remove("advanced_models$random_slope", c("object", "tidy"))
@@ -6342,7 +7115,8 @@ mira_detect_long <- function(data,
 #' - `clubSandwich` CR2 covariance estimates with Satterthwaite coefficient
 #'   tests and HTZ joint Wald tests.
 #'
-#' For GEE and CR2 joint tests, `TIME` selects every fixed-effect coefficient
+#' For GEE, CR2, Kenward-Roger, and MMRM joint coefficient tests, `TIME`
+#' selects every fixed-effect coefficient
 #' assigned to model terms involving the time factor (including interactions),
 #' `ARM` analogously selects coefficients in terms involving the arm factor,
 #' and `TIME_X_ARM` selects terms involving both factors. Covariate names do not
@@ -6373,6 +7147,76 @@ mira_detect_long <- function(data,
 #' comparison aid, not a voting rule for scientific conclusions, and the rows
 #' can use different analysis samples or null hypotheses.
 #'
+#' @section Additional longitudinal perspectives:
+#' When `model` is enabled, three further modules supplement the existing
+#' mixed-model, ANOVA, Friedman, GEE, residual-correlation, and CR2 results.
+#' Each module is protected separately and records `requested`, `performed`,
+#' its actual analysis sample, and a failure or non-estimability explanation.
+#' `inspect_only = TRUE` performs no fitting. A resolved false model switch,
+#' for example with `analyses = "none"`, disables all three modules.
+#'
+#' `advanced_tests$kenward_roger` uses `pbkrtest::KRmodcomp()` for approximate
+#' joint F tests of the primary Gaussian random-intercept fit. Its `tidy` table
+#' contains the scaled F statistic, numerator and denominator degrees of
+#' freedom, `F_scaling`, raw p-value, observations, and independent subjects.
+#' `TIME` jointly tests all retained coefficients in terms involving time;
+#' `ARM` analogously includes all arm terms; `TIME_X_ARM` selects their
+#' interactions. TIME and ARM therefore include interaction coefficients when
+#' present. These are model-based coefficient hypotheses, rather than robust
+#' covariance corrections or averaged marginal contrasts. The module requires
+#' established convergence, a nonsingular fit, and positive residual variance.
+#' Rank-deficient hypotheses expose requested, tested, and dropped coefficients
+#' in `effect_diagnostics`; a reduced hypothesis is labelled explicitly, and a
+#' wholly unavailable hypothesis has no finite test result. Native tests,
+#' restriction matrices, and the fitted analysis frame are retained.
+#'
+#' `advanced_tests$rank_longitudinal` uses the formula interface of
+#' `nparLD >= 2.3.3` with unweighted relative marginal effects (`H0p`),
+#' subject-level cell weights, asymptotic ANOVA-type (ATS) and Wald-type (WTS)
+#' tests, and pointwise logit confidence intervals at level `1 - alpha`.
+#' Its reference distribution weights the resolved time cells, and arm-by-time
+#' cells when enabled, equally. An effect greater than 0.5 denotes larger
+#' responses relative to that reference, independently of clinical direction.
+#' These factorial effect hypotheses differ from the Gaussian joint coefficient
+#' hypotheses; they do not test mean equality. Selected adjustment covariates
+#' are not used. The original subject-by-visit schedule retains missing response
+#' rows, and incomplete profiles contribute observed cells under an MCAR
+#' assumption; general MAR and MNAR mechanisms are not handled. Subjects with
+#' no finite response are excluded. `effects` reports cell counts, estimator
+#' SE, and pointwise intervals; `tests` identifies ATS/WTS and their null
+#' questions. If the native covariance estimates the covariance of the
+#' sqrt-N-scaled effect estimator, MIRA stores `covariance = Sigma / N` and
+#' `SE = sqrt(diag(Sigma) / N)`, where N counts independent observed subjects.
+#' The native object remains unchanged. ATS uses the engine's large-denominator
+#' F approximation (`df_den = 1e10`); WTS is asymptotic chi-squared and has no
+#' denominator degrees of freedom. No permutation test is requested.
+#'
+#' `advanced_models$mmrm` fits a marginal Gaussian repeated-measures model with
+#' `mmrm >= 0.3.17`: categorical visits, the resolved mean-model covariates and
+#' arm terms, an unstructured residual covariance with visit-specific variances
+#' common across arms, REML estimation, and Satterthwaite inference. It adds no
+#' subject random effect. Selected baseline measurements are responses; this is
+#' not a constrained-baseline model or an automatic baseline-covariate analysis.
+#' Incomplete outcome profiles use available rows complete for the model
+#' predictors, without imputation. Inference requires a suitable mean/covariance
+#' specification and an ignorable MAR response-missingness mechanism; it is not
+#' an MNAR sensitivity analysis. Missing predictors can remove observations.
+#' The module preserves the requested visit order, requires observed modeled
+#' visits, one observation per subject and visit, a full-rank fixed design,
+#' joint observations for every visit pair, convergence, and finite,
+#' numerically full-rank covariance estimates. It records coefficient and
+#' joint-effect tests, marginal means and contrast families, covariance,
+#' visit-pair coverage, actual engine data/counts, and native fit/summary.
+#'
+#' MMRM likelihood criteria retain the engine's REML convention: AIC penalizes
+#' covariance parameters, and BIC uses independent subjects in its logarithmic
+#' penalty. `ic_penalty_parameters`, `bic_sample_size`, and `criteria_note`
+#' record that convention. The values are not harmonized with lme4/nlme
+#' criteria; the combined comparison table is not a cross-engine ranking rule.
+#' All three perspectives enter `sensitivity` with their own sample, hypothesis,
+#' and source path. Raw global tests are not pooled into a new adjustment family.
+#' MMRM contrast adjustments remain within their respective contrast families.
+#'
 #' @section Treatment-arm analyses:
 #' Arm analyses require a resolved arm, `arm_tests = TRUE`, at least two observed
 #' groups, and usable outcome values. Empty strings and missing arm values are
@@ -6396,7 +7240,9 @@ mira_detect_long <- function(data,
 #' only to the model-based results. In the repeated-measures ANOVA, categorical
 #' covariates are between-subject factors and numeric covariates are supplied as
 #' covariates. The same resolved covariates are used, when possible, by the
-#' primary mixed model, marginal means, random-slope model, GEE, and `nlme` fits.
+#' primary mixed model, marginal means, random-slope model, GEE, `nlme`, and
+#' MMRM fits. The rank longitudinal module remains unadjusted and does not
+#' exclude subjects because a selected adjustment covariate is missing.
 #' Character and logical values are converted to factors; non-finite numeric
 #' covariate values and blank character or factor values become missing.
 #' Covariates with fewer than two usable values are omitted from the primary
@@ -6428,7 +7274,8 @@ mira_detect_long <- function(data,
 #' and changes. Advanced contrast and Friedman post-hoc tables define additional
 #' scientifically distinct families. Their tables preserve raw p-values and
 #' store primary, Bonferroni, Holm, BH, and BY adjustments. Global
-#' likelihood-ratio, ANOVA, GEE, and sensitivity-table p-values are not pooled
+#' likelihood-ratio, ANOVA, GEE, CR2, Kenward-Roger, rank ATS/WTS, MMRM joint,
+#' and sensitivity-table p-values are not pooled
 #' into a single adjustment family.
 #'
 #' @section Optional dependencies and failure handling:
@@ -6436,7 +7283,9 @@ mira_detect_long <- function(data,
 #' require `ggplot2` (plots), `lme4` (mixed models), `lmerTest` (used in place of
 #' `lme4::lmer()` when present), `emmeans` (marginal means and contrasts), `afex`
 #' (repeated-measures ANOVA), `geepack` (GEE), `nlme` (residual correlation
-#' models), `clubSandwich` (CR2 inference), and `performance` (Nakagawa
+#' models), `clubSandwich` (CR2 inference), `pbkrtest` (Kenward-Roger joint
+#' tests), `nparLD >= 2.3.3` (relative marginal effects), `mmrm >= 0.3.17`
+#' (unstructured marginal repeated measures), and `performance` (Nakagawa
 #' R-squared). Except for plotting, each advanced module records `performed`,
 #' package, warnings, error, and/or `reason_skipped` information. Absence of one
 #' package does not prevent independent modules from being attempted. Absence of
@@ -6503,10 +7352,11 @@ mira_detect_long <- function(data,
 #'   \item{model}{The primary fitted model and summary, fixed-effect ANOVA,
 #'     global likelihood-ratio tests, convergence/singularity diagnostics,
 #'     warnings/error, and requested, used, or skipped covariates.}
-#'   \item{advanced_tests}{Structured `emmeans`, repeated-measures ANOVA, and
-#'     Friedman modules.}
-#'   \item{advanced_models}{The random-slope, `nlme`, and GEE modules plus a
-#'     model-comparison table and paths to available fit objects.}
+#'   \item{advanced_tests}{Structured `emmeans`, repeated-measures ANOVA,
+#'     Friedman, `kenward_roger`, and `rank_longitudinal` modules.}
+#'   \item{advanced_models}{The random-slope, `nlme`, GEE, and unstructured
+#'     `mmrm` modules plus a model-comparison table with engine-specific
+#'     likelihood-criterion conventions and paths to available fit objects.}
 #'   \item{robustness}{The `club_sandwich` CR2 module.}
 #'   \item{effect_sizes}{Paired Cohen's `dz`, paired rank-biserial correlations,
 #'     ANOVA eta-squared measures, Kendall's W, mixed-model R-squared modules,
@@ -6543,6 +7393,12 @@ mira_detect_long <- function(data,
 #' and invisibly returns a stored plot; for a multi-outcome object, specify
 #' `outcome` when more than one successful outcome is available. Requesting a
 #' plot that was not generated is an error.
+#'
+#' @references
+#' [pbkrtest joint Kenward-Roger tests](https://hojsgaard.github.io/pbkrtest/reference/kr-modcomp.html);
+#' [mmrm methodology](https://openpharma.github.io/mmrm/v0.3.17/articles/methodological_introduction.html);
+#' [mmrm likelihood-criterion conventions](https://openpharma.github.io/mmrm/v0.3.17/reference/mmrm_tmb_methods.html);
+#' [nparLD formula interface and effect hypotheses](https://cran.r-project.org/web/packages/nparLD/refman/nparLD.html).
 #'
 #' @seealso [mira_detect_long()] for configuration inspection without analysis,
 #'   [base::summary()], [graphics::plot()], [stats::p.adjust()],
@@ -8966,6 +9822,32 @@ print.mira_info_long <- function(x,
   # ------------------------------------------------------------------
   # COMPLETE OUTPUT GUIDE
   # ------------------------------------------------------------------
+  extended_methods <- list(
+    "Kenward-Roger joint F tests" = list(module = x$advanced_tests$kenward_roger,
+      tables = "tidy"),
+    "Nonparametric relative marginal effects" = list(module = x$advanced_tests$rank_longitudinal,
+      tables = c("effects", "tests")),
+    "MMRM: unstructured / Satterthwaite" = list(module = x$advanced_models$mmrm,
+      tables = c("coefficients", "effect_tests")))
+  if (model && any(vapply(extended_methods, function(z) isTRUE(z$module$requested), logical(1L)))) {
+    section_long("ADDITIONAL LONGITUDINAL PERSPECTIVES")
+    for (label in names(extended_methods)) {
+      entry <- extended_methods[[label]]
+      if (!isTRUE(entry$module$requested)) next
+      cat("\n", label, "\n", sep = "")
+      if (!isTRUE(entry$module$performed)) {
+        cat("Not performed: ", fmt_text_long(entry$module$reason_skipped), "\n", sep = "")
+      } else {
+        cat(fmt_text_long(entry$module$note), "\n")
+        for (name in entry$tables) {
+          if (has_rows_long(entry$module[[name]])) {
+            print(limit_table_long(entry$module[[name]], paste(label, name)),
+              digits = digits, row.names = FALSE)
+          }
+        }
+      }
+    }
+  }
   .mira_print_output_guide_long(x, title = "COMPLETE OUTPUT GUIDE")
   cat("\nUse names() on the saved object to verify its current top-level components.\n")
   cat("Set max_rows = Inf in print() to display every patient, comparison, and flag row.\n")
@@ -9021,7 +9903,19 @@ summary.mira_info_long <- function(object, ...) {
       baseline_final_emmean = if (!is.null(emmeans) && isTRUE(emmeans$performed)) {
         emmeans$baseline_final$tidy
       } else NULL,
-      sensitivity = object$sensitivity
+      sensitivity = object$sensitivity,
+      kenward_roger = if (isTRUE(object$advanced_tests$kenward_roger$performed)) {
+        object$advanced_tests$kenward_roger$tidy
+      } else NULL,
+      rank_effects = if (isTRUE(object$advanced_tests$rank_longitudinal$performed)) {
+        object$advanced_tests$rank_longitudinal$effects
+      } else NULL,
+      rank_tests = if (isTRUE(object$advanced_tests$rank_longitudinal$performed)) {
+        object$advanced_tests$rank_longitudinal$tests
+      } else NULL,
+      mmrm = list(performed = isTRUE(object$advanced_models$mmrm$performed),
+        coefficients = object$advanced_models$mmrm$coefficients,
+        effect_tests = object$advanced_models$mmrm$effect_tests)
     )
   }
 
@@ -9049,7 +9943,10 @@ summary.mira_info_long <- function(object, ...) {
     Filter(function(path) identical(path[[1L]], "arm_analysis"),
       attr(object, "mira_metric_paths", exact = TRUE)),
     list(c("advanced", "rm_anova"), c("advanced", "friedman"),
-      c("advanced", "baseline_final_emmean"), c("advanced", "sensitivity")))
+      c("advanced", "baseline_final_emmean"), c("advanced", "sensitivity"),
+      c("advanced", "kenward_roger"), c("advanced", "rank_effects"),
+      c("advanced", "rank_tests"), c("advanced", "mmrm", "coefficients"),
+      c("advanced", "mmrm", "effect_tests")))
   out
 }
 
@@ -9102,6 +9999,10 @@ print.summary.mira_info_long <- function(x, digits = 3, ...) {
       nrow(x$advanced$sensitivity)
     } else 0L
     cat(sprintf("  Sensitivity rows: %d\n", sensitivity_n))
+    cat(sprintf("  Kenward-Roger: %s | Relative marginal effects: %s | MMRM: %s\n",
+      if (!is.null(x$advanced$kenward_roger)) "available" else "not available",
+      if (!is.null(x$advanced$rank_tests)) "available" else "not available",
+      if (isTRUE(x$advanced$mmrm$performed)) "available" else "not available"))
     cat("  Full sensitivity table: $advanced$sensitivity\n")
   }
 

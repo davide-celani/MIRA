@@ -1,6 +1,190 @@
 # Audit dei test longitudinali — 26 ottobre 2026
 
-## Esito e perimetro
+## Estensione metodologica successiva — risultato finale
+
+Questa sezione documenta l'ampliamento richiesto dopo l'audit originario,
+partendo da HEAD `196a357ac47066a49e67470b8ecac0322edac90f` e da un working
+tree pulito. I numeri e le dichiarazioni sull'ambiente nelle sezioni successive
+descrivono l'audit precedente. Per lo stato attuale valgono i risultati qui
+riportati, comprese le nuove dipendenze installate con autorizzazione.
+
+**Aggiunte tre prospettive, senza rimuovere i metodi esistenti**, con la
+catena analisi → nomenclatura/stampa/summary → report/RDS/CSV → testthat.
+La suite ordinaria finale contiene **364 blocchi `test_that`, 11.223
+aspettative passate, zero failure/error/warning e quattro skip**, sia dai
+sorgenti sia dal namespace del pacchetto appena costruito e installato.
+Sono 39 nuovi blocchi rispetto alla baseline di 325; il conteggio delle
+aspettative include anche i controlli esistenti applicati alle nuove tabelle
+e non rappresenta altrettante verifiche scientifiche indipendenti.
+
+| Percorso del risultato | Aggiunta e utilità | Assunzioni e interpretazione |
+|---|---|---|
+| `advanced_tests$kenward_roger` | Test F globali Kenward–Roger del modello misto primario, con F scalata, df corretti, fattore di scala e campione effettivo | Inferenza gaussiana basata sul modello; TIME e ARM comprendono le rispettive interazioni. Non è una correzione robusta della covarianza. |
+| `advanced_models$mmrm` | Modello marginale gaussiano con covarianza non strutturata, varianze specifiche per visita, REML e Satterthwaite; coefficienti, test congiunti, medie marginali e contrasti | Covarianza comune fra bracci, baseline selezionata inclusa come risposta, missingness delle risposte ignorabile MAR e specificazione adeguata; non è una sensitivity MNAR. |
+| `advanced_tests$rank_longitudinal` | Effetti relativi marginali non pesati `H0p`, SE/IC logit puntuali e test longitudinali ATS/WTS tramite nparLD | Analisi non aggiustata per covariate, risposte mancanti MCAR, approssimazioni asintotiche. Un effetto > 0,5 indica risposte maggiori, indipendentemente dalla direzione clinica. |
+
+Gli `emmeans` preesistenti potevano già utilizzare Kenward–Roger: la nuova
+aggiunta è il modulo esplicito di **test globali**. MMRM distingue la struttura
+marginale non strutturata dai modelli con intercetta/pendenza casuale, dai
+precedenti `nlme` CS/AR1 e dai GEE. Il modulo rank aggiunge un'analisi
+fattoriale marginale con profili incompleti, distinta dal Friedman su profili
+completi. Le tre prospettive hanno obiettivi e, talvolta, campioni differenti;
+non devono essere utilizzate come voto di maggioranza o scelta del p minimo.
+
+### Adattamento, campioni e risultati non stimabili
+
+- I tre moduli seguono lo switch `model` già risolto dalla funzione; nessun
+  nuovo argomento pubblico. `analyses = "none"` li disabilita in assenza di
+  override espliciti e `inspect_only` non esegue fit. Ogni adattatore è protetto
+  separatamente: un errore non elimina i risultati degli altri metodi.
+- KR riutilizza il campione del modello primario. Richiede convergenza,
+  nonsingolarità e varianza residua positiva; conserva test nativi e matrici
+  di restrizione. Le ipotesi ridotte per colonne eliminate sono etichettate
+  con coefficienti richiesti/testati/esclusi, senza presentarle come complete.
+- Rank usa il calendario originale soggetto × visita, con righe NA esplicite,
+  senza escludere soggetti per covariate aggiuntive mancanti. Esclude i profili
+  interamente non osservati. L'adattatore richiede almeno due osservazioni
+  finite per cella e soggetti sufficienti per braccio; rifiuta duplicati
+  soggetto/visita e ipotesi degeneri. L'assenza completa di variazione entro
+  soggetto non produce un test temporale apparentemente valido.
+- MMRM usa le righe complete per i predittori selezionati e mantiene tutti i
+  livelli delle visite richieste. Una visita interamente assente, anche dopo
+  il filtraggio delle covariate, rende il modulo non disponibile: non viene
+  reinterpretato un follow-up come nuova baseline. Sono verificati disegno a
+  rango pieno, unicità soggetto/visita, sovrapposizione di ogni coppia di visite,
+  convergenza e rango numerico delle covarianze. Il fallback riguarda soltanto
+  l'inizializzazione; non cambia il modello o il metodo inferenziale.
+- Per nparLD la covarianza nativa della stima scalata per sqrt(N) viene divisa
+  per N, numero di soggetti indipendenti osservati. Le SE pubblicate sono
+  `sqrt(diag(Sigma)/N)`, non le SE native scalate. Il fit nativo resta intatto.
+  ATS usa il denominatore convenzionale del motore `1e10`; WTS non ha df al
+  denominatore. Non è stato attivato un test di permutazione.
+- I criteri MMRM restano quelli nativi: AIC penalizza i parametri di covarianza
+  e BIC usa il numero di soggetti. Metadati e colonna `criterion_convention`
+  chiariscono che non sono armonizzati con lme4/nlme per un ranking comune.
+
+### Catena del report e correzioni dimostrate
+
+I nuovi campi statistici seguono il prefisso esatto dell'outcome dichiarato e
+le mappe canoniche; identità, visite, campioni e metodi restano strutturali.
+Stampa e summary comprendono le nuove tabelle. `sensitivity` aggiunge righe
+finite con ipotesi, campione e percorso; le famiglie dei contrasti MMRM hanno
+riferimenti alle tabelle canoniche e aggiustamenti separati. Nessuna nuova
+famiglia aggrega tutti i p-value globali o metodi diversi.
+
+Il report riconosce KR, nparLD e MMRM come oggetti nativi terminali, preserva
+le informazioni del campione e le assunzioni, esporta le tabelle standardizzate
+e mostra il motivo dei moduli richiesti ma non disponibili. Non attraversa
+ricorsivamente l'infrastruttura TMB o le strutture native nei CSV.
+
+Le prove hanno rilevato e corretto il filtraggio indebito del campione rank
+per covariate/visite mancanti e il possibile cambio implicito della baseline
+MMRM. Hanno inoltre esposto un difetto precedente della stampa GEE:
+`geepack::print.summary.geeglm()` modificava `options(digits)`, alterando le
+tabelle successive. Il reporter ora ripristina la precisione del chiamante
+anche in caso di errore del printer. Prima della guardia il test dedicato
+aveva nove failure; dopo passa tutte le 20 aspettative. Due precedenti test
+di formattazione fallivano nella suite completa e ora passano.
+
+Un confronto con il risultato salvato prima dell'estensione conferma valori
+identici per tutti i 51 percorsi metrici preesistenti, campione e coefficienti
+del modello, configurazione, dati longitudinali e vecchie righe sensitivity.
+Si escludono dal confronto soltanto la nuova riga MMRM e la colonna esplicativa
+del confronto modelli, le righe sensitivity aggiunte e l'identità degli
+ambienti formula/terms ricreati dalla lettura RDS; i dati e gli altri attributi
+sono confrontati esattamente.
+
+### Forza dei nuovi test
+
+Le verifiche combinano aritmetica indipendente sui soggetti e confronti con
+le API reali, con ipotesi/campioni indicizzati per nome:
+
+- KR: somme dei quadrati bilanciate, df, restrizioni TIME/ARM/interazione,
+  F scalata rispetto a F non scalata, dati incompleti, ipotesi ridotte e
+  fallimenti parziali. Nel test report la differenza numerica dal p analitico
+  è circa `6,97e-12`; il limite assoluto esplicito è `1e-10`, con controllo
+  separato e più stretto contro il motore.
+- MMRM: medie di cella, covarianza campionaria e sua trasformazione, bracci
+  sbilanciati e campioni incompleti. Nel caso manuale a otto soggetti il
+  contrasto finale−baseline è `6,125`, SE circa `1,35538`, df `7`: usare le
+  osservazioni ripetute come unità indipendenti darebbe df `21` ed è respinto.
+- Rank: oracolo manuale a tre soggetti con effetti `5/12` e `7/12`, SE `1/12`,
+  covarianza nota, IC logit e ATS/WTS; identità/associazione dei soggetti,
+  ties, profili mancanti, statica completa e colonne nuisance.
+- API pubblica: separazione dei campioni rank/MMRM, visite iniziale e finale
+  interamente NA, disable/inspect senza fit, stampa/summary senza mutazioni
+  o consumo RNG e conservazione dei risultati precedenti.
+- Report: numeri e identità attraverso RDS, CSV/manifest e runtime esportato
+  con tabelle HTML realmente generate da kable; nomi arbitrari con spazi,
+  cronologia non lessicografica, mappe, famiglie e diagnostica reason-only.
+  Un processo R separato elabora il QMD/runtime/RDS salvato senza caricare
+  MIRA, mantenendo tutti i nuovi moduli e `digits`.
+
+Mutazioni controllate, mai lasciate nei sorgenti finali: F KR non scalata
+(tre failure); df MMRM calcolati sulle righe con p ricalcolati (quattro);
+covarianza MMRM attribuita alle visite sbagliate (due); SE rank native scalate
+(una); scambio TIME/ARM rank (quattro); associazione errata dei soggetti rank
+con margini/N invariati (undici). Sono prove mirate di sensibilità dei test,
+non una percentuale di mutation coverage.
+
+### Esecuzioni finali e limiti pratici
+
+| Verifica | Risultato |
+|---|---|
+| Baseline prima dell'ampliamento | 325 blocchi, 10.022 pass, 4 skip; zero failure/error/warning |
+| Suite completa sorgenti | 364 blocchi, 11.223 pass, 4 skip; zero failure/error/warning; exit 0; 458,47 s |
+| Suite completa namespace installato | Stessi conteggi; exit 0; 321,38 s; percorso del namespace verificato nella libreria isolata |
+| Stato prima/dopo le suite | Seed/RNG, directory, dispositivi, ambiente e opzioni preesistenti preservati; il caricamento iniziale di namespace installati aggiunge soltanto default dei pacchetti |
+| Build e installazione del tarball | Passati; tarball SHA256 `bb2740d3b046935a9f28af9b098ad16889eacea23b12aa92a56ef56df03c5094` |
+| `R CMD check --no-manual --no-build-vignettes --no-tests` | `Status: OK`; esempi passati; test eseguiti integralmente nelle due esecuzioni separate sopra |
+| Runtime salvato in processo R nuovo | Passato, senza caricare MIRA; nessun rendering Quarto implicato |
+| Profilo reale HTML/DOCX/PDF installato | Tentato con Quarto 1.9.38 e TinyTeX disponibili; bloccato da `processx__create_pipe`, errore Windows 5 «Accesso negato» |
+
+I quattro skip ordinari sono il sampling CmdStan e i tre profili Quarto
+espliciti. Nessuno dipende dall'assenza di mmrm, nparLD o pbkrtest. Il profilo
+Quarto separato riporta 93 pass, sei failure, tre errori e quattro warning
+(12 blocchi), conseguenze del mancato avvio del processo e dell'assenza dei
+documenti attesi. Non sono nascosti né assimilati a rendering riusciti.
+Non è stata eseguita una nuova CI remota e non si dichiara validazione su
+altri sistemi operativi, R 4.2 o tutte le versioni future delle dipendenze.
+
+Ambiente eseguito: Windows 10, R 4.4.3, testthat 3.3.2 edition 3,
+pbkrtest 0.5.4, mmrm 0.3.17, TMB 1.9.21, nparLD 2.3.3, multcomp 1.4-32,
+TH.data 1.1-5. `DESCRIPTION` dichiara direttamente pbkrtest, mmrm >= 0.3.17 e
+nparLD >= 2.3.3. mmrm/TMB usano binari CRAN ufficiali R 4.4: il tentativo
+sorgente del TMB più recente incontrava il vincolo Windows sulle pipe.
+Non viene rivendicata esecuzione locale di mmrm 0.3.19.
+
+Le dipendenze nuove sono state prima installate e provate in una libreria
+isolata e poi rese disponibili nella libreria utente R 4.4 standard con
+permesso di scrittura. Lo script conserva pacchetti esistenti sufficienti e
+non sovrascrive versioni già presenti. Nessun percorso personale è stato
+aggiunto ai file del pacchetto o al profilo R. MIRA stesso è stato installato
+soltanto nella libreria isolata di validazione.
+
+Codice in quattro nuovi helper `R/mira_info_long_{extensions,kenward_roger,
+mmrm,rank}.R`, hook nei due file principali, sette nuovi file testthat e
+aggiornamenti minimi ai contratti/schema precedenti. Documentazione roxygen,
+Rd rigenerati, README, NEWS, contratto degli output e disclosure AI aggiornati.
+Artefatti riproducibili e log nel workspace `work/methodology-expansion-2026-10-26/`:
+`full-source-final*`, `full-installed-final*`, `preservation-final.log`,
+`cold-runtime-final.log`, `rendering-installed-explicit*`, `build/`,
+`packages/*provenance.json` e staging degli oracoli/mutazioni.
+
+Fonti primarie consultate: [pbkrtest e KRmodcomp](https://hojsgaard.github.io/pbkrtest/reference/kr-modcomp.html),
+[metodologia MMRM](https://openpharma.github.io/mmrm/v0.3.17/articles/methodological_introduction.html),
+[criteri nativi mmrm](https://openpharma.github.io/mmrm/v0.3.17/reference/mmrm_tmb_methods.html),
+[manuale nparLD 2.3.3](https://cran.r-project.org/web/packages/nparLD/refman/nparLD.html)
+e la vignetta del pacchetto sorgente per l'ipotesi MCAR. La moderna API nparLD
+2.3.3 non viene confusa con quella del lavoro originale del 2012.
+
+**Nessun commit, staging, push, PR o pubblicazione effettuato.** La revisione
+scientifica del manutentore resta necessaria; questa espansione non dimostra
+completezza per ogni disegno, correttezza universale o accettazione editoriale.
+
+---
+
+## Audit precedente — esito e perimetro
 
 Audit di `mira_info_long()`, `mira_report_freq_long()`, helper effettivamente
 coinvolti, metodi di stampa e contratti di output. Lettura integrale distribuita

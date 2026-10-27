@@ -104,6 +104,9 @@
     emmeans = "Estimated marginal means and contrasts",
     rm_anova = "Repeated-measures ANOVA",
     friedman = "Friedman test",
+    kenward_roger = "Kenward-Roger joint F tests",
+    rank_longitudinal = "Nonparametric relative marginal effects",
+    mmrm = "Marginal repeated-measures model (MMRM)",
     random_slope = "Random-slope mixed-effects model",
     nlme = "NLME models",
     gee = "GEE models",
@@ -599,6 +602,9 @@
     geepack = c("geeglm", "gee", "summary.geeglm"),
     emmeans = c("emmGrid", "emm_list", "summary_emm"),
     afex = c("afex_aov"),
+    pbkrtest = "KRmodcomp",
+    nparLD = c("nparLD", "nparld_fit"),
+    mmrm = c("mmrm", "mmrm_fit", "summary.mmrm"),
     clubSandwich = c("coef_test_clubSandwich", "Wald_test_clubSandwich"),
     performance = c("performance_model", "r2_nakagawa")
   )
@@ -612,6 +618,10 @@
 }
 
 .mira_report_text_block_long <- function(x) {
+  # Some native printers (including geeglm) set the global digits option.
+  # Keep subsequent tables and the caller's console independent of that print.
+  old_digits <- options("digits")
+  on.exit(options(old_digits), add = TRUE)
   .mira_report_prepare_namespace_long(x)
   text <- tryCatch(
     {
@@ -702,7 +712,8 @@
 
 .mira_report_is_model_long <- function(x) {
   inherits(x, c("lm", "glm", "merMod", "lme", "gls", "geeglm",
-                "summary.geeglm", "emmGrid", "emm_list", "afex_aov", "htest"))
+                "summary.geeglm", "emmGrid", "emm_list", "afex_aov", "htest",
+                "KRmodcomp", "nparLD", "nparld_fit", "mmrm", "mmrm_fit", "summary.mmrm"))
 }
 
 .mira_report_extract_outcomes_long <- function(result) {
@@ -920,7 +931,8 @@
                             !all(is.na(value)), details)
         nonestimable_test <- length(component$reason_skipped) > 0L &&
           (inherits(component$test, "htest") ||
-             inherits(component$object, "afex_aov"))
+             inherits(component$object, "afex_aov") ||
+             isTRUE(component$requested))
         if (length(details) || nonestimable_test) {
           # Disabled modules with only a reason remain omitted. An actual
           # failure, including a non-estimable test without an engine error,
@@ -1437,6 +1449,13 @@
 #' the analytical archive exports that table at its owning component path.
 #' Native external model objects and supplementary user objects keep their
 #' own field names and metadata.
+#'
+#' Requested Kenward-Roger, rank longitudinal, and MMRM modules are included
+#' with their standardized tables, native fits, assumptions, and actual sample
+#' information. Unavailable requested modules retain their diagnostic reasons;
+#' disabled modules are omitted. MMRM contrast families keep their canonical
+#' adjustment references. See [mira_info_long()] for the methods and assumptions.
+#' Native text printing preserves the caller's numeric display precision.
 #'
 #' @param x \code{NULL}; an object inheriting from \code{mira_info_long},
 #'   \code{mira_info_multi_long}, or \code{mira_detect_long}; or a data frame. A data frame

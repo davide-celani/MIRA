@@ -106,3 +106,20 @@ For future contributions, record the tool, date, scope, and human verification
 when AI assistance materially contributes to a change. Do not list an AI
 system as an author, and do not upload private participant data to an AI tool
 without appropriate authorization.
+
+## Longitudinal methodology expansion: 2026-10-26
+
+OpenAI Codex assisted with primary-source method research and implementation
+of joint Kenward-Roger tests, unweighted relative marginal effects with
+asymptotic ATS/WTS, and an unstructured REML/Satterthwaite MMRM. Assistance
+included dependency declarations, adaptive sample/estimability guards,
+print/summary and report integration, independent mathematical test oracles,
+mutation checks, documentation, and local source/installed package validation.
+The existing longitudinal methods were retained. The evidence and limitations
+are recorded in `dev/TEST_AUDIT_LONG.md`; its earlier audit counts describe
+the preceding implementation, not the expanded suite.
+
+Synthetic deterministic fixtures were used for statistical checks. No private
+participant dataset was supplied for this expansion. Human scientific review
+and acceptance of the local changes remain pending. No commit, staging,
+push, publication, or communication with third parties was performed.

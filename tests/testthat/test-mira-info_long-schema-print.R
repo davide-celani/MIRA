@@ -157,9 +157,10 @@ test_that("single-outcome public schema preserves exact order, classes, and type
     "covariates_requested", "covariates_used", "covariates_skipped",
     "fixed_parameters"
   ))
-  expect_identical(names(x$advanced_tests), c("emmeans", "rm_anova", "friedman"))
+  expect_identical(names(x$advanced_tests), c("emmeans", "rm_anova", "friedman",
+    "kenward_roger", "rank_longitudinal"))
   expect_identical(names(x$advanced_models),
-                   c("random_slope", "nlme", "gee", "model_comparison"))
+                   c("random_slope", "nlme", "gee", "model_comparison", "mmrm"))
   expect_identical(names(x$robustness), "club_sandwich")
   expect_identical(names(x$effect_sizes), c(
     "paired_cohens_dz", "paired_rank_biserial", "rm_anova", "friedman",

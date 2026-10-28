@@ -390,3 +390,102 @@ test_that("Quarto DOCX output contains scientific table cells", {
     expect_length(list.files(output_dir, pattern = "mira_report-render-"), 0L)
   })
 })
+# The fixtures are encoded independently of MIRA's formatter. Mutations change
+# only plausible cells/keys and keep headings, rectangular tables and files.
+test_that('new-method document verifiers reject intact but scientifically corrupted tables', {
+  for (format in c('html','docx')) {
+    document <- report_methodology_fixture_document(format)
+    expect_no_error(report_methodology_document(document,format))
+    # KR numerator df=2 is unique here as a three-decimal scientific cell.
+    broken_number <- sub(if(format=='html') '>2.000<' else '>2.000<', '>9.000<',document,fixed=TRUE)
+    expect_false(identical(broken_number,document))
+    expect_error(report_methodology_document(broken_number,format),'Incorrect scientific cells: df_num',fixed=TRUE)
+    broken_key <- sub('>signal_t1<','>signal_t0<',document,fixed=TRUE)
+    expect_false(identical(broken_key,document))
+    expect_error(report_methodology_document(broken_key,format),'Incorrect methodology keys/cells: rank visits',fixed=TRUE)
+    swapped <- sub('>ATS<','>WTS<',document,fixed=TRUE)
+    expect_error(report_methodology_document(swapped,format),'rank method',fixed=TRUE)
+  }
+})
+
+test_that('all new engines survive relocation and knitting in a fresh R process', {
+  fit <- report_methodology_fit()
+  expect_true(fit$advanced_tests$kenward_roger$performed)
+  expect_true(fit$advanced_tests$rank_longitudinal$performed)
+  expect_true(fit$advanced_models$mmrm$performed)
+  root <- withr::local_tempdir(pattern='mira-cold-methodology-')
+  report <- report_test_call(list(x=fit,sections='models',max_table_columns=30L),file.path(root,'original'))
+  moved <- file.path(root,'moved bundle'); dir.create(moved)
+  expect_true(all(file.copy(c(report$source,report$runtime,report$payload),moved)))
+  driver <- file.path(root,'cold.R'); log <- file.path(root,'cold.log')
+  writeLines(c('main <-',deparse(report_methodology_cold_main,width.cutoff=100L),
+    'main()'),driver)
+  executable <- file.path(R.home('bin'),if(.Platform$OS.type=='windows')'Rscript.exe' else 'Rscript')
+  status <- system2(executable,c('--vanilla',shQuote(driver),shQuote(moved)),stdout=log,stderr=log)
+  expect_identical(status,0L,info=paste(readLines(log,warn=FALSE),collapse='\n'))
+  expect_true(file.exists(file.path(moved,'cold-status.txt')))
+  if(status==0L) {
+    state <- readRDS(file.path(moved,'cold-status.rds'))
+    expect_false(state$initially_loaded)
+    expect_identical(state$refit_calls,0L)
+    # knitr executes the real QMD setup/runtime; scoped table checks below
+    # parse its actual HTML cells independently of native models and MIRA.
+    # The runtime emits Markdown headings; retain their levels when turning
+    # only those heading lines into a small HTML inspection envelope.
+    lines <- readLines(file.path(moved,'cold.md'),warn=FALSE)
+    lines <- vapply(lines,function(line) {
+      if(!grepl('^#{1,6} ',line)) return(line)
+      level <- nchar(sub(' .*','',line)); label <- sub('^#{1,6} ','',line)
+      paste0('<h',level,'>',gsub('\\','',label,fixed=TRUE),'</h',level,'>')
+    },character(1))
+    expect_no_error(report_methodology_document(paste(lines,collapse='\n'),'html'))
+    expect_false(grepl(report$output_dir,paste(lines,collapse='\n'),fixed=TRUE))
+  }
+})
+
+test_that('Quarto HTML and DOCX publish keyed KR MMRM and rank scientific cells', {
+  report_test_require_quarto()
+  fit <- report_methodology_fit()
+  expect_true(fit$advanced_tests$kenward_roger$performed)
+  expect_true(fit$advanced_tests$rank_longitudinal$performed)
+  expect_true(fit$advanced_models$mmrm$performed)
+  root <- withr::local_tempdir(pattern='mira-quarto-methodology-')
+  report <- report_test_run(fit,output_dir=root,format=c('html','docx'),sections='models',
+    max_table_columns=30L,render=TRUE,open=FALSE,date='2026-10-27')
+  expect_identical(report$rendered,c(html=TRUE,docx=TRUE))
+  if(isTRUE(report$rendered[['html']])) {
+    document <- paste(readLines(report$files[['html']],warn=FALSE),collapse='\n')
+    expect_no_error(report_methodology_document(document,'html'))
+    scope <- report_methodology_scope(document, 'Nonparametric relative marginal effects', 'html')
+    broken <- sub(scope, sub('>signal_t1<', '>signal_t0<', scope, fixed=TRUE), document, fixed=TRUE)
+    path <- file.path(root,'corrupted.html'); writeLines(broken,path)
+    expect_true(file.exists(path)); expect_false(identical(broken,document))
+    expect_error(report_methodology_document(paste(readLines(path,warn=FALSE),collapse='\n'),'html'),'rank visits',fixed=TRUE)
+  }
+  if(isTRUE(report$rendered[['docx']])) {
+    expanded <- file.path(root,'docx'); utils::unzip(report$files[['docx']],exdir=expanded)
+    xml <- file.path(expanded,'word','document.xml')
+    document <- paste(readLines(xml,warn=FALSE),collapse='\n')
+    expect_no_error(report_methodology_document(document,'docx'))
+    scope <- report_methodology_scope(document, 'Nonparametric relative marginal effects', 'docx')
+    broken <- sub(scope, sub('>signal_t1<', '>signal_t0<', scope, fixed=TRUE), document, fixed=TRUE)
+    expect_false(identical(broken,document)); writeLines(broken,xml)
+    expect_error(report_methodology_document(paste(readLines(xml,warn=FALSE),collapse='\n'),'docx'),'rank visits',fixed=TRUE)
+    # All package entries are retained; only a scientific XML key was changed.
+    # Zip creation is unnecessary for cell verification: XML is read directly
+    # from the actual DOCX archive, just as in the established parser tests.
+  }
+})
+
+
+test_that('PDF methodology inspection rejects wrong cells and visit attribution within their sections', {
+  text <- report_methodology_pdf_fixture()
+  expect_no_error(report_methodology_pdf(text))
+  wrong <- sub('TIME  24  2.000','TIME  24  9.000',text,fixed=TRUE)
+  expect_false(identical(wrong,text))
+  expect_error(report_methodology_pdf(wrong),'Incorrect scientific cells: PDF kr df_num',fixed=TRUE)
+  wrong <- sub('signal_t1','signal_t0',text,fixed=TRUE)
+  expect_error(report_methodology_pdf(wrong),'Incorrect PDF methodology keys: rank time',fixed=TRUE)
+  wrong <- sub('ATS','WTS',text,fixed=TRUE)
+  expect_error(report_methodology_pdf(wrong),'Incorrect PDF methodology keys: rank method',fixed=TRUE)
+})

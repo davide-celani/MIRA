@@ -129,6 +129,12 @@ test_that("KR keeps the fitted sample and explicit term-aware hypotheses with mi
     expect_equal(c(row$statistic, row$df_num, row$df_den, row$F_scaling, row$p_raw),
       unname(unlist(reference[c("Fstat", "ndf", "ddf", "F.scaling", "p.value")])),
       tolerance = 1e-12, info = question)
+    if (question == "ARM") {
+      # This incomplete factorial fixture must distinguish scaled KR from
+      # the unscaled Wald F (approximately 4.818 versus 5.062 here).
+      expect_gt(abs(reference$F.scaling - 1), 0.01)
+      expect_gt(abs(row$statistic - reference$FstatU), 0.1)
+    }
   }
 })
 
@@ -284,5 +290,30 @@ test_that("KR canonical metric names preserve native evidence and structural sam
     for (i in seq_along(bases)) {
       expect_identical(module$tidy[[expected[i]]], result$tidy[[bases[i]]])
     }
+  }
+})
+
+test_that("KR rejects finite values outside the mathematical F-test domains", {
+  model <- kr_oracle_fit()
+  original_eval <- MIRA:::.mira_eval_long
+  faults <- list(Fstat = -0.1, ndf = 0, ddf = 0, F.scaling = 0,
+    p.value = -0.01, p.value = 1.01)
+  for (i in seq_along(faults)) {
+    changed <- function(expr) {
+      call <- paste(deparse(substitute(expr)), collapse = " ")
+      evaluated <- original_eval(expr)
+      if (startsWith(call, "pbkrtest::getKR("))
+        evaluated$value[[names(faults)[[i]]]] <- faults[[i]]
+      evaluated
+    }
+    result <- testthat::with_mocked_bindings(
+      MIRA:::.mira_run_kenward_roger_long(model, FALSE),
+      .mira_eval_long = changed, .package = "MIRA")
+    expect_false(result$performed, info = names(faults)[[i]])
+    expect_false(result$effect_diagnostics$TIME$estimable)
+    expect_s3_class(result$tests$TIME, "KRmodcomp")
+    expect_identical(dim(result$constraints$TIME), c(2L, 3L))
+    expect_true(all(is.na(result$tidy[c("statistic", "df_num", "df_den", "F_scaling", "p_raw")])))
+    expect_match(result$effect_diagnostics$TIME$reason_skipped, "estimable")
   }
 })

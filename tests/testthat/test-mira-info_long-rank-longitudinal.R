@@ -276,3 +276,65 @@ test_that("deterministic rank fitting preserves the caller RNG state", {
   expect_false(exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
   expect_identical(RNGkind(), kind)
 })
+
+test_that("rank uncertainty detects a wrong pairing even when margins and sample size agree", {
+  data <- rank_longitudinal_small()
+  original <- rank_longitudinal_call(data, c("Zbase", "Afinal"), FALSE, character(), .90)
+  swapped <- data
+  swapped$value[4:5] <- rev(swapped$value[4:5])
+  changed <- rank_longitudinal_call(swapped, c("Zbase", "Afinal"), FALSE, character(), .90)
+  expect_true(changed$performed)
+  expect_identical(changed$n_subjects, original$n_subjects)
+  expect_identical(changed$n_observations, original$n_observations)
+  expect_identical(changed$effects[c("time", "time_label", "n", "missing_n")],
+    original$effects[c("time", "time_label", "n", "missing_n")])
+  expect_equal(changed$effects$relative_effect, c(5, 7) / 12, tolerance = 1e-12)
+  # The cell empirical distributions are unchanged. For p_base the baseline
+  # influence is (-2,1,1)/12. Its paired final contribution changes from
+  # (3,-3,0)/12 to (-3,3,0)/12, giving (-5,4,1)/12 instead of (1,-2,1)/12.
+  # sum(influence^2)/(N*(N-1)) = 7/144; p_final = 1-p_base.
+  variance <- sum((c(-5, 4, 1) / 12)^2) / (3 * 2)
+  expect_equal(unname(changed$covariance),
+    variance * matrix(c(1, -1, -1, 1), 2L), tolerance = 1e-12)
+  expect_equal(changed$effects$SE, rep(sqrt(7) / 12, 2L), tolerance = 1e-12)
+  # (p_final-p_base)^2 / Var(p_final-p_base) = (1/6)^2/(4*7/144).
+  expect_equal(changed$tests$statistic, rep(1 / 7, 2L), tolerance = 1e-12)
+  expect_equal(changed$tests$p_raw, c(stats::pf(1 / 7, 1, 1e10, lower.tail = FALSE),
+    stats::pchisq(1 / 7, 1, lower.tail = FALSE)), tolerance = 1e-12)
+  expect_false(isTRUE(all.equal(changed$covariance, original$covariance,
+    tolerance = 1e-12)))
+})
+
+test_that("rank inference preserves ties under monotone transformation and recalculates pointwise intervals", {
+  data <- rank_longitudinal_small()
+  transformed <- data
+  # Cubing is strictly increasing on these finite values and preserves ties.
+  transformed$value <- transformed$value^3
+  original <- rank_longitudinal_call(data, c("Zbase", "Afinal"), FALSE, character(), .90)
+  changed <- rank_longitudinal_call(transformed, c("Zbase", "Afinal"), FALSE, character(), .90)
+  wider <- rank_longitudinal_call(transformed, c("Zbase", "Afinal"), FALSE, character(), .95)
+  expect_true(changed$performed)
+  expect_true(wider$performed)
+  expect_identical(changed$effects[c("time", "time_index", "time_label", "n", "missing_n")],
+    original$effects[c("time", "time_index", "time_label", "n", "missing_n")])
+  expect_equal(changed$effects, original$effects, tolerance = 1e-12)
+  expect_equal(changed$tests, original$tests, tolerance = 1e-12)
+  expect_equal(changed$covariance, original$covariance, tolerance = 1e-12)
+  expect_equal(wider$effects[c("relative_effect", "SE")],
+    original$effects[c("relative_effect", "SE")], tolerance = 1e-12)
+  expect_equal(wider$tests, original$tests, tolerance = 1e-12)
+  expect_equal(wider$covariance, original$covariance, tolerance = 1e-12)
+  p <- c(5, 7) / 12
+  logit_se <- (1 / 12) / (p * (1 - p))
+  for (level in c(.90, .95)) {
+    observed <- if (level == .90) changed else wider
+    critical <- stats::qnorm((1 + level) / 2)
+    expect_identical(observed$confidence_level, level)
+    expect_equal(observed$effects$ci_lower,
+      stats::plogis(stats::qlogis(p) - critical * logit_se), tolerance = 1e-12)
+    expect_equal(observed$effects$ci_upper,
+      stats::plogis(stats::qlogis(p) + critical * logit_se), tolerance = 1e-12)
+  }
+  expect_true(all(wider$effects$ci_lower < changed$effects$ci_lower))
+  expect_true(all(wider$effects$ci_upper > changed$effects$ci_upper))
+})

@@ -105,8 +105,8 @@ test_that("public adaptive switches disable all three added model modules", {
   }
 })
 
-test_that("MMRM never relabels a follow-up as an entirely unavailable requested baseline or final visit", {
-  for (unavailable_visit in c("signal_t0", "signal_t2")) {
+test_that("MMRM preserves an entirely unavailable requested baseline interior or final visit", {
+  for (unavailable_visit in c("signal_t0", "signal_t1", "signal_t2")) {
     data <- methodology_sample_fixture()
     data[[unavailable_visit]] <- NA_real_
     fit <- methodology_sample_public(data)
@@ -131,4 +131,188 @@ test_that("MMRM never relabels a follow-up as an entirely unavailable requested 
     expect_true(inherits(fit$model$fitted_model, "lmerMod"), info = unavailable_visit)
     expect_true(fit$advanced_tests$emmeans$performed, info = unavailable_visit)
   }
+})
+
+test_that("covariate exclusion cannot silently remove an interior MMRM visit", {
+  data <- methodology_sample_fixture()
+  observed_middle <- c(1L, 2L, 8L, 9L)
+  data$signal_t1[-observed_middle] <- NA_real_
+  data$age[observed_middle] <- NA_real_
+  fit <- methodology_sample_public(data, "age")
+  module <- fit$advanced_models$mmrm
+  expect_true(module$requested)
+  expect_false(module$performed)
+  expect_identical(module$n_timepoints, 3L)
+  expect_identical(module$covariance_parameters, 6L)
+  expect_identical(module$n, 24L)
+  expect_identical(module$n_subjects, 12L)
+  expect_match(module$reason_skipped, "empty modeled visit", fixed = TRUE)
+  expect_null(module$model)
+  expect_null(module$coefficients)
+  expect_null(module$effect_tests)
+  expect_null(module$emmeans$baseline_final)
+  expect_null(fit$multiplicity$mmrm)
+  expect_false(any(fit$advanced_models$model_comparison$model == "mmrm_unstructured"))
+  expect_false(any(grepl("^MMRM:", fit$sensitivity$method)))
+  rank <- fit$advanced_tests$rank_longitudinal
+  expected <- paste(rep(sprintf("P%02d", 1:16), each = 3L),
+    rep(c("Zbase", "Amid", "Mfinal"), 16L), sep = "::")
+  expect_true(rank$requested)
+  expect_identical(rank$n_subjects, 16L)
+  expect_identical(rank$n_observations, 36L)
+  expect_identical(nrow(rank$data), 48L)
+  expect_identical(anyDuplicated(methodology_sample_rank_keys(rank$data)), 0L)
+  expect_identical(sort(methodology_sample_rank_keys(rank$data)), sort(expected))
+  observed <- rank$data$patient[rank$data$time_label == "Amid" & is.finite(rank$data$value)]
+  expect_identical(sort(as.character(observed)), sprintf("P%02d", observed_middle))
+  expect_false("age" %in% names(rank$data))
+})
+
+test_that("public outcomes keep their own samples and survive a single rank adapter failure", {
+  data <- methodology_sample_fixture()
+  variables <- paste0("signal_t", 0:2)
+  second <- paste0("other_t", 0:2)
+  data[second] <- lapply(data[variables], function(value) 30 - 2 * value)
+  data[4L, second] <- NA_real_
+  data$signal_t1[1L] <- NA_real_
+  input <- data
+  run <- function() mira_info_long(data, id = "patient",
+    time_vars = list(Signal = variables, Other = second),
+    time_labels = list(Signal = c("Zbase", "Amid", "Mfinal"),
+      Other = c("Zbase", "Amid", "Mfinal")),
+    arm = "arm", reference_arm = "Zcontrol", covariates = character(),
+    analyses = c("model", "arm_tests"), verbose = FALSE)
+  reference <- run()
+  expect_identical(names(reference$outcomes), c("Signal", "Other"))
+  visits <- c("Zbase", "Amid", "Mfinal")
+  for (name in names(reference$outcomes)) {
+    one <- reference$outcomes[[name]]
+    vars <- if (name == "Signal") variables else second
+    ids <- if (name == "Signal") data$patient else data$patient[-4L]
+    expected_n <- if (name == "Signal") 47L else 45L
+    expect_true(one$advanced_tests$kenward_roger$performed, info = name)
+    expect_true(one$advanced_tests$rank_longitudinal$performed, info = name)
+    expect_true(one$advanced_models$mmrm$performed, info = name)
+    rank <- one$advanced_tests$rank_longitudinal
+    expect_identical(rank$n_subjects, length(ids), info = name)
+    expect_identical(rank$n_observations, expected_n, info = name)
+    calendar <- paste(rep(ids, each = 3L), rep(visits, length(ids)), sep = "::")
+    expect_setequal(methodology_sample_rank_keys(rank$data), calendar)
+    finite <- unlist(lapply(seq_along(vars), function(k) {
+      paste(data$patient[is.finite(data[[vars[[k]]]])], visits[[k]], sep = "::")
+    }), use.names = FALSE)
+    expect_setequal(methodology_sample_mmrm_keys(one$advanced_models$mmrm$data),
+      finite)
+    frame <- stats::model.frame(one$model$fitted_model)
+    expect_setequal(paste(frame$patient_factor, frame$time_factor, sep = "::"),
+      finite)
+    # Independent empirical-distribution arithmetic, in the same explicit
+    # arm/visit keys as the output. Each of the six reference cells has weight
+    # 1/6 even with unequal group sizes or missing observations.
+    cells <- lapply(c("Zcontrol", "Aactive"), function(arm) {
+      lapply(vars, function(variable) {
+        value <- data[[variable]][data$arm == arm]
+        value[is.finite(value)]
+      })
+    })
+    cells <- unlist(cells, recursive = FALSE)
+    expected <- vapply(cells, function(target) {
+      mean(vapply(cells, function(reference_cell) {
+        mean(outer(reference_cell, target, function(a, b) (a < b) + .5 * (a == b)))
+      }, numeric(1L)))
+    }, numeric(1L))
+    effects <- MIRA:::.mira_base_fields_long(rank$effects)
+    expect_identical(effects$arm, rep(c("Zcontrol", "Aactive"), each = 3L))
+    expect_identical(effects$time_label, rep(visits, 2L))
+    expect_identical(effects$time, rep(vars, 2L))
+    expect_equal(effects$relative_effect, expected, tolerance = 1e-12, info = name)
+  }
+  original_rank <- getFromNamespace(".mira_run_rank_longitudinal_long", "MIRA")
+  called <- character()
+  failed <- with_mocked_bindings(run(), .mira_run_rank_longitudinal_long = function(long_data, ...) {
+    called <<- c(called, unique(long_data$time)[[1L]])
+    if (identical(unique(long_data$time)[[1L]], "signal_t0")) {
+      warning("controlled rank diagnostic")
+      stop("controlled rank failure for Signal")
+    }
+    original_rank(long_data, ...)
+  }, .package = "MIRA")
+  expect_identical(called, c("signal_t0", "other_t0"))
+  broken <- failed$outcomes$Signal$advanced_tests$rank_longitudinal
+  expect_true(broken$requested)
+  expect_false(broken$performed)
+  expect_identical(broken$error, "controlled rank failure for Signal")
+  expect_identical(broken$warnings, "controlled rank diagnostic")
+  expect_match(broken$reason_skipped, "requested extended method could not be completed")
+  expect_identical(failed$diagnostics$failed_outcomes, character())
+  for (name in names(reference$outcomes)) {
+    before <- reference$outcomes[[name]]
+    after <- failed$outcomes[[name]]
+    expect_identical(after$descriptives, before$descriptives, info = name)
+    expect_identical(after$change, before$change, info = name)
+    expect_equal(lme4::fixef(after$model$fitted_model),
+      lme4::fixef(before$model$fitted_model), tolerance = 1e-10, info = name)
+    expect_equal(after$advanced_tests$kenward_roger$tidy,
+      before$advanced_tests$kenward_roger$tidy, tolerance = 1e-10, info = name)
+    expect_equal(after$advanced_models$mmrm$coefficients,
+      before$advanced_models$mmrm$coefficients, tolerance = 1e-10, info = name)
+    expect_equal(after$advanced_models$mmrm$effect_tests,
+      before$advanced_models$mmrm$effect_tests, tolerance = 1e-10, info = name)
+    expect_equal(after$advanced_tests$emmeans$time$tidy,
+      before$advanced_tests$emmeans$time$tidy, tolerance = 1e-10, info = name)
+    expect_equal(after$advanced_tests$rm_anova$tidy,
+      before$advanced_tests$rm_anova$tidy, tolerance = 1e-10, info = name)
+    expect_identical(after$advanced_tests$friedman$tidy,
+      before$advanced_tests$friedman$tidy, info = name)
+    expect_equal(after$advanced_models$model_comparison,
+      before$advanced_models$model_comparison, tolerance = 1e-10, info = name)
+    old_rows <- !grepl("^Nonparametric relative", before$sensitivity$method)
+    retained <- !grepl("^Nonparametric relative", after$sensitivity$method)
+    old <- before$sensitivity[old_rows, , drop = FALSE]
+    kept <- after$sensitivity[retained, , drop = FALSE]
+    rownames(old) <- rownames(kept) <- NULL
+    expect_equal(kept, old, tolerance = 1e-10, info = name)
+  }
+  expect_equal(failed$outcomes$Other$advanced_tests$rank_longitudinal$effects,
+    reference$outcomes$Other$advanced_tests$rank_longitudinal$effects, tolerance = 1e-12)
+  expect_equal(failed$outcomes$Other$advanced_tests$rank_longitudinal$tests,
+    reference$outcomes$Other$advanced_tests$rank_longitudinal$tests, tolerance = 1e-12)
+  expect_false(any(grepl("^Nonparametric relative", failed$outcomes$Signal$sensitivity$method)))
+  expect_identical(data, input)
+})
+
+test_that("clinical direction and practical thresholds do not change model inference", {
+  data <- methodology_sample_fixture()
+  run <- function(direction, threshold) mira_info_long(data, id = "patient", outcomes = "Signal",
+    time_vars = paste0("signal_t", 0:2), time_labels = c("Zbase", "Amid", "Mfinal"),
+    arm = "arm", reference_arm = "Zcontrol", covariates = character(),
+    analyses = c("model", "arm_tests"), improvement_direction = direction,
+    stable_threshold = threshold, verbose = FALSE)
+  original <- run("higher", 0)
+  interpreted <- run("lower", 100)
+  for (name in c("kenward_roger", "rank_longitudinal")) {
+    before <- original$advanced_tests[[name]]
+    after <- interpreted$advanced_tests[[name]]
+    expect_true(before$performed, info = name)
+    expect_true(after$performed, info = name)
+    for (table in if (name == "kenward_roger") "tidy" else c("effects", "tests", "covariance")) {
+      expect_equal(after[[table]], before[[table]], tolerance = 1e-10, info = paste(name, table))
+    }
+  }
+  expect_true(original$advanced_models$mmrm$performed)
+  expect_true(interpreted$advanced_models$mmrm$performed)
+  for (table in c("coefficients", "effect_tests", "covariance")) {
+    expect_equal(interpreted$advanced_models$mmrm[[table]],
+      original$advanced_models$mmrm[[table]], tolerance = 1e-10, info = table)
+  }
+  expect_equal(interpreted$advanced_models$mmrm$emmeans$baseline_final$tidy,
+    original$advanced_models$mmrm$emmeans$baseline_final$tidy, tolerance = 1e-10)
+  expect_equal(lme4::fixef(interpreted$model$fitted_model),
+    lme4::fixef(original$model$fitted_model), tolerance = 1e-10)
+  expect_equal(interpreted$sensitivity, original$sensitivity, tolerance = 1e-10)
+  first <- MIRA:::.mira_base_fields_long(original$trajectories)
+  second <- MIRA:::.mira_base_fields_long(interpreted$trajectories)
+  expect_true(any(first$clinical_direction == "Improved"))
+  expect_identical(second$clinical_direction, rep("Stable", nrow(data)))
+  expect_identical(second$absolute_change, first$absolute_change)
 })

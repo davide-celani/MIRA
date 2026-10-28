@@ -1,3 +1,4 @@
+main <- function() {
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 2L || length(args) > 3L) {
   stop("Usage: validate-tests.R <repository> <existing-directory/output-prefix> [source|installed]")
@@ -7,6 +8,10 @@ prefix <- args[[2]]
 mode <- if (length(args) >= 3L) args[[3]] else "source"
 if (!mode %in% c("source", "installed")) stop("Mode must be source or installed.")
 if (!dir.exists(dirname(prefix))) stop("The output-prefix directory must already exist.")
+# Keep development and installed-namespace validation on the package edition,
+# including when this runner is launched without a testthat package context.
+testthat::local_edition(3)
+cat("Requested testthat edition: 3\n")
 Sys.setenv(QUARTO_TEXLIVE_AUTO_INSTALL = "false",
            QUARTO_TEXLIVE_AUTO_UPDATE = "false",
            MIRA_RUN_CMDSTAN_TESTS = "false",
@@ -65,4 +70,7 @@ print(sessionInfo())
 # First loading Imports may add documented package defaults; changing an
 # existing option or any other recorded state is an unexpected leak.
 state_failed <- !all(unlist(state[1:5])) || length(state$changed_options) > 0L
-if (any(tab$failed > 0 | tab$error | tab$warning > 0) || state_failed) quit(status = 1L)
+as.integer(any(tab$failed > 0 | tab$error | tab$warning > 0) || state_failed)
+}
+# Run deferred edition cleanup before quitting, while its namespace is alive.
+quit(status = main())

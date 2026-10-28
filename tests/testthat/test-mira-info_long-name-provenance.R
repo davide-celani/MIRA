@@ -161,3 +161,58 @@ test_that("source names containing dollar signs remain intact in metric path ref
   expect_false(returned$visible)
   expect_true(length(printed) > 0L)
 })
+
+test_that("extended scientific tables follow both public declaration paths exactly once", {
+  withr::local_preserve_seed()
+  y <- rbind(c(2, 5, 7), c(4, 6, 12), c(7, 8, 9), c(3, 7, 13),
+    c(9, 11, 10), c(6, 9, 16), c(8, 14, 18), c(12, 13, 15))
+  data <- data.frame(subject_id = sprintf("S%02d", 1:8),
+    marker_t0 = y[, 1L], marker_t1 = y[, 2L], marker_t2 = y[, 3L])
+  before <- data
+  variables <- names(data)[-1L]
+  common <- list(data = data, id = "subject_id", covariates = character(),
+    analyses = "model", verbose = FALSE,
+    time_labels = c("Zbase", "Amid", "Mfinal"))
+  inferred <- do.call(mira_info_long, c(common, list(time_vars = variables)))
+  declared <- "mean p_value_MiX"
+  via_outcomes <- do.call(mira_info_long,
+    c(common, list(time_vars = variables, outcomes = declared)))
+  via_list <- do.call(mira_info_long,
+    c(common, list(time_vars = stats::setNames(list(variables), declared))))
+  expect_null(inferred$config$outcome_names$marker$declared)
+  expect_identical(via_outcomes$config$outcome_names[[declared]]$source, "outcomes")
+  expect_identical(via_list$config$outcome_names[[declared]]$source, "time_vars_names")
+  paths <- list(c("advanced_tests", "kenward_roger", "tidy"),
+    c("advanced_tests", "rank_longitudinal", "effects"),
+    c("advanced_tests", "rank_longitudinal", "tests"),
+    c("advanced_models", "mmrm", "coefficients"),
+    c("advanced_models", "mmrm", "effect_tests"),
+    c("advanced_models", "mmrm", "emmeans", "baseline_final", "tidy"))
+  for (result in list(inferred, via_outcomes, via_list)) {
+    expect_true(result$advanced_tests$kenward_roger$performed)
+    expect_true(result$advanced_tests$rank_longitudinal$performed)
+    expect_true(result$advanced_models$mmrm$performed)
+  }
+  for (path in paths) {
+    reference <- MIRA:::.mira_result_path_long(inferred, path)
+    expect_true(nrow(reference) > 0L, info = paste(path, collapse = "$"))
+    for (result in list(via_outcomes, via_list)) {
+      table <- MIRA:::.mira_result_path_long(result, path)
+      map <- attr(table, "mira_metric_names", exact = TRUE)
+      expect_identical(unname(map), paste0(declared, "_", names(map)))
+      expect_identical(MIRA:::.mira_base_fields_long(table),
+        MIRA:::.mira_base_fields_long(reference), info = paste(path, collapse = "$"))
+      expect_identical(anyDuplicated(names(table)), 0L)
+    }
+  }
+  # Model-native coefficients and summaries keep the external engine schema.
+  for (result in list(via_outcomes, via_list)) {
+    expect_identical(names(stats::coef(result$advanced_models$mmrm$model)),
+      names(stats::coef(inferred$advanced_models$mmrm$model)))
+    expect_identical(names(result$advanced_tests$kenward_roger$tests$TIME$stats),
+      names(inferred$advanced_tests$kenward_roger$tests$TIME$stats))
+    expect_identical(result$advanced_tests$rank_longitudinal$effects$time_label,
+      c("Zbase", "Amid", "Mfinal"))
+  }
+  expect_identical(data, before)
+})

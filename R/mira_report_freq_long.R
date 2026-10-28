@@ -356,7 +356,12 @@
 
   visit_keys <- match(c("from", "to"), names(x))
   group_keys <- which(names(x) %in% c("arm", "arm_a", "arm_b"))
-  comparison_keys <- if (!anyNA(visit_keys)) {
+  inference_keys <- match(c("question", "term", "method"), names(x))
+  comparison_keys <- if (!anyNA(inference_keys)) {
+    # ATS and WTS can share question and term; retain the method beside
+    # every statistic/df/p-value when splitting their scientific table.
+    inference_keys
+  } else if (!anyNA(visit_keys)) {
     c(group_keys, visit_keys)
   } else if ("time" %in% names(x) && length(group_keys)) {
     c(match("time", names(x)), group_keys)
@@ -1537,7 +1542,9 @@
 #'   displayed table block, not a request to discard columns. Wide tables are
 #'   split into blocks. Comparison tables repeat \code{from}, \code{to} and
 #'   any \code{arm}, \code{arm_a}, \code{arm_b} identifiers. Arm comparisons at
-#'   a single visit repeat \code{time} and the arm identifiers. These keys are
+#'   a single visit repeat \code{time} and the arm identifiers. Inference tables
+#'   with \code{question}, \code{term}, and \code{method} repeat all three keys.
+#'   These keys are
 #'   repeated when the column limit leaves room for them and a statistic;
 #'   otherwise the first one or
 #'   two columns, typically identifiers, are repeated. Columns retain their

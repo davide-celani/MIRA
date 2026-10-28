@@ -2319,13 +2319,18 @@
     as.integer(sum(eigenvalues > max(eigenvalues) * result$covariance_rank_tolerance))
   } else 0L
   valid <- result$converged && length(beta) == ncol(design) &&
+    identical(names(beta), colnames(design)) &&
     all(is.finite(beta)) && is.matrix(beta_vcov) &&
+    identical(dim(beta_vcov), rep(length(beta), 2L)) &&
+    identical(dimnames(beta_vcov), list(names(beta), names(beta))) &&
     all(is.finite(beta_vcov)) && all(diag(beta_vcov) > 0) &&
+    identical(dim(covariance), rep(length(visits), 2L)) &&
+    identical(dimnames(covariance), list(visits, visits)) &&
     length(eigenvalues) == length(visits) &&
     result$covariance_rank == length(visits)
   if (!valid) {
     return(unavailable(paste("MMRM inference is unavailable:",
-      "the fit did not converge or its coefficient/residual covariance was not finite and numerically full rank.")))
+      "the fit did not converge or its coefficient/residual covariance was not finite, aligned to the modeled coefficients and visits, and numerically full rank.")))
   }
   result$AIC <- tryCatch(as.numeric(stats::AIC(model)), error = function(e) NA_real_)
   result$BIC <- tryCatch(as.numeric(stats::BIC(model)), error = function(e) NA_real_)
@@ -2349,7 +2354,18 @@
     df <- numeric_field("df")
     statistic <- numeric_field("t_stat")
     p <- numeric_field("p_val")
-    estimable <- all(is.finite(c(estimate, se, df, statistic, p))) && se > 0 && df > 0
+    estimable <- all(is.finite(c(estimate, se, df, statistic, p))) &&
+      se > 0 && df > 0 && p >= 0 && p <= 1
+    if (!estimable) {
+      # Preserve valid independent estimates, but never publish a test or
+      # interval from an invalid coefficient-inference result.
+      if (is.null(test$error)) result$errors[[paste0("coefficient_", names(beta)[[i]])]] <-
+        "The MMRM coefficient test did not return finite valid inference."
+      if (!is.finite(estimate)) estimate <- NA_real_
+      if (!is.finite(se) || se <= 0) se <- NA_real_
+      if (!is.finite(df) || df <= 0) df <- NA_real_
+      statistic <- p <- NA_real_
+    }
     critical <- if (estimable) stats::qt((1 + confidence_level) / 2, df) else NA_real_
     coefficient_rows[[i]] <- data.frame(term = names(beta)[[i]], estimate = estimate,
       SE = se, df = df, lower.CL = estimate - critical * se,
@@ -2383,7 +2399,9 @@
     result$warnings <- unique(c(result$warnings, tested$warnings))
     if (!is.null(tested$error)) result$errors[[question]] <- tested$error
     fields <- unlist(tested$value[c("f_stat", "num_df", "denom_df", "p_val")], use.names = FALSE)
-    estimable <- length(fields) == 4L && all(is.finite(fields)) && fields[[2L]] > 0 && fields[[3L]] > 0
+    estimable <- length(fields) == 4L && all(is.finite(fields)) &&
+      fields[[1L]] >= 0 && fields[[2L]] > 0 && fields[[3L]] > 0 &&
+      fields[[4L]] >= 0 && fields[[4L]] <= 1
     if (estimable) {
       effect_rows[[length(effect_rows) + 1L]] <- data.frame(question = question,
         statistic = as.numeric(tested$value$f_stat), df_num = as.numeric(tested$value$num_df),

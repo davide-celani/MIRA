@@ -281,6 +281,7 @@ test_that("MMRM preserves RNG and row permutations preserve the scientific model
 
 test_that("MMRM initialization fallback is explicit without changing the model target", {
   data <- mmrm_oracle_long()
+  reference <- .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm")
   result <- testthat::with_mocked_bindings(
     .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm"),
     emp_start = function(...) stop("intentional empirical initialization failure"),
@@ -293,6 +294,26 @@ test_that("MMRM initialization fallback is explicit without changing the model t
   expect_identical(result$df_method, "Satterthwaite")
   expect_equal(result$emmeans$baseline_final$tidy$estimate, 6.125, tolerance = 1e-10)
   expect_identical(result$n, 24L)
+  expect_identical(result$data, reference$data)
+  expect_identical(deparse(result$formula), deparse(reference$formula))
+  expect_identical(mmrm::component(result$model, "cov_type"), "us")
+  expect_true(mmrm::component(result$model, "reml"))
+  # Different starting values can terminate at slightly different points
+  # within the native optimizer criterion. Compare the fallback against the
+  # actual standard-start engine, while checking its target/frame above.
+  standard <- mmrm::mmrm(result$formula, data = data, reml = TRUE,
+    control = mmrm::mmrm_control(method = "Satterthwaite", accept_singular = FALSE,
+      start = mmrm::std_start))
+  expect_identical(result$data, mmrm::component(standard, "full_frame"))
+  expect_equal(result$covariance, mmrm::component(standard, "varcor"), tolerance = 1e-12)
+  expect_equal(result$logLik, as.numeric(stats::logLik(standard)), tolerance = 1e-12)
+  for (i in seq_len(nrow(result$coefficients))) {
+    L <- numeric(nrow(result$coefficients))
+    L[[i]] <- 1
+    native <- mmrm::df_1d(standard, L)
+    expect_equal(unname(unlist(result$coefficients[i, c("estimate", "SE", "df", "t.ratio", "p_raw")])),
+      unname(unlist(native[c("est", "se", "df", "t_stat", "p_val")])), tolerance = 1e-12)
+  }
 })
 
 test_that("MMRM rejects nonconverged and singular covariance inference while retaining evidence", {
@@ -341,5 +362,259 @@ test_that("MMRM diagnoses actual degenerate repeated profiles without valid-look
     expect_true(!result$converged || result$covariance_rank < 3L)
   } else {
     expect_true(is.character(result$error) && nzchar(result$error))
+  }
+})
+
+# Boundary faults below alter only MIRA's local evaluated-result binding.
+# Every fit and every unaltered df/emmeans calculation still uses real mmrm.
+test_that("MMRM rejects impossible finite coefficient and joint-test probabilities locally", {
+  data <- mmrm_oracle_long()
+  reference <- .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm")
+  original_eval <- MIRA:::.mira_eval_long
+  for (fault in c("p_low", "p_high", "se_zero", "df_zero")) {
+    changed <- function(expr) {
+      call <- paste(deparse(substitute(expr)), collapse = " ")
+      evaluated <- original_eval(expr)
+      if (startsWith(call, "mmrm::df_1d(") &&
+          isTRUE(all.equal(evaluated$value$est, reference$coefficients$estimate[[2L]]))) {
+        field <- switch(fault, p_low = "p_val", p_high = "p_val", se_zero = "se", df_zero = "df")
+        evaluated$value[[field]] <- switch(fault, p_low = -0.01, p_high = 1.01, se_zero = 0, df_zero = 0)
+      }
+      evaluated
+    }
+    actual <- testthat::with_mocked_bindings(
+      .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm"),
+      .mira_eval_long = changed, .package = "MIRA")
+    expect_true(actual$performed, info = fault)
+    expect_false(actual$coefficients$estimable[[2L]], info = fault)
+    expect_true(all(is.na(actual$coefficients[2L, c("t.ratio", "p_raw", "lower.CL", "upper.CL")])), info = fault)
+    expect_true(nzchar(actual$errors$coefficient_time_factorAmid), info = fault)
+    expect_equal(actual$coefficients[c(1L, 3L), ], reference$coefficients[c(1L, 3L), ], tolerance = 0, info = fault)
+    expect_equal(actual$effect_tests, reference$effect_tests, tolerance = 0, info = fault)
+    expect_true(actual$emmeans$performed, info = fault)
+  }
+  for (fault in c("negative_F", "p_low", "p_high", "df_zero")) {
+    changed <- function(expr) {
+      call <- paste(deparse(substitute(expr)), collapse = " ")
+      evaluated <- original_eval(expr)
+      if (startsWith(call, "mmrm::df_md(")) {
+        field <- switch(fault, negative_F = "f_stat", p_low = "p_val", p_high = "p_val", df_zero = "denom_df")
+        evaluated$value[[field]] <- switch(fault, negative_F = -0.1, p_low = -0.01, p_high = 1.01, df_zero = 0)
+      }
+      evaluated
+    }
+    actual <- testthat::with_mocked_bindings(
+      .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm"),
+      .mira_eval_long = changed, .package = "MIRA")
+    expect_true(actual$performed, info = fault)
+    expect_identical(nrow(actual$effect_tests), 0L, info = fault)
+    expect_true(is.character(actual$effect_diagnostics$TIME$reason_skipped) && grepl("inference", actual$effect_diagnostics$TIME$reason_skipped), info = fault)
+    expect_equal(actual$coefficients, reference$coefficients, tolerance = 0, info = fault)
+    expect_true(actual$emmeans$performed, info = fault)
+  }
+})
+
+test_that("MMRM refuses covariance axes or coefficient dimensions that contradict the fitted design", {
+  data <- mmrm_oracle_long()
+  original_eval <- MIRA:::.mira_eval_long
+  for (fault in c("visit_names", "coefficient_dimension", "coefficient_names")) {
+    changed <- function(expr) {
+      evaluated <- original_eval(expr)
+      value <- evaluated$value
+      if (is.list(value) && all(c("beta", "covariance", "beta_vcov", "data", "convergence") %in% names(value))) {
+        if (fault == "visit_names") dimnames(value$covariance) <- list(rev(levels(data$time_factor)), rev(levels(data$time_factor)))
+        if (fault == "coefficient_dimension") value$beta_vcov <- value$beta_vcov[1:2, 1:2, drop = FALSE]
+        if (fault == "coefficient_names") dimnames(value$beta_vcov) <- list(rev(names(value$beta)), rev(names(value$beta)))
+        evaluated$value <- value
+      }
+      evaluated
+    }
+    actual <- testthat::with_mocked_bindings(
+      .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm"),
+      .mira_eval_long = changed, .package = "MIRA")
+    expect_false(actual$performed, info = fault)
+    expect_s3_class(actual$model, "mmrm")
+    expect_null(actual$coefficients)
+    expect_null(actual$effect_tests)
+    expect_true(is.character(actual$reason_skipped) && grepl("covariance", actual$reason_skipped), info = fault)
+    expect_identical(mmrm_oracle_keys(actual$data), mmrm_oracle_keys(data), info = fault)
+  }
+})
+
+
+
+test_that("MMRM keeps independent inference when a summary coefficient joint test or emmeans step fails", {
+  data <- mmrm_oracle_long(arms = c(rep("Zcontrol", 3L), rep("Aactive", 5L)))
+  reference <- .mira_run_mmrm_long(data, value ~ time_factor * arm_factor, TRUE, 0.9, "holm")
+  original_eval <- MIRA:::.mira_eval_long
+  for (fault in c("summary", "coefficient", "joint", "emmeans")) {
+    coefficient_calls <- 0L
+    changed <- function(expr) {
+      call <- paste(deparse(substitute(expr)), collapse = " ")
+      evaluated <- original_eval(expr)
+      selected <- identical(fault, "summary") && identical(call, "summary(model)")
+      if (startsWith(call, "mmrm::df_1d(")) {
+        coefficient_calls <<- coefficient_calls + 1L
+        selected <- selected || (fault == "coefficient" && coefficient_calls == 2L)
+      }
+      selected <- selected || (fault == "joint" && startsWith(call, "mmrm::df_md(") &&
+        isTRUE(evaluated$value$num_df == 3)) ||
+        (fault == "emmeans" && inherits(evaluated$value, "emmGrid") &&
+          identical(get0("name", envir = parent.frame(), inherits = FALSE), "time"))
+      if (selected) return(list(value = NULL, warnings = paste("controlled", fault, "warning"),
+        error = paste("controlled", fault, "error")))
+      evaluated
+    }
+    actual <- testthat::with_mocked_bindings(
+      .mira_run_mmrm_long(data, value ~ time_factor * arm_factor, TRUE, 0.9, "holm"),
+      .mira_eval_long = changed, .package = "MIRA")
+    expect_true(actual$performed, info = fault)
+    expect_identical(actual$data, reference$data)
+    expect_equal(actual$covariance, reference$covariance, tolerance = 0, info = fault)
+    if (fault == "coefficient") {
+      expect_identical(which(!actual$coefficients$estimable), 2L)
+      expect_identical(actual$errors$coefficient_time_factorAmid, "controlled coefficient error")
+      expect_identical(actual$coefficients[-2L, ], reference$coefficients[-2L, ])
+    } else expect_identical(actual$coefficients, reference$coefficients)
+    if (fault == "joint") {
+      expect_identical(actual$effect_tests$question, c("TIME", "TIME_X_ARM"))
+      expect_identical(actual$errors$ARM, "controlled joint error")
+      expected <- reference$effect_tests[c(1L, 3L), ]
+      rownames(expected) <- NULL
+      expect_identical(actual$effect_tests, expected)
+    } else expect_identical(actual$effect_tests, reference$effect_tests)
+    if (fault == "summary") {
+      expect_null(actual$summary)
+      expect_identical(actual$errors$summary, "controlled summary error")
+    } else expect_s3_class(actual$summary, "summary.mmrm")
+    if (fault == "emmeans") {
+      expect_false(actual$emmeans$performed)
+      expect_identical(actual$emmeans$error, "controlled emmeans error")
+      expect_identical(actual$emmeans$warnings, "controlled emmeans warning")
+    } else expect_true(actual$emmeans$performed, info = fault)
+  }
+})
+
+test_that("MMRM temporal contrast families follow independent paired arithmetic at two confidence levels", {
+  y <- mmrm_oracle_matrix()
+  data <- mmrm_oracle_long(y)
+  means <- colMeans(y)
+  covariance <- crossprod(sweep(y, 2L, means)) / 7 / 8
+  families <- list(
+    pairwise = rbind(c(1,-1,0), c(1,0,-1), c(0,1,-1)),
+    baseline_followup = rbind(c(-1,1,0), c(-1,0,1)),
+    baseline_final = rbind(c(-1,0,1)),
+    consecutive = rbind(c(-1,1,0), c(0,-1,1)),
+    trends = rbind(c(-1,0,1), c(1,-2,1)))
+  labels <- list(pairwise = c("Zbase - Amid", "Zbase - Mfinal", "Amid - Mfinal"),
+    baseline_followup = c("Amid - Zbase", "Mfinal - Zbase"),
+    baseline_final = "final - baseline", consecutive = c("Amid - Zbase", "Mfinal - Amid"),
+    trends = c("linear", "quadratic"))
+  previous <- NULL
+  for (level in c(0.9, 0.95)) {
+    actual <- .mira_run_mmrm_long(data, value ~ time_factor, FALSE, level, "holm")
+    tables <- list(pairwise = actual$emmeans$time$pairwise_tidy,
+      baseline_followup = actual$emmeans$baseline_followup$tidy,
+      baseline_final = actual$emmeans$baseline_final$tidy,
+      consecutive = actual$emmeans$consecutive$tidy, trends = actual$emmeans$trends$tidy)
+    for (family in names(families)) {
+      L <- families[[family]]
+      expected <- as.vector(L %*% means)
+      se <- sqrt(diag(L %*% covariance %*% t(L)))
+      p <- 2 * stats::pt(-abs(expected / se), 7)
+      observed <- tables[[family]]
+      expect_identical(as.character(observed$contrast), labels[[family]])
+      expect_equal(observed$estimate, expected, tolerance = 1e-10, info = family)
+      expect_equal(observed$SE, se, tolerance = 2e-6, info = family)
+      expect_equal(observed$df, rep(7, length(expected)), tolerance = 2e-5, info = family)
+      expect_equal(observed$t.ratio, expected / se, tolerance = 2e-6, info = family)
+      expect_equal(observed$p_raw, p, tolerance = 2e-6, info = family)
+      expect_equal(observed$p_primary, stats::p.adjust(p, "holm"), tolerance = 2e-6, info = family)
+      expect_equal(observed$lower.CL, expected - stats::qt((1+level)/2,7) * se, tolerance = 2e-6, info = family)
+      expect_equal(observed$upper.CL, expected + stats::qt((1+level)/2,7) * se, tolerance = 2e-6, info = family)
+      if (!is.null(previous)) expect_identical(observed[c("contrast","estimate","SE","df","t.ratio","p_raw","p_primary")],
+        previous[[family]][c("contrast","estimate","SE","df","t.ratio","p_raw","p_primary")])
+    }
+    previous <- tables
+  }
+})
+
+test_that("KR and MMRM obey positive affine response and bijective subject-ID transformations", {
+  data <- mmrm_oracle_long()
+  kr_model <- lme4::lmer(value ~ time_factor + (1 | patient_factor), data = data, REML = TRUE)
+  kr <- MIRA:::.mira_run_kenward_roger_long(kr_model, FALSE)
+  mmrm <- .mira_run_mmrm_long(data, value ~ time_factor, FALSE, 0.9, "holm")
+  transformed <- data
+  transformed$value <- 13 + 2.5 * data$value
+  id_map <- stats::setNames(paste0("id ", rev(seq_len(8L))), levels(data$patient_factor))
+  transformed$patient_factor <- factor(unname(id_map[as.character(data$patient_factor)]))
+  transformed <- transformed[rev(seq_len(nrow(transformed))), ]
+  kr_new_model <- lme4::lmer(value ~ time_factor + (1 | patient_factor), data = transformed, REML = TRUE)
+  kr_new <- MIRA:::.mira_run_kenward_roger_long(kr_new_model, FALSE)
+  mmrm_new <- .mira_run_mmrm_long(transformed, value ~ time_factor, FALSE, 0.9, "holm")
+  expect_true(kr$performed && kr_new$performed && mmrm$performed && mmrm_new$performed)
+  expect_identical(kr_new$tidy[c("question", "n", "n_subjects")], kr$tidy[c("question", "n", "n_subjects")])
+  # Relative optimizer tolerance: moderate affine changes retain the same
+  # Gaussian model and hypothesis; likelihood criteria themselves need not match.
+  expect_equal(kr_new$tidy, kr$tidy, tolerance = 2e-6)
+  expect_identical(mmrm_new$coefficients$term, mmrm$coefficients$term)
+  offset <- c(13,0,0)
+  expect_equal(mmrm_new$coefficients$estimate, offset + 2.5 * mmrm$coefficients$estimate, tolerance = 1e-9)
+  expect_equal(mmrm_new$coefficients$SE, 2.5 * mmrm$coefficients$SE, tolerance = 2e-6)
+  expect_equal(mmrm_new$coefficients$lower.CL, offset + 2.5 * mmrm$coefficients$lower.CL, tolerance = 2e-6)
+  expect_equal(mmrm_new$coefficients$upper.CL, offset + 2.5 * mmrm$coefficients$upper.CL, tolerance = 2e-6)
+  expect_equal(mmrm_new$coefficients$df, mmrm$coefficients$df, tolerance = 2e-5)
+  # The intercept tests a changed numerical origin and is not invariant.
+  expect_equal(mmrm_new$coefficients$p_raw[-1L], mmrm$coefficients$p_raw[-1L], tolerance = 2e-6)
+  expect_equal(mmrm_new$effect_tests, mmrm$effect_tests, tolerance = 2e-6)
+  expect_identical(dimnames(mmrm_new$covariance), list(levels(data$time_factor), levels(data$time_factor)))
+  expect_equal(mmrm_new$covariance, 2.5^2 * mmrm$covariance, tolerance = 2e-6)
+  expected_keys <- paste(transformed$patient_factor, transformed$time_factor, sep = "::")
+  actual_keys <- mmrm_oracle_keys(mmrm_new$data)
+  expect_identical(anyDuplicated(actual_keys), 0L)
+  expect_identical(sort(actual_keys), sort(expected_keys))
+  expect_identical(mmrm_new$data$value, transformed$value[match(actual_keys, expected_keys)])
+})
+
+test_that("three-arm MMRM joint tests retain nuisance separation and explicit restrictions", {
+  y <- mmrm_oracle_matrix()
+  data <- mmrm_oracle_long(rbind(y, sweep(y, 2L, c(4,-2,1), "+"),
+    sweep(y, 2L, c(-3,2,5), "+")))
+  data$arm_factor <- factor(rep(rep(c("Zcontrol", "Aactive", "Bthird"), each = 8L), each = 3L),
+    levels = c("Zcontrol", "Aactive", "Bthird"))
+  data$time_arm_nuisance <- rep(rep(c(-2,1,3,-1,0,2,-3,4), 3L), each = 3L)
+  original_eval <- MIRA:::.mira_eval_long
+  captured <- list()
+  observed <- function(expr) {
+    call <- paste(deparse(substitute(expr)), collapse = " ")
+    if (startsWith(call, "mmrm::df_md(")) {
+      question <- get("question", envir = parent.frame())
+      captured[[question]] <<- get("contrasts", envir = parent.frame())
+    }
+    original_eval(expr)
+  }
+  actual <- testthat::with_mocked_bindings(
+    .mira_run_mmrm_long(data, value ~ time_factor * arm_factor + time_arm_nuisance,
+      TRUE, 0.9, "holm"), .mira_eval_long = observed, .package = "MIRA")
+  expect_true(actual$performed)
+  expect_identical(actual$n, 72L)
+  expect_identical(actual$n_subjects, 24L)
+  expect_identical(mmrm_oracle_keys(actual$data), mmrm_oracle_keys(data))
+  interactions <- c("time_factorAmid:arm_factorAactive", "time_factorMfinal:arm_factorAactive",
+    "time_factorAmid:arm_factorBthird", "time_factorMfinal:arm_factorBthird")
+  targets <- list(TIME = c("time_factorAmid", "time_factorMfinal", interactions),
+    ARM = c("arm_factorAactive", "arm_factorBthird", interactions), TIME_X_ARM = interactions)
+  beta <- stats::coef(actual$model)
+  expect_equal(unname(beta[c("arm_factorAactive", "arm_factorBthird")]), c(4,-3), tolerance = 1e-9)
+  expect_identical(actual$effect_tests$question, names(targets))
+  for (question in names(targets)) {
+    expect_identical(actual$effect_diagnostics[[question]]$requested_coefficients, targets[[question]])
+    expect_identical(actual$effect_diagnostics[[question]]$tested_coefficients, targets[[question]])
+    L <- diag(length(beta))[match(targets[[question]], names(beta)), , drop = FALSE]
+    expect_identical(captured[[question]], L)
+    native <- mmrm::df_md(actual$model, L)
+    row <- actual$effect_tests[actual$effect_tests$question == question, ]
+    expect_equal(unname(unlist(row[c("statistic", "df_num", "df_den", "p_raw")])),
+      unname(unlist(native[c("f_stat", "num_df", "denom_df", "p_val")])), tolerance = 1e-12)
   }
 })

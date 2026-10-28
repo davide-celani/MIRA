@@ -1,4 +1,4 @@
-methodology_print_fit <- function(analyses = "model", inspect_only = FALSE) {
+methodology_print_fit <- function(analyses = "model", inspect_only = FALSE, model = TRUE) {
   y <- rbind(c(2, 5, 7), c(4, 6, 12), c(7, 8, 9), c(3, 7, 13),
     c(9, 11, 10), c(6, 9, 16), c(8, 14, 18), c(12, 13, 15))
   data <- data.frame(patient = sprintf("P%02d", 1:8),
@@ -6,7 +6,8 @@ methodology_print_fit <- function(analyses = "model", inspect_only = FALSE) {
   mira_info_long(data, id = "patient", outcomes = "Signal score",
     time_vars = c("signal_t0", "signal_t1", "signal_t2"),
     time_labels = c("Zbase", "Amid", "Mfinal"), covariates = character(),
-    analyses = analyses, inspect_only = inspect_only, verbose = FALSE)
+    analyses = analyses, model = model, plots = FALSE, outliers = FALSE,
+    correlations = FALSE, inspect_only = inspect_only, verbose = FALSE)
 }
 
 methodology_print_capture <- function(expr) {
@@ -100,6 +101,17 @@ test_that("disabled and inspect-only public consumers never fit the added method
     .mira_run_kenward_roger_long = unexpected,
     .mira_run_rank_longitudinal_long = unexpected,
     .mira_run_mmrm_long = unexpected, .package = "MIRA")
+  explicit <- with_mocked_bindings(methodology_print_fit(analyses = NULL, model = FALSE),
+    .mira_run_kenward_roger_long = unexpected,
+    .mira_run_rank_longitudinal_long = unexpected,
+    .mira_run_mmrm_long = unexpected, .package = "MIRA")
+  expect_false(explicit$config$analyses$model)
+  for (module in list(explicit$advanced_tests$kenward_roger,
+                     explicit$advanced_tests$rank_longitudinal,
+                     explicit$advanced_models$mmrm)) {
+    expect_false(module$requested)
+    expect_false(module$performed)
+  }
   for (module in list(disabled$advanced_tests$kenward_roger,
                      disabled$advanced_tests$rank_longitudinal,
                      disabled$advanced_models$mmrm)) {

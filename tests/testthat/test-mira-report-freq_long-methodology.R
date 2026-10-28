@@ -1,23 +1,6 @@
 # These tests exercise the public analysis -> saved payload -> CSV -> exported
 # runtime -> real HTML kable chain. Expected scientific quantities come from
 # subject-level arithmetic, not another MIRA adapter or its formatted output.
-report_methodology_matrix <- function() {
-  rbind(c(2, 5, 7), c(4, 6, 12), c(7, 8, 9), c(3, 7, 13),
-    c(9, 11, 10), c(6, 9, 16), c(8, 14, 18), c(12, 13, 15))
-}
-
-report_methodology_fit <- function(y = report_methodology_matrix(),
-    outcome = "Quantitative score", labels = c("Zbase", "Amid", "Mfinal"),
-    analyses = "model", inspect_only = FALSE) {
-  data <- data.frame(patient = sprintf("P%02d", seq_len(nrow(y))),
-    y, check.names = FALSE)
-  names(data)[-1L] <- paste0("signal_t", seq_len(ncol(y)) - 1L)
-  mira_info_long(data, id = "patient", outcomes = outcome,
-    time_vars = names(data)[-1L], time_labels = labels,
-    covariates = character(), analyses = analyses, alpha = 0.1,
-    inspect_only = inspect_only, verbose = FALSE)
-}
-
 report_methodology_bundle <- function(fit, output_dir) {
   report <- report_test_run(fit, output_dir = output_dir, format = "html",
     render = FALSE, open = FALSE, include_complete_output = FALSE,
@@ -338,4 +321,46 @@ test_that("requested reason-only failures remain visible without inventing metho
   html <- report_methodology_html(bundle)
   for (reason in reasons) expect_match(html, reason, fixed = TRUE)
   expect_true("outcome$advanced_tests$friedman$tidy" %in% bundle$manifest$path)
+})
+
+test_that("split rank inference tables repeat the method beside every scientific value", {
+  fit <- report_methodology_fit()
+  table <- fit$advanced_tests$rank_longitudinal$tests
+  expect_true(fit$advanced_tests$rank_longitudinal$performed)
+  keys <- c('question', 'term', 'method')
+  old <- knitr::opts_knit$get()
+  withr::defer(knitr::opts_knit$restore(old))
+  for (target in c('html', 'docx', 'latex')) {
+    # Real format detection and kable; no external namespace replacement.
+    knitr::opts_knit$set(rmarkdown.pandoc.to=target)
+    width <- switch(target,html=Inf,docx=68,latex=76)
+    blocks <- .mira_report_partition_columns_long(table,7L,width_budget=width)
+    expect_gt(length(blocks),1L)
+    for (indices in blocks) {
+      block <- table[,indices,drop=FALSE]
+      expect_true(all(keys %in% names(block)),info=paste(target,paste(names(block),collapse=', ')))
+      for (key in intersect(keys,names(block)))expect_identical(block[[key]],table[[key]])
+    }
+    text <- paste(capture.output(.mira_report_table_long(table,'Rank tests',
+      report_test_cfg(max_table_columns=7L))),collapse='\n')
+    if(target=='html') for(i in seq_along(blocks)) {
+      observed <- report_test_html_table(text,sprintf('Rank tests (block %d of %d)',i,length(blocks)))
+      expect_identical(observed$question,table$question)
+      expect_identical(observed$term,table$term)
+      expect_identical(observed$method,c('ATS','WTS'))
+    }
+    if(target=='docx') {
+      lines<-strsplit(text,'\n',fixed=TRUE)[[1L]]
+      headers<-lines[grepl('^\\|[[:space:]]*question[[:space:]]*\\|',lines)]
+      expect_length(headers,length(blocks))
+      expect_true(all(grepl('\\|[[:space:]]*term[[:space:]]*\\|[[:space:]]*method[[:space:]]*\\|',headers)))
+    }
+    if(target=='latex') {
+      headers<-regmatches(text,gregexpr('question & term & method',text,fixed=TRUE))[[1L]]
+      expect_length(headers,2L*length(blocks))
+    }
+    narrow <- .mira_report_partition_columns_long(table,3L,width_budget=1)
+    expect_true(all(lengths(narrow)<=3L))
+    expect_identical(sort(unique(unlist(narrow))),seq_len(ncol(table)))
+  }
 })

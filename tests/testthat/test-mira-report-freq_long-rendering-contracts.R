@@ -146,3 +146,35 @@ test_that("Quarto PDF integration requires an existing CLI and LaTeX toolchain",
   writeBin(charToRaw("%PDF-1.7\n"), corrupt)
   expect_error(report_test_pdf_pages(corrupt))
 })
+
+test_that('Quarto PDF publishes the new methodology with keyed numerical inspection', {
+  report_test_require_quarto('MIRA_RUN_QUARTO_PDF_TESTS')
+  latex <- Sys.which(c('pdflatex','xelatex','lualatex'))
+  if(!any(nzchar(latex))) stop('MIRA_RUN_QUARTO_PDF_TESTS requires existing LaTeX; tests never install it.',call.=FALSE)
+  fit <- report_methodology_fit(outcome='Q')
+  expect_true(fit$advanced_tests$kenward_roger$performed)
+  expect_true(fit$advanced_tests$rank_longitudinal$performed)
+  expect_true(fit$advanced_models$mmrm$performed)
+  original <- .mira_report_qmd_lines_long
+  engine <- names(latex)[which(nzchar(latex))[[1L]]]
+  testthat::local_mocked_bindings(.mira_report_qmd_lines_long=function(...) {
+    lines <- original(...)
+    append(lines,c('    latex-auto-install: false',paste0('    pdf-engine: ',engine)),after=which(lines=='  pdf:'))
+  },.package='MIRA')
+  root <- withr::local_tempdir(pattern='mira-quarto-methodology-pdf-')
+  report <- report_test_run(fit,output_dir=root,format='pdf',sections='models',
+    max_table_columns=4L,render=TRUE,open=FALSE,date='2026-10-27')
+  expect_identical(report$rendered,c(pdf=TRUE))
+  if(isTRUE(report$rendered[['pdf']])) {
+    pages <- report_test_pdf_pages(report$files[['pdf']])
+    expect_no_error(report_methodology_pdf(pages))
+    # Keep all text and document structure while corrupting a keyed visit.
+    # The other copies of this visit in other method sections cannot rescue it.
+    text <- paste(pages,collapse='\n')
+    rank <- regexpr('Nonparametric relative marginal effects',text,fixed=TRUE)[[1L]]
+    tail <- substring(text,rank)
+    broken <- paste0(substr(text,1L,rank-1L),sub('signal_t1','signal_t0',tail,fixed=TRUE))
+    expect_false(identical(broken,text))
+    expect_error(report_methodology_pdf(broken),'PDF methodology',fixed=TRUE)
+  }
+})

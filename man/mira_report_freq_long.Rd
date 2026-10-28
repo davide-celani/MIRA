@@ -123,7 +123,9 @@ two, converted to an integer for rendering. It is an upper bound per
 displayed table block, not a request to discard columns. Wide tables are
 split into blocks. Comparison tables repeat \code{from}, \code{to} and
 any \code{arm}, \code{arm_a}, \code{arm_b} identifiers. Arm comparisons at
-a single visit repeat \code{time} and the arm identifiers. These keys are
+a single visit repeat \code{time} and the arm identifiers. Inference tables
+with \code{question}, \code{term}, and \code{method} repeat all three keys.
+These keys are
 repeated when the column limit leaves room for them and a statistic;
 otherwise the first one or
 two columns, typically identifiers, are repeated. Columns retain their

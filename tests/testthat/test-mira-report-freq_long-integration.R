@@ -421,6 +421,44 @@ test_that('new-method document verifiers reject intact but scientifically corrup
   }
 })
 
+test_that('numbered DOCX headings retain exact methodology scopes', {
+  document <- report_methodology_fixture_document('docx')
+  for (variant in c('tab', 'break', 'period')) {
+    numbered <- document
+    for (level in c(1L, 3L)) {
+      start <- paste0('<w:p><w:pPr><w:pStyle w:val="Heading', level,
+        '"/></w:pPr>')
+      number <- if (level == 1L) '1' else '1.0.1'
+      if (variant == 'period' && level == 1L) number <- paste0(number, '.')
+      separator <- switch(variant, tab = '<w:tab />', 'break' = '<w:br/>',
+        period = '<w:t xml:space="preserve"> </w:t>')
+      runs <- paste0('<w:r><w:rPr><w:rStyle w:val="SectionNumber"/></w:rPr>',
+        '<w:t>', number, '</w:t></w:r><w:r>', separator, '</w:r>')
+      numbered <- gsub(start, paste0(start, runs), numbered, fixed = TRUE)
+    }
+    expect_no_error(report_methodology_document(numbered, 'docx'))
+    # Normalising labels must not change offsets used to slice the original
+    # XML, admit another outcome, or select a body paragraph as a heading.
+    sibling <- paste0('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>',
+      '<w:r><w:t>Other outcome</w:t></w:r></w:p>',
+      '<w:p><w:r><w:t>OTHER_OUTCOME_SENTINEL</w:t></w:r></w:p>')
+    body <- '<w:p><w:r><w:t>Outcome: QUANTITATIVE SCORE</w:t></w:r></w:p>'
+    expect_identical(report_methodology_scope(paste0(body, numbered, sibling),
+      'Outcome: QUANTITATIVE SCORE', 'docx'), numbered)
+    wrong <- sub('Outcome: QUANTITATIVE SCORE', 'Outcome: OTHER SCORE',
+      numbered, fixed = TRUE)
+    expect_error(report_methodology_scope(paste0(body, wrong),
+      'Outcome: QUANTITATIVE SCORE', 'docx'),
+      'Expected exactly one document heading', fixed = TRUE)
+    expect_error(report_methodology_scope(paste0(numbered, numbered),
+      'Outcome: QUANTITATIVE SCORE', 'docx'),
+      'Expected exactly one document heading', fixed = TRUE)
+    broken <- sub('>signal_t1<', '>signal_t0<', numbered, fixed = TRUE)
+    expect_error(report_methodology_document(broken, 'docx'),
+      'Incorrect methodology keys/cells: rank visits', fixed = TRUE)
+  }
+})
+
 test_that('all new engines survive relocation and knitting in a fresh R process', {
   fit <- report_methodology_fit()
   expect_true(fit$advanced_tests$kenward_roger$performed)

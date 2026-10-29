@@ -383,12 +383,14 @@ report_methodology_scope <- function(document, heading, format) {
   if (format == "docx") {
     keep <- grepl('<w:pStyle[^>]*w:val="Heading[1-6]"', pieces)
     positions <- positions[keep]; pieces <- pieces[keep]
+    # Keep Word's separators in heading text; offsets still refer to document.
+    pieces <- gsub("<w:(tab|br)\\b[^>]*/>", " ", pieces, perl = TRUE)
   }
   levels <- as.integer(if (format == "html") {
     sub('^<h([1-6]).*', '\\1', pieces)
   } else sub('(?s).*<w:pStyle[^>]*w:val="Heading([1-6])".*', '\\1', pieces, perl = TRUE))
   labels <- report_test_html_text(pieces)
-  labels <- sub('^[0-9]+(?:\\.[0-9]+)*[[:space:]]+', '', labels, perl = TRUE)
+  labels <- sub('^[0-9]+(?:\\.[0-9]+)*\\.?[[:space:]]+', '', labels, perl = TRUE)
   selected <- which(labels == heading)
   if (length(selected) != 1L) stop("Expected exactly one document heading: ", heading,
     call. = FALSE)

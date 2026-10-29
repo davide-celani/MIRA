@@ -396,6 +396,19 @@ test_that('new-method document verifiers reject intact but scientifically corrup
   for (format in c('html','docx')) {
     document <- report_methodology_fixture_document(format)
     expect_no_error(report_methodology_document(document,format))
+    # Pandoc's smart reader turns the missing-value marker into an en dash,
+    # and its HTML writer may put cell text on a separate line.
+    rendered <- gsub('>--<', '>&#x2013;<', document, fixed=TRUE)
+    rendered <- gsub('>signal_t1<', '>\n signal_t1 \n<', rendered, fixed=TRUE)
+    expect_no_error(report_methodology_document(rendered,format))
+    broken_denominator <- gsub('>&#x2013;<', '>7.000<', rendered, fixed=TRUE)
+    expect_error(report_methodology_document(broken_denominator,format),
+      'WTS absent denominator',fixed=TRUE)
+    broken_rendered_key <- sub('(>[[:space:]]*)signal_t1([[:space:]]*<)',
+      '\\1signal_t0\\2',rendered,perl=TRUE)
+    expect_false(identical(broken_rendered_key,rendered))
+    expect_error(report_methodology_document(broken_rendered_key,format),
+      'rank visits',fixed=TRUE)
     # KR numerator df=2 is unique here as a three-decimal scientific cell.
     broken_number <- sub(if(format=='html') '>2.000<' else '>2.000<', '>9.000<',document,fixed=TRUE)
     expect_false(identical(broken_number,document))
@@ -454,23 +467,28 @@ test_that('Quarto HTML and DOCX publish keyed KR MMRM and rank scientific cells'
     max_table_columns=30L,render=TRUE,open=FALSE,date='2026-10-27')
   expect_identical(report$rendered,c(html=TRUE,docx=TRUE))
   if(isTRUE(report$rendered[['html']])) {
-    document <- paste(readLines(report$files[['html']],warn=FALSE),collapse='\n')
+    document <- paste(readLines(report$files[['html']],warn=FALSE,encoding='UTF-8'),collapse='\n')
     expect_no_error(report_methodology_document(document,'html'))
     scope <- report_methodology_scope(document, 'Nonparametric relative marginal effects', 'html')
-    broken <- sub(scope, sub('>signal_t1<', '>signal_t0<', scope, fixed=TRUE), document, fixed=TRUE)
-    path <- file.path(root,'corrupted.html'); writeLines(broken,path)
+    broken <- sub(scope, sub('(>[[:space:]]*)signal_t1([[:space:]]*<)',
+      '\\1signal_t0\\2', scope, perl=TRUE), document, fixed=TRUE)
+    path <- file.path(root,'corrupted.html'); writeLines(enc2utf8(broken),path,useBytes=TRUE)
     expect_true(file.exists(path)); expect_false(identical(broken,document))
-    expect_error(report_methodology_document(paste(readLines(path,warn=FALSE),collapse='\n'),'html'),'rank visits',fixed=TRUE)
+    expect_error(report_methodology_document(paste(readLines(path,warn=FALSE,encoding='UTF-8'),collapse='\n'),'html'),
+      '^Incorrect methodology keys/cells: rank (count )?visits$')
   }
   if(isTRUE(report$rendered[['docx']])) {
     expanded <- file.path(root,'docx'); utils::unzip(report$files[['docx']],exdir=expanded)
     xml <- file.path(expanded,'word','document.xml')
-    document <- paste(readLines(xml,warn=FALSE),collapse='\n')
+    document <- paste(readLines(xml,warn=FALSE,encoding='UTF-8'),collapse='\n')
     expect_no_error(report_methodology_document(document,'docx'))
     scope <- report_methodology_scope(document, 'Nonparametric relative marginal effects', 'docx')
-    broken <- sub(scope, sub('>signal_t1<', '>signal_t0<', scope, fixed=TRUE), document, fixed=TRUE)
-    expect_false(identical(broken,document)); writeLines(broken,xml)
-    expect_error(report_methodology_document(paste(readLines(xml,warn=FALSE),collapse='\n'),'docx'),'rank visits',fixed=TRUE)
+    broken <- sub(scope, sub('(>[[:space:]]*)signal_t1([[:space:]]*<)',
+      '\\1signal_t0\\2', scope, perl=TRUE), document, fixed=TRUE)
+    expect_false(identical(broken,document)); writeLines(enc2utf8(broken),xml,useBytes=TRUE)
+    # Split DOCX tables can put the visit/count block before effect estimates.
+    expect_error(report_methodology_document(paste(readLines(xml,warn=FALSE,encoding='UTF-8'),collapse='\n'),'docx'),
+      '^Incorrect methodology keys/cells: rank (count )?visits$')
     # All package entries are retained; only a scientific XML key was changed.
     # Zip creation is unnecessary for cell verification: XML is read directly
     # from the actual DOCX archive, just as in the established parser tests.

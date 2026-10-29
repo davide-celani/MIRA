@@ -448,7 +448,10 @@ report_methodology_document <- function(document, format, expected = report_meth
     if (metric == 'p_raw') same(table[['Quantitative score p raw']],
       p_label(expected$rank_tests[, metric]), 'rank p') else if (metric == 'df_den') {
       numeric(table[1L, , drop = FALSE], metric, 1e10)
-      same(table[['Quantitative score df den']][[2L]], '--', 'WTS absent denominator')
+      # Pandoc's smart reader renders the missing-value marker as an en dash.
+      # Accept only the two spellings; a numeric WTS denominator is incorrect.
+      same(table[['Quantitative score df den']][[2L]] %in% c('--', '\u2013'),
+        TRUE, 'WTS absent denominator')
     } else numeric(table, metric, expected$rank_tests[, metric])
   }
   mmrm <- scope('Marginal repeated-measures model (MMRM)')

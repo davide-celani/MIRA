@@ -1,0 +1,465 @@
+---
+title: "Multiple ophthalmic outcomes: scales, response labels, and safe extraction"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Multiple ophthalmic outcomes: scales, response labels, and safe extraction}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                     warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+The code below runs in a new R session with MIRA installed. The small
+helper reads the metric-name map preserved on MIRA tables; keep its definition
+when copying the later extraction examples.
+
+```{r reader-tools}
+library(MIRA)
+metric_columns <- function(table, bases) {
+  mapping <- attr(table, "mira_metric_names")
+  actual <- bases
+  mapped <- bases %in% names(mapping)
+  actual[mapped] <- unname(mapping[bases[mapped]])
+  stopifnot(all(actual %in% names(table)))
+  actual
+}
+```
+
+## Three measurements answer different ophthalmic questions
+
+This article assumes the single-outcome and
+[missing-data](frequentist-long-missing-data.html) tutorials. The new task is
+to retain separate units, schedules and extraction states for several measures
+from the same prespecified study eye, rather than fit a joint multivariate model.
+
+A synthetic retinal-edema follow-up study measures BCVA in ETDRS letters,
+OCT central-subfield thickness and IOP. More correctly read letters represent
+better measured acuity. Here `cmt` means the mean retinal thickness in the
+central 1-mm-diameter subfield in micrometres (um), not a central-point thickness.
+The [DRCR Retina Network](https://public.jaeb.org/drcrnet/stdy/149)
+documents the separate use of visual-acuity and OCT central-subfield measures.
+The simulated OCT protocol is the same at every visit; cross-device conversion
+is not attempted. Anatomical thinning is not automatically functional improvement; the
+[DRCR study of OCT and visual acuity](https://pubmed.ncbi.nlm.nih.gov/17123615/)
+also treats thickness and vision as distinct measurements.
+
+IOP is a safety measurement in mmHg in this retinal cohort. We deliberately
+leave its favorable direction **unknown**: this is not an elevated-pressure
+treatment question, and neither an increase nor a decrease alone establishes
+net clinical benefit. Pooling letters, micrometres and mmHg would be meaningless.
+
+Each of the 72 adults contributes one study eye whose laterality is assigned
+before generating measurements. The fellow eye is absent, so one row and ID
+represent one independent participant and their selected eye. Shared retinal
+severity makes higher thickness and lower acuity tend to occur together,
+while independent measurement errors keep the relationship imperfect. IOP
+has its own person component. These are assumed synthetic distributions,
+not estimates from a clinical trial or validated disease-measurement models.
+
+```{r multi-outcome-data}
+set.seed(443041)
+n <- 72L
+study_eye <- sample(c("Right", "Left"), n, replace = TRUE)
+retinal_severity <- rnorm(n)
+acuity_person <- -7 * retinal_severity + rnorm(n, 0, 4)
+thickness_person <- 45 * retinal_severity + rnorm(n, 0, 25)
+pressure_person <- rnorm(n, 0, 1.8)
+retina <- data.frame(
+  participant_id = sprintf("R%03d", seq_len(n)), study_eye = study_eye,
+  bcva_t0 = round(56 + acuity_person + rnorm(n, 0, 3)),
+  bcva_t3 = round(60 + acuity_person + rnorm(n, 0, 4)),
+  bcva_t6 = round(64 + acuity_person + rnorm(n, 0, 4)),
+  cmt_t0 = 435 + thickness_person + rnorm(n, 0, 22),
+  cmt_t6 = 380 + thickness_person + rnorm(n, 0, 27),
+  cmt_t12 = 350 + thickness_person + rnorm(n, 0, 30),
+  iop_t0 = 16.5 + pressure_person + rnorm(n, 0, 1.0),
+  iop_t6 = 17.0 + pressure_person + rnorm(n, 0, 1.2)
+)
+stopifnot(!anyDuplicated(retina$participant_id), !anyNA(retina$participant_id),
+  all(as.matrix(retina[grep("^bcva_", names(retina))]) >= 0),
+  all(as.matrix(retina[grep("^(cmt|iop)_", names(retina))]) > 0))
+retina$bcva_t6[c(5, 11, 24, 43, 68)] <- NA_real_
+retina$cmt_t6[c(8, 16, 24, 59)] <- NA_real_
+retina$cmt_t12[c(8, 16, 32, 59, 65)] <- NA_real_
+retina$iop_t6[c(2, 24, 39, 58)] <- NA_real_
+str(retina)
+```
+
+## Inspect automatic detection before analysis
+
+The built-in `"auto"` parser recognizes these `_t<number>` suffixes and
+groups columns by outcome family. Inspection resolves the configuration
+without fitting models or computing outcome summaries. Names alone do not
+establish what an outcome measures or whether increasing values are favorable.
+
+```{r automatic-outcomes}
+detected <- mira_info_long(
+  retina, id = "participant_id", outcomes = "auto",
+  covariates = character(0), variable_pattern = "auto",
+  analyses = "none", inspect_only = TRUE, verbose = FALSE
+)
+detected$config$outcomes
+detected$config$time_vars
+detected$config$improvement_direction
+stopifnot(setequal(detected$config$outcomes, c("bcva", "cmt", "iop")))
+auto_fit <- mira_info_long(
+  retina, id = "participant_id", covariates = character(0),
+  analyses = "none", verbose = FALSE
+)
+class(auto_fit)
+names(auto_fit$outcomes)
+```
+
+The inspection output maps BCVA to higher and both CMT and IOP to lower.
+These are name-based defaults, not a clinical assessment. `auto_fit` above
+demonstrates naming/provenance only; it is not the prespecified IOP safety
+analysis. The explicit configuration below overrides IOP to `"unknown"` before
+any safety classification is interpreted.
+
+An automatically inferred outcome name does not prefix metric columns.
+Explicitly declaring an outcome name through `outcomes` or a named
+`time_vars` element does prefix its metrics. Both forms carry the
+`mira_metric_names` attribute, which maps canonical metrics to actual
+columns. A display label is not the metric prefix. Preserve this provenance
+when constructing extraction code.
+
+## Specify schedules and interpretations per outcome
+
+The next call makes the scientific mapping explicit. Different numbers of
+visits are allowed for different outcomes; each must have at least two
+numeric measurement columns. The names in all per-outcome settings must
+match the selected outcome names uniquely after MIRA's case-and-punctuation
+normalization. The actual strings below match exactly for readability.
+
+```{r explicit-outcomes}
+directions <- c(bcva = "higher", cmt = "lower", iop = "unknown")
+thresholds <- c(bcva = 5, cmt = 25, iop = 1)
+measurements <- list(
+  bcva = c("bcva_t0", "bcva_t3", "bcva_t6"),
+  "cmt" = c("cmt_t0", "cmt_t6", "cmt_t12"),
+  iop = c("iop_t0", "iop_t6")
+)
+visit_labels <- list(
+  bcva = c("Baseline", "Month 3", "Month 6"),
+  "cmt" = c("Baseline", "Month 6", "Month 12"),
+  iop = c("Baseline", "Month 6")
+)
+multi_fit <- mira_info_long(
+  retina, id = "participant_id", outcomes = names(measurements),
+  time_vars = measurements, time_labels = visit_labels,
+  improvement_direction = directions, stable_threshold = thresholds,
+  covariates = character(0), analyses = "none",
+  alpha = 0.05, p_adjust_method = "holm", verbose = FALSE
+)
+stopifnot(inherits(multi_fit, "mira_info_multi_long"),
+          identical(names(multi_fit$outcomes), names(measurements)),
+          !length(multi_fit$diagnostics$failed_outcomes))
+multi_fit$config$improvement_direction
+multi_fit$config$stable_threshold
+```
+
+MIRA analyzes the outcomes separately. This is not a multivariate joint
+model, and correlation between outcomes is not modeled by the container.
+All outcomes share the call's `alpha`, `p_adjust_method`, covariates, and
+optional-module selection. `improvement_direction`, `stable_threshold`,
+`time_vars`, and `time_labels` can vary by outcome as shown. Use separate
+public calls when outcomes require different covariates or analysis-module
+settings; do not invent a per-outcome `analyses` argument.
+
+## Navigate the result safely
+
+A multi-outcome object has classes `mira_info_multi_long`, `mira_info_long`,
+and `list`. Unlike a single-outcome result, its outcome-specific tables are
+under `outcomes[[name]]`; there is no shared top-level `descriptives` table.
+Each successful element is a complete `mira_info_long` result. Check the
+multi-outcome class first when writing dispatch code, because the container
+also inherits the single-outcome class.
+
+```{r individual-result}
+bcva_fit <- multi_fit$outcomes[["bcva"]]
+class(bcva_fit)
+bcva_fit$settings[c("improvement_direction", "stable_threshold")]
+bcva_desc <- bcva_fit$descriptives
+knitr::kable(bcva_desc[, metric_columns(bcva_desc, c(
+  "label", "n", "mean", "sd", "ci_lower", "ci_upper"
+))], digits = 2, col.names = c("Visit", "n", "Mean", "SD", "Lower", "Upper"),
+caption = "BCVA (ETDRS letters) among study eyes observed at each visit; intervals concern the mean.")
+attr(bcva_desc, "mira_metric_names")[c("mean", "sd")]
+```
+
+Global configuration validation errors stop the call. Unexpected analysis
+errors are isolated per outcome in a multi-outcome call: an unsuccessful
+element has class `mira_info_error_long` and fields `outcome` and `error`.
+The container's `diagnostics$failed_outcomes` lists those names. A successful
+container with a skipped module is different; inspect that module's
+`performed`, `reason_skipped`, `warnings`, and `error` fields.
+
+The following extractor handles both situations without hiding errors or
+silently dropping unsuccessful outcomes. It returns a consistent summary
+in canonical column names, while looking up the original metrics by their
+mapping attribute.
+
+```{r cross-outcome-extraction}
+endpoint_summary <- function(result, outcome = NULL) {
+  if (inherits(result, "mira_info_multi_long")) {
+    if (is.null(outcome) || length(outcome) != 1L ||
+        !outcome %in% names(result$outcomes)) {
+      stop("Choose one named outcome from a multi-outcome result.")
+    }
+    return(endpoint_summary(result$outcomes[[outcome]]))
+  }
+  if (inherits(result, "mira_info_error_long")) {
+    return(data.frame(outcome = result$outcome, status = result$error,
+                      from = NA_character_, to = NA_character_, n = NA_integer_,
+                      mean_change = NA_real_, lower = NA_real_, upper = NA_real_))
+  }
+  if (!inherits(result, "mira_info_long")) stop("Expected a MIRA analysis result.")
+  if (is.null(result$change) || !is.data.frame(result$change)) {
+    return(data.frame(outcome = result$outcome, status = "Change table absent",
+      from = NA_character_, to = NA_character_, n = NA_integer_,
+      mean_change = NA_real_, lower = NA_real_, upper = NA_real_))
+  }
+  change <- result$change
+  row <- change$from == result$time_vars[[1L]] &
+    change$to == result$time_vars[[length(result$time_vars)]]
+  selected <- change[row, , drop = FALSE]
+  if (nrow(selected) == 0L) {
+    endpoints <- result$time_vars[c(1L, length(result$time_vars))]
+    return(data.frame(outcome = result$outcome,
+      status = "No observed baseline-final pairs",
+      from = unname(result$time_labels[endpoints[[1L]]]),
+      to = unname(result$time_labels[endpoints[[2L]]]), n = 0L,
+      mean_change = NA_real_, lower = NA_real_, upper = NA_real_))
+  }
+  stopifnot(nrow(selected) == 1L)
+  data.frame(
+    outcome = result$outcome,
+    status = if (selected$n == 1L) "One pair; interval unavailable" else
+      if (all(is.finite(unlist(selected[, metric_columns(selected,
+        c("mean_change", "ci_lower", "ci_upper")), drop = FALSE])))) "available" else
+          "Mean or interval not estimable",
+    from = selected$from_label, to = selected$to_label, n = selected$n,
+    mean_change = selected[[metric_columns(selected, "mean_change")]],
+    lower = selected[[metric_columns(selected, "ci_lower")]],
+    upper = selected[[metric_columns(selected, "ci_upper")]]
+  )
+}
+endpoint_table <- do.call(rbind, lapply(multi_fit$outcomes, endpoint_summary))
+rownames(endpoint_table) <- NULL
+endpoint_units <- c(bcva = "ETDRS letters", cmt = "um", iop = "mmHg")
+endpoint_table$unit <- unname(endpoint_units[endpoint_table$outcome])
+knitr::kable(endpoint_table, digits = 2,
+             caption = "Ophthalmic endpoint changes: retain each row's unit and follow-up duration; intervals are pointwise 95%.")
+for (outcome in names(measurements)) {
+  variables <- measurements[[outcome]]
+  from <- retina[[variables[[1L]]]]
+  to <- retina[[variables[[length(variables)]]]]
+  paired <- is.finite(from) & is.finite(to)
+  row <- endpoint_table[endpoint_table$outcome == outcome, , drop = FALSE]
+  stopifnot(nrow(row) == 1L, row$n == sum(paired),
+            isTRUE(all.equal(row$mean_change, mean(to[paired] - from[paired]))))
+}
+multi_fit$diagnostics$failed_outcomes
+lapply(multi_fit$outcomes, function(result) {
+  if (inherits(result, "mira_info_error_long")) return(result$error)
+  result$diagnostics$adaptation
+})
+```
+
+The confidence intervals describe separate raw-scale mean changes in the
+pairwise-observed samples. A letter, a micrometre and a mmHg are different units. BCVA change covers six months; OCT thickness
+change covers twelve months. Comparing the numbers as if they were
+commensurate effect sizes or identical follow-up estimands is inappropriate.
+`summary(multi_fit)` supplies outcome-specific summaries and retains failed
+elements, but selective extraction is preferable for manuscript tables.
+
+A successful result can also contain no baseline-to-final pair: that is
+an unavailable endpoint, rather than an outcome-level calculation error.
+The extractor keeps that outcome visible with `n = 0` and missing estimates.
+For one observed pair it retains the change but does not imply that its
+uncertainty can be estimated. This separate copy removes the OCT thickness
+endpoint deliberately; the main retina dataset and results are preserved.
+
+```{r unavailable-endpoint}
+no_endpoint_data <- retina
+no_endpoint_data$cmt_t12 <- NA_real_
+no_endpoint_fit <- mira_info_long(
+  no_endpoint_data, id = "participant_id", outcomes = "cmt",
+  time_vars = measurements[["cmt"]], time_labels = visit_labels[["cmt"]],
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+unavailable <- endpoint_summary(no_endpoint_fit)
+stopifnot(inherits(no_endpoint_fit, "mira_info_long"), unavailable$n == 0L,
+          is.na(unavailable$mean_change),
+          identical(unavailable$status, "No observed baseline-final pairs"))
+knitr::kable(unavailable,
+             caption = "Unavailable OCT thickness endpoint retained without inventing an estimate (um).")
+```
+
+The one-pair state is also a real public-API output. Keep the first
+participant's final measurement and mask all other final values on another
+copy. We know a change for one person, but cannot estimate its sampling
+standard deviation or a Student t interval from one difference.
+
+```{r one-pair-endpoint}
+one_pair_data <- retina
+one_pair_data$cmt_t12[-1L] <- NA_real_
+one_pair_fit <- mira_info_long(
+  one_pair_data, id = "participant_id", outcomes = "cmt",
+  time_vars = measurements[["cmt"]], time_labels = visit_labels[["cmt"]],
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+one_pair <- endpoint_summary(one_pair_fit)
+stopifnot(one_pair$n == 1L, is.na(one_pair$lower), is.na(one_pair$upper),
+  isTRUE(all.equal(one_pair$mean_change,
+    retina$cmt_t12[1L] - retina$cmt_t0[1L])))
+knitr::kable(one_pair, digits = 2,
+  caption = "One observed OCT endpoint pair: change retained in um, uncertainty unavailable.")
+selected_bcva <- endpoint_summary(multi_fit, outcome = "bcva")
+stopifnot(identical(selected_bcva, endpoint_summary(bcva_fit)))
+```
+
+The extractor reports an absent change table separately from zero observed
+endpoint pairs, and stops on a duplicated endpoint key. The ordinary examples
+exercise available, zero-pair, one-pair, and multi-outcome dispatch states.
+The absent-table and outcome-error branches are defensive contracts: a
+deliberately constructed fixture or a software bug is not presented here as
+an ordinary analytic result. Existing name-provenance, boundary, and public
+API tests provide separate coverage of error isolation. The extractor's
+`stopifnot(nrow(selected) == 1L)` deliberately makes an unexpected duplicate
+visible rather than arbitrarily selecting the first row.
+
+## Response labels need a scientific threshold
+
+For a threshold $c \geq 0$, MIRA labels a change greater than $c$ an
+increase, a change below $-c$ a decrease, and a change in $[-c,c]$ stable.
+The boundary is inclusive for stability. With `"lower"`, decreases become
+`"Improved"`; with `"higher"`, increases do. `"unknown"` leaves clinical
+direction missing while retaining numerical increase/decrease/stability.
+These settings change labels and counts, not estimated means or tests.
+
+The thresholds are 5 ETDRS letters, 25 um and 1 mmHg, chosen only to teach
+unit-specific classification. They are not estimated by MIRA or validated
+MCIDs, target-pressure rules or instrument-repeatability limits. For CMT,
+"Improved" is only the software's name for a reduction exceeding the teaching
+threshold; it does not establish visual improvement. IOP retains numerical
+increase/decrease/stable labels but no favorable clinical label. Measurement
+error, regression to the mean and missing endpoints affect these classifications.
+
+```{r response-classification}
+response_counts <- lapply(multi_fit$outcomes, function(result) {
+  if (inherits(result, "mira_info_error_long")) return(result$error)
+  table(result$trajectories$clinical_direction, useNA = "ifany")
+})
+response_counts
+table(multi_fit$outcomes[["iop"]]$trajectories$direction, useNA = "ifany")
+```
+
+Missing endpoints and an unknown direction have different meanings even
+though both can yield missing clinical labels. Use the numerical trajectory
+metrics and settings to distinguish them. Automatic direction recognition
+is intentionally limited: `bcva`, `visual_acuity`, and `va` map to higher;
+`cmt`, `crt`, and `iop` map to lower; other names default to unknown.
+Automatic thresholds default to zero. Neither is clinical validation. In this
+retinal safety question, the automatic `iop -> lower` map is deliberately
+overridden by `"unknown"`. Likewise, BCVA recorded on a logMAR scale would need
+an explicit `"lower"` direction rather than the ETDRS-letter setting used here;
+the function does not infer the acuity scale from the name `bcva`.
+
+We can check response labels directly from the input endpoint differences,
+including the participants with unavailable endpoints. A classification
+describes an observed change; it is not an individual causal treatment
+effect, and it does not incorporate measurement-error uncertainty.
+
+```{r verify-response-labels}
+for (outcome in names(measurements)) {
+  variables <- measurements[[outcome]]
+  delta <- retina[[variables[[length(variables)]]]] -
+    retina[[variables[[1L]]]]
+  expected <- ifelse(!is.finite(delta), NA_character_,
+                     ifelse(delta > thresholds[[outcome]], "Increase",
+                            ifelse(delta < -thresholds[[outcome]], "Decrease", "Stable")))
+  trajectory <- multi_fit$outcomes[[outcome]]$trajectories
+  input_order <- match(trajectory$patient, retina$participant_id)
+  stopifnot(!anyNA(input_order),
+            identical(trajectory$direction, expected[input_order]))
+  if (directions[[outcome]] == "unknown") {
+    stopifnot(all(is.na(trajectory$clinical_direction)))
+  }
+}
+```
+
+For comparison, a zero-threshold analysis calls every nonzero deviation a
+numerical change. The mean-change estimates and paired p-values remain
+identical. This check makes that distinction explicit.
+
+```{r threshold-sensitivity}
+zero_fit <- mira_info_long(
+  retina, id = "participant_id", outcomes = names(measurements),
+  time_vars = measurements, time_labels = visit_labels,
+  improvement_direction = directions,
+  stable_threshold = setNames(rep(0, length(measurements)), names(measurements)),
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+for (outcome in names(measurements)) {
+  original <- multi_fit$outcomes[[outcome]]$change
+  zero <- zero_fit$outcomes[[outcome]]$change
+  for (metric in c("mean_change", "paired_t_p", "paired_t_p_adj")) {
+    stopifnot(isTRUE(all.equal(
+      original[[metric_columns(original, metric)]],
+      zero[[metric_columns(zero, metric)]])))
+  }
+}
+data.frame(
+  outcome = names(measurements),
+  stable_with_threshold = vapply(multi_fit$outcomes, function(x)
+    sum(x$trajectories$direction == "Stable", na.rm = TRUE), integer(1L)),
+  stable_with_zero = vapply(zero_fit$outcomes, function(x)
+    sum(x$trajectories$direction == "Stable", na.rm = TRUE), integer(1L))
+)
+```
+
+## Multiplicity across outcomes remains a study-level decision
+
+The call's primary correction is applied within each outcome's implemented
+comparison families. It does not control family-wise error or false
+discovery rate across all outcomes, visits, methods, and subgroup analyses
+in a research program. Correlated outcomes do not eliminate multiplicity.
+Specify primary outcomes, estimands, and families before inspecting results;
+coordinate any broader correction with that scientific plan. The stored raw
+p-values allow a justified external study-level analysis, but selecting
+favorable results after seeing them remains a problem.
+
+## Select the outcome when plotting
+
+For graphical exploration, include `"plots"` alongside the desired modules.
+The multi-outcome plot method requires an outcome when more than one
+succeeds. The following lightweight rerun stores plots for the three
+outcomes and displays the BCVA trajectory. The figure summarizes the
+participants observed at each visit and does not adjust for missingness.
+
+```{r multi-outcome-plot, fig.cap="Observed BCVA means (ETDRS letters; higher denotes better measured acuity) with pointwise 95% Student-t mean intervals for one study eye per participant. Each visit uses its observed eyes; connecting means does not estimate paired change or impute missing acuity. The retinal cohort is synthetic."}
+plot_fit <- mira_info_long(
+  retina, id = "participant_id", outcomes = names(measurements),
+  time_vars = measurements, time_labels = visit_labels,
+  improvement_direction = directions, stable_threshold = thresholds,
+  covariates = character(0), analyses = "plots", verbose = FALSE
+)
+if ("mean_ci" %in% names(plot_fit$outcomes[["bcva"]]$plots)) {
+  display_fit <- plot_fit
+  display_fit$outcomes[["bcva"]]$plots$mean_ci <-
+    display_fit$outcomes[["bcva"]]$plots$mean_ci +
+    ggplot2::labs(x = "Scheduled visit", y = "BCVA (ETDRS letters)")
+  plot(display_fit, outcome = "bcva", which = "mean_ci")
+} else {
+  plot_fit$outcomes[["bcva"]]$plot_error
+}
+```
+
+See [descriptive analysis](frequentist-long-descriptive-analysis.html) for
+individual trajectories and distribution plots. The
+[reporting tutorial](frequentist-long-reporting.html) generates an auditable
+multi-outcome bundle and locates each outcome's exported results.

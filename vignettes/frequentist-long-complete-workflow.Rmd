@@ -1,0 +1,668 @@
+---
+title: "A complete ophthalmic workflow: BCVA in diabetic macular edema"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A complete ophthalmic workflow: BCVA in diabetic macular edema}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                      warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+The code below is the complete executable path for this article. The display
+helper reads the table's stored name mapping and changes a copy only.
+
+```{r reader-tools}
+library(MIRA)
+metric_table <- function(x, columns) {
+  mapping <- attr(x, "mira_metric_names")
+  actual <- columns
+  mapped <- columns %in% names(mapping)
+  actual[mapped] <- unname(mapping[columns[mapped]])
+  stopifnot(all(actual %in% names(x)))
+  answer <- x[, actual, drop = FALSE]
+  names(answer) <- columns
+  answer
+}
+```
+
+## A research question before an analysis
+
+This article is an applied capstone for readers who have followed the
+[first model](frequentist-long-first-model.html),
+[group comparisons](frequentist-long-treatment-groups.html), and
+[missing-data principles](frequentist-long-missing-data.html). It supplies its
+own data and tools. Expect one coherent dataset, one declared primary
+contrast, explicit analysis samples, and a source-only archive; the detailed
+[model reference](frequentist-long-advanced-models.html) explains alternative
+engines. Understanding regression and interactions is a prerequisite for
+using the adjusted conclusion.
+
+Consider a synthetic DME study comparing two hypothetical retinal-treatment
+strategies, A and B. The question is whether study-eye BCVA gains over 12 weeks
+differ after adjustment for age, lens status and a separate pre-enrolment OCT
+screening measurement. BCVA is recorded as ETDRS letter score; higher scores
+mean better measured acuity. The primary estimand is the adjusted difference
+in mean baseline-to-week-12 gains:
+**(Strategy B Week 12 - Strategy B Baseline) - (Strategy A Week 12 -
+Strategy A Baseline)**, in ETDRS letters. Positive values favor Strategy B on
+this functional scale. We estimate that contrast from the repeated-response
+model and inspect the global arm-by-time interaction as a different question.
+These generic strategy labels do not represent actual drugs or prescribing
+recommendations; the software call alone does not establish causal efficacy.
+This is a new 120-person cohort, not a continuation of either complete-data
+model demonstration. Its strategy labels apply only to this synthetic DME study.
+
+There are 120 independent adults, each contributing exactly one eligible
+study eye. Both eyes are assumed eligible in this synthetic population;
+the protocol uses `eye_map` to randomly designate right or left before responses
+or allocation are generated. No fellow-eye outcomes enter the analysis. Thus an eye-level ID
+also identifies one independent participant. Random assignment is at the
+participant/study-eye level. Both-eye or paired-eye treatment designs would
+need additional correlation/design handling that this example does not claim.
+Four repeated scores from one selected eye remain correlated. This is a
+workflow demonstration, not evidence of efficacy or a sample-size justification.
+
+## Generate and inspect the study
+
+The invented working generator has a baseline mean near 56 ETDRS letters,
+patient-intercept SD 7 letters and measurement-error SD 3.8 letters. The
+expected gain per four-week interval is 1.1 letters for Strategy A and an
+additional 1.6 letters for Strategy B. Scores are rounded to letters, and the
+complete draw is checked within a plausible interior window without clipping.
+No parameter is copied from a treatment trial.
+
+`screening_cmt` is an always-observed, pre-enrolment OCT mean central 1-mm
+retinal subfield thickness in micrometres. It precedes the study's BCVA baseline;
+it is not the baseline response reused as an adjustment variable. Greater
+screening thickness increases missing-follow-up probability in the invented
+masking mechanism. Baseline masking is independent. Conditional on this fully
+observed predictor, the response-missingness generator is MAR. That is known
+from the simulation code, not diagnosed from observed outcomes. OCT thickness
+and visual acuity remain different measurements, not interchangeable surrogates.
+
+```{r workflow-data}
+set.seed(731921)
+n <- 120L
+eye_map <- data.frame(
+  participant_id = sprintf("DV%03d", seq_len(n)),
+  study_eye = sample(c("R", "L"), n, replace = TRUE)
+)
+eye_map$study_eye_id <- paste(eye_map$participant_id, eye_map$study_eye, sep = "_")
+retina_trial <- data.frame(
+  study_eye_id = eye_map$study_eye_id,
+  treatment_arm = sample(rep(c("Strategy A", "Strategy B"), each = n / 2)),
+  age = round(rnorm(n, 66, 9)),
+  lens_status = factor(sample(c("Phakic", "Pseudophakic"), n, replace = TRUE)),
+  screening_cmt = rnorm(n, 430, 65)
+)
+subject_intercept <- rnorm(n, 0, 7)
+scheduled_weeks <- c(0, 4, 8, 12)
+for (j in seq_along(scheduled_weeks)) {
+  visit_index <- j - 1L
+  retina_trial[[paste0("bcva_t", scheduled_weeks[[j]])]] <- round(
+    56 - 0.10 * (retina_trial$age - 66) -
+    0.035 * (retina_trial$screening_cmt - 430) +
+    1.0 * (retina_trial$lens_status == "Pseudophakic") + subject_intercept +
+    visit_index * (1.1 + 1.6 * (retina_trial$treatment_arm == "Strategy B")) +
+    rnorm(n, 0, 3.8))
+}
+visits <- paste0("bcva_t", scheduled_weeks)
+retina_complete <- retina_trial
+stopifnot(all(as.matrix(retina_complete[visits]) > 10 &
+                as.matrix(retina_complete[visits]) < 95),
+          all(retina_trial$screening_cmt > 200), all(retina_trial$age > 18))
+retina_trial$bcva_t0[sample(seq_len(n), 4)] <- NA_real_
+for (j in 2:4) {
+  probability <- plogis(-3.2 + 0.40 * (j - 1L) +
+                         0.0045 * (retina_trial$screening_cmt - 430))
+  retina_trial[[visits[[j]]]][runif(n) < probability] <- NA_real_
+}
+visit_labels <- c("Baseline", "Week 4", "Week 8", "Week 12")
+stopifnot(!anyDuplicated(eye_map$participant_id),
+  !anyDuplicated(retina_trial$study_eye_id),
+  identical(retina_trial$study_eye_id, eye_map$study_eye_id), nrow(retina_trial) == n,
+  !anyNA(retina_trial[c("age", "lens_status", "screening_cmt")]))
+str(retina_trial)
+table(retina_trial$treatment_arm)
+colSums(is.na(retina_trial[visits]))
+```
+
+The wide table has one study-eye row per participant, linked by `eye_map`.
+The MIRA subject identifier is `study_eye_id`; native `patient_factor` fields
+carry that identifier. Numeric age and pre-enrolment screening OCT thickness,
+plus categorical lens status, are explicitly selected for this working model.
+Their coefficients and choice are part of the synthetic design, not an
+automatic confounding strategy. The separate `retina_complete` copy makes the
+response generation distinct from subsequent missingness masking.
+
+Before computation, audit detection and the final configuration. Explicit
+ordering fixes baseline and visit chronology. Labels name occasions but do not
+provide elapsed numeric times to models with ordinal-time covariance terms.
+
+```{r workflow-detection}
+configuration <- mira_info_long(
+  retina_trial, id = "study_eye_id", time_vars = visits,
+  time_labels = visit_labels, outcomes = "bcva",
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = c("age", "lens_status", "screening_cmt"),
+  analyses = c("model", "arm_tests", "plots", "correlations", "outliers"),
+  improvement_direction = "higher", stable_threshold = 5,
+  alpha = 0.05, p_adjust_method = "holm",
+  inspect_only = TRUE, verbose = FALSE
+)
+configuration$config[c("id", "time_vars", "time_labels", "arm",
+                       "reference_arm", "covariates", "analyses")]
+configuration$diagnostics
+```
+
+## Analyze once and retain the result
+
+The same study now produces descriptive tables, paired changes, group
+comparisons, adjusted models, diagnostics and plots. A five-letter stability
+band illustrates observed-change classification only: it is not a validated
+MCID, a responder definition or a treatment decision threshold. `alpha = 0.05`
+requests 95% pointwise intervals. BCVA letter counts are modeled with a Gaussian
+working approximation; observed ranges and residual diagnostics remain relevant.
+
+```{r workflow-analysis}
+analysis <- mira_info_long(
+  retina_trial, id = "study_eye_id", time_vars = visits,
+  time_labels = visit_labels, outcomes = "bcva",
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = c("age", "lens_status", "screening_cmt"),
+  analyses = c("model", "arm_tests", "plots", "correlations", "outliers"),
+  improvement_direction = "higher", stable_threshold = 5,
+  alpha = 0.05, p_adjust_method = "holm", verbose = FALSE
+)
+stopifnot(inherits(analysis, "mira_info_long"),
+          identical(analysis$time_vars, visits))
+class(analysis)
+```
+
+Because we explicitly declared `outcomes = "bcva"`, outcome-owned metrics
+have that prefix. Each result table's `mira_metric_names` attribute maps
+canonical meanings to actual names. The small `metric_table()` display helper
+uses this mapping and relabels only its returned copy. It does not modify
+the analysis or depend on positional column indices.
+
+## Availability, description, and individual change
+
+Per-visit summaries use observed finite values. Baseline-to-follow-up changes
+require both visits, while the Friedman test and complete-profile ICC require
+all four visits. These are different analysis populations. A mixed model can
+use incomplete outcome histories under its assumptions; it cannot restore
+unobserved outcomes or diagnose MNAR dropout from observed values alone.
+
+```{r workflow-description}
+knitr::kable(metric_table(analysis$descriptives,
+  c("label", "n", "missing", "mean", "sd", "ci_lower", "ci_upper")),
+  digits = 2, caption = "Observed study-eye BCVA (ETDRS letters) and pointwise mean intervals.")
+analysis$missing$by_time
+complete_n <- sum(stats::complete.cases(retina_trial[visits]))
+endpoint_n <- sum(stats::complete.cases(retina_trial[c("bcva_t0", "bcva_t12")]))
+data.frame(all_participants = nrow(retina_trial), complete_profiles = complete_n,
+           baseline_and_week12 = endpoint_n)
+```
+
+```{r workflow-change}
+baseline_change <- analysis$change[
+  analysis$change$from == "bcva_t0", , drop = FALSE]
+change_display <- metric_table(baseline_change,
+  c("from_label", "to_label", "n", "mean_change", "ci_lower", "ci_upper",
+    "cohens_dz", "paired_t_p_adj"))
+change_display$paired_t_p_adj <- format.pval(change_display$paired_t_p_adj,
+                                           digits = 3, eps = 0.001)
+knitr::kable(change_display, digits = 3,
+  caption = "Pooled within-participant changes, not treatment effects.")
+```
+
+Positive change indicates a measured BCVA letter gain. Pooled change combines
+both strategies and cannot establish a between-strategy treatment effect. The paired t interval describes mean
+change; paired Wilcoxon tests use a different rank-based question. Pooled
+subject trajectories describe heterogeneity and do not provide calibrated
+individual treatment-effect estimates.
+
+```{r workflow-figure, fig.cap="Available-case BCVA means (ETDRS letters, higher means better measured acuity) among the synthetic cohort's 120 participants, by assigned arm and scheduled visit. Bars show pointwise 95% Student t intervals for arm means, not intervals for arm differences or paired changes. Availability varies by visit; symbols and line types distinguish groups without color."}
+if ("arm_mean_ci" %in% names(analysis$plots)) {
+  print(analysis$plots$arm_mean_ci +
+          ggplot2::labs(x = "Scheduled visit", y = "Mean study-eye BCVA (ETDRS letters)"))
+}
+```
+
+## Between-arm quantities and an honest computed conclusion
+
+A visit-specific difference compares observed arm means. A difference in
+baseline-to-week-12 changes compares letter gains among endpoint-complete
+participants. Neither equals a global interaction test. We show the
+unadjusted change contrast first; the adjusted model follows.
+
+```{r workflow-arm-contrast}
+arm_change <- analysis$arm_analysis$change_pairwise
+endpoint <- metric_table(
+  arm_change[arm_change$from == "bcva_t0" &
+               arm_change$to == "bcva_t12" &
+               arm_change$arm_a == "Strategy A" &
+               arm_change$arm_b == "Strategy B", , drop = FALSE],
+  c("arm_a", "arm_b", "n_a", "n_b", "difference_in_change_b_minus_a",
+    "ci_lower", "ci_upper", "welch_t_p", "welch_t_p_adj")
+)
+stopifnot(nrow(endpoint) == 1L)
+endpoint_display <- endpoint[c("n_a", "n_b", "difference_in_change_b_minus_a",
+                               "ci_lower", "ci_upper", "welch_t_p_adj")]
+endpoint_display$welch_t_p_adj <- format.pval(endpoint_display$welch_t_p_adj,
+                                             digits = 3, eps = 0.001)
+knitr::kable(endpoint_display, digits = 3, row.names = FALSE,
+  col.names = c("n (Strategy A)", "n (Strategy B)", "Difference", "Lower", "Upper", "Holm p"),
+  caption = "Week-12 difference in BCVA gains (ETDRS letters): Strategy B minus Strategy A.")
+```
+
+In these generated data, the unadjusted week-12 difference in change
+(`r endpoint$arm_b` minus `r endpoint$arm_a`) is
+`r sprintf("%.2f", endpoint$difference_in_change_b_minus_a)` ETDRS letters
+(95% pointwise confidence interval
+`r sprintf("%.2f", endpoint$ci_lower)` to
+`r sprintf("%.2f", endpoint$ci_upper)`), using
+`r endpoint$n_a` and `r endpoint$n_b` endpoint-complete participants.
+The within-family Holm-adjusted Welch p-value is
+`r format.pval(endpoint$welch_t_p_adj, digits = 3)`.
+The sign must be read with the displayed arm order and the higher-is-better
+scale. This synthetic association illustrates estimation; a claim of clinical
+benefit additionally needs a defensible estimand, missing-data assessment,
+study conduct, and externally justified importance threshold.
+
+The confidence interval is pointwise even though the p-value is adjusted.
+MIRA adjusts the arm-change pairwise Welch family separately from arm-value
+tests, paired time comparisons, and advanced contrasts. It does not automatically
+control error over this entire exploratory workflow.
+
+The following audit reconstructs the unadjusted endpoint estimate and its
+Welch interval directly from the two sets of paired changes. It verifies
+the count, sign, and uncertainty without calling a MIRA helper. This does
+not check the adjusted model, whose target follows below.
+
+```{r workflow-unadjusted-audit}
+paired <- is.finite(retina_trial$bcva_t0) & is.finite(retina_trial$bcva_t12)
+raw_change <- retina_trial$bcva_t12 - retina_trial$bcva_t0
+strategy_a_change <- raw_change[paired & retina_trial$treatment_arm == "Strategy A"]
+strategy_b_change <- raw_change[paired & retina_trial$treatment_arm == "Strategy B"]
+raw_difference <- mean(strategy_b_change) - mean(strategy_a_change)
+variance_a <- var(strategy_a_change) / length(strategy_a_change)
+variance_b <- var(strategy_b_change) / length(strategy_b_change)
+standard_error <- sqrt(variance_a + variance_b)
+welch_df <- (variance_a + variance_b)^2 /
+  (variance_a^2 / (length(strategy_a_change) - 1) +
+   variance_b^2 / (length(strategy_b_change) - 1))
+raw_interval <- raw_difference + c(-1, 1) * qt(0.975, welch_df) * standard_error
+stopifnot(endpoint$n_a == length(strategy_a_change),
+          endpoint$n_b == length(strategy_b_change),
+          isTRUE(all.equal(endpoint$difference_in_change_b_minus_a, raw_difference)),
+          isTRUE(all.equal(c(endpoint$ci_lower, endpoint$ci_upper), raw_interval)))
+```
+
+## Adjusted modeling and model diagnostics
+
+The model contains categorical time, the full time-by-arm interaction,
+additive age, lens status, and pre-enrolment OCT thickness, and a random participant intercept.
+This is a repeated-response model with baseline as an outcome; it is not an
+automatic baseline-adjusted endpoint ANCOVA. A model-based comparison may use
+more observations than the complete endpoint contrast above.
+
+```{r workflow-adjustment}
+analysis$model[c("covariates_used", "covariates_skipped", "converged",
+                 "singular", "warnings", "error")]
+if (!is.null(analysis$model$fitted_model)) {
+  print(stats::formula(analysis$model$fitted_model))
+  model_frame <- stats::model.frame(analysis$model$fitted_model)
+  model_ids <- unique(as.character(model_frame$patient_factor))
+  endpoint_ids <- retina_trial$study_eye_id[
+    is.finite(retina_trial$bcva_t0) & is.finite(retina_trial$bcva_t12)]
+  expected_model_ids <- retina_trial$study_eye_id[rowSums(is.finite(
+    as.matrix(retina_trial[visits]))) > 0L]
+  expected_model_keys <- unlist(lapply(seq_along(visits), function(k) {
+    eligible <- is.finite(retina_trial[[visits[[k]]]]) &
+      complete.cases(retina_trial[c("treatment_arm", "age", "lens_status", "screening_cmt")])
+    paste(retina_trial$study_eye_id[eligible], visit_labels[[k]], sep = "::")
+  }), use.names = FALSE)
+  model_keys <- paste(as.character(model_frame$patient_factor),
+                      as.character(model_frame$time_factor), sep = "::")
+  stopifnot(setequal(model_ids, expected_model_ids), !anyDuplicated(model_keys),
+            setequal(model_keys, expected_model_keys))
+  print(data.frame(observations = stats::nobs(analysis$model$fitted_model),
+             subjects = length(model_ids),
+             endpoint_complete = length(endpoint_ids),
+             model_only = length(setdiff(model_ids, endpoint_ids))))
+  print(analysis$model$arm_time_interaction_test)
+}
+adjusted_conclusion <- "The primary adjusted change contrast was unavailable; inspect module diagnostics."
+if (isTRUE(analysis$advanced_tests$emmeans$performed)) {
+  interaction <- analysis$advanced_tests$emmeans$arm_time$interaction_tidy
+  adjusted_endpoint <- metric_table(
+    interaction[
+      interaction$arm_factor_pairwise == "Strategy A - Strategy B" &
+      interaction$time_factor_pairwise == "Baseline - Week 12", , drop = FALSE],
+    c("arm_factor_pairwise", "time_factor_pairwise", "estimate", "lower.CL",
+      "upper.CL", "p_raw", "p_primary")
+  )
+  stopifnot(nrow(adjusted_endpoint) == 1L)
+  # Native emmeans grids use external field names, rather than MIRA metrics.
+  grid <- analysis$advanced_tests$emmeans$arm_time$tidy
+  cell_mean <- function(group, visit) {
+    value <- grid$emmean[as.character(grid$arm_factor) == group &
+                         as.character(grid$time_factor) == visit]
+    stopifnot(length(value) == 1L, is.finite(value))
+    value
+  }
+  expected_change_contrast <-
+    (cell_mean("Strategy B", "Week 12") - cell_mean("Strategy B", "Baseline")) -
+    (cell_mean("Strategy A", "Week 12") - cell_mean("Strategy A", "Baseline"))
+  family <- metric_table(interaction, c("p_raw", "p_primary"))
+  stopifnot(isTRUE(all.equal(adjusted_endpoint$estimate,
+                            expected_change_contrast, tolerance = 1e-10)),
+            isTRUE(all.equal(family$p_primary,
+                             p.adjust(family$p_raw, "holm"))))
+  adjusted_conclusion <- sprintf(
+    paste0("The primary adjusted difference in baseline-to-week-12 changes ",
+           "(Strategy B minus Strategy A) is %.2f ETDRS letters, with pointwise ",
+           "95%% interval %.2f to %.2f and Holm-adjusted p-value %s across ",
+           "the six arm-by-visit-pair contrasts."),
+    adjusted_endpoint$estimate, adjusted_endpoint$lower.CL,
+    adjusted_endpoint$upper.CL,
+    format.pval(adjusted_endpoint$p_primary, digits = 3)
+  )
+}
+```
+
+`r adjusted_conclusion`
+
+```{r workflow-primary-table}
+if (exists("adjusted_endpoint")) {
+  primary_display <- adjusted_endpoint
+  primary_display$p_raw <- format.pval(primary_display$p_raw, digits = 3, eps = 0.001)
+  primary_display$p_primary <- format.pval(primary_display$p_primary, digits = 3, eps = 0.001)
+  knitr::kable(primary_display, digits = 2, row.names = FALSE,
+    caption = "Primary adjusted difference in changes: the named contrast retained in the archive.")
+}
+```
+
+The maximum-likelihood interaction comparison asks whether the model needs
+time-varying arm differences. Its p-value is a raw global test. Adjusted simple
+arm contrasts at each visit answer a different question. The primary contrast
+above instead subtracts two within-arm changes: algebraically,
+`(Strategy A - Strategy B) * (Baseline - Week 12)` has the intended
+Strategy B-minus-Strategy A change direction. The assertion reconstructs it from
+four marginal means. Numeric covariates are held at their reference-grid means
+and lens-status levels are averaged equally by emmeans; additive covariates cancel
+in this contrast but affect the fitted model and its precision.
+
+The four-cell calculation checks the contrast's orientation and numerical
+consistency using the same fitted model and emmeans engine. It is not an
+independent validation of the fitted covariance or the engine's interval
+calculation. The exact participant-by-visit audit checks the input sample
+separately.
+
+The unadjusted and adjusted change contrasts use the same subtraction and
+scale. Their samples differ: the former requires both endpoint measurements;
+the latter uses available finite responses with complete covariates. Compare
+them as estimates under different models and missingness assumptions, rather
+than interpreting a changed p-value as proof that adjustment removed bias.
+
+```{r workflow-diagnostics, fig.cap="Conditional residuals (ETDRS letters) from the adjusted primary random-intercept model in the 120-person cohort. The panels assess residual patterns and normal quantiles among used measurements; they do not display confidence or prediction intervals."}
+if (!is.null(analysis$model$fitted_model)) {
+  local({
+    previous <- par(mfrow = c(1, 2))
+    on.exit(par(previous))
+    residual <- residuals(analysis$model$fitted_model)
+    plot(fitted(analysis$model$fitted_model), residual,
+         xlab = "Fitted study-eye BCVA (ETDRS letters)", ylab = "Conditional residual (letters)")
+    abline(h = 0, lty = 2)
+    qqnorm(residual, main = "Conditional residuals")
+    qqline(residual)
+  })
+}
+analysis$diagnostics
+```
+
+Residual patterns, singularity, and convergence warnings may invalidate a
+simple reading of output. IQR flags in `outliers$by_time` and `outliers$change`
+are screening aids, not automatic exclusions. Investigate measurement errors
+and prespecify sensitivity analyses rather than deleting inconvenient values.
+
+## Sensitivity with different assumptions
+
+The model request also attempted Gaussian marginal GEE, MMRM, ordinal
+random slopes, residual-correlation models, CR2, Kenward-Roger, and rank
+longitudinal inference. Their status and hypotheses require individual checks.
+The [advanced tutorial](frequentist-long-advanced-models.html) explains each
+engine and the result paths in detail.
+
+```{r workflow-sensitivity}
+perspectives <- list(
+  kenward_roger = analysis$advanced_tests$kenward_roger,
+  rank_longitudinal = analysis$advanced_tests$rank_longitudinal,
+  mmrm = analysis$advanced_models$mmrm,
+  gee_exchangeable = analysis$advanced_models$gee$exchangeable,
+  cr2 = analysis$robustness$club_sandwich
+)
+knitr::kable(do.call(rbind, lapply(names(perspectives), function(name) {
+  x <- perspectives[[name]]
+  nested_errors <- unlist(x$errors, use.names = TRUE)
+  state <- if (!isTRUE(x$performed)) "Unavailable: inspect reason" else
+    if (length(c(x$error, nested_errors))) "Partially usable" else
+      if (length(x$warnings)) "Completed with warnings" else "Completed"
+  data.frame(method = name, performed = isTRUE(x$performed),
+    status = state,
+    explanation = gsub("[[:space:]]+", " ",
+                       paste(c(x$error, x$reason_skipped,
+                         if (length(nested_errors)) paste0(names(nested_errors), ": ", nested_errors)),
+                         collapse = "; ")),
+    warnings = gsub("[[:space:]]+", " ", paste(x$warnings, collapse = "; ")))
+})), caption = "Availability does not establish scientific adequacy.")
+selected_sensitivity <- analysis$sensitivity[
+  analysis$sensitivity$question == "TIME_X_ARM", , drop = FALSE]
+sensitivity_display <- metric_table(selected_sensitivity,
+  c("question", "method", "n", "p_raw"))
+sensitivity_display$p_raw <- format.pval(sensitivity_display$p_raw,
+                                         digits = 3, eps = 0.001)
+knitr::kable(sensitivity_display, row.names = FALSE,
+             caption = "Interaction perspectives; n follows each method's native sample unit.")
+```
+
+The rank method does not use the selected covariates and assumes MCAR for
+incomplete profiles. That assumption is deliberately incompatible with this
+generator's screening-OCT-dependent response missingness. Its successful computation therefore
+does not make it an equally defensible primary analysis. Standard GEE likewise
+does not automatically handle general MAR. A suitable likelihood-based mixed
+model or MMRM can use available responses under ignorable MAR and the specified
+mean/covariance assumptions. None addresses MNAR without additional analysis.
+
+For joint Gaussian coefficient tests, `TIME` and `ARM` include the relevant
+interaction terms. A relative-effect rank hypothesis is different. Examine
+sample sizes, dropped-term diagnostics, and hypotheses before comparing
+sensitivity rows. They are not interchangeable votes.
+
+An inexpensive complete-profile comparison exposes the change in included
+participants without another model bundle. It is an additional descriptive
+analysis, not an unbiased remedy for response missingness.
+
+```{r workflow-complete-case}
+complete_analysis <- mira_info_long(
+  retina_trial[stats::complete.cases(retina_trial[visits]), ],
+  id = "study_eye_id", time_vars = visits, outcomes = "bcva",
+  time_labels = visit_labels,
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = character(0), analyses = "arm_tests",
+  improvement_direction = "higher", stable_threshold = 5, verbose = FALSE
+)
+complete_changes <- complete_analysis$arm_analysis$change_pairwise
+knitr::kable(metric_table(
+  complete_changes[complete_changes$from == "bcva_t0" &
+                     complete_changes$to == "bcva_t12" &
+                     complete_changes$arm_a == "Strategy A" &
+                     complete_changes$arm_b == "Strategy B", , drop = FALSE],
+  c("arm_a", "arm_b", "n_a", "n_b", "difference_in_change_b_minus_a",
+    "ci_lower", "ci_upper")), digits = 2, row.names = FALSE,
+  caption = "Complete-profile sensitivity: Strategy B minus Strategy A in baseline-to-week-12 changes.")
+```
+
+## Generate and audit a reproducible report bundle
+
+Use a fresh temporary directory so repeated package checks do not replace
+research files. `render = FALSE` creates report sources, serialized output,
+CSV tables, and a manifest without needing the Quarto executable or LaTeX.
+An existing analysis object freezes the analysis used by the report;
+`...` analysis arguments are reserved for the direct-data reporting workflow.
+
+```{r workflow-report}
+report <- mira_report_freq_long(
+  analysis, output_dir = tempfile("mira-dme-bcva-workflow-"),
+  output_file = "dme_bcva_study", format = "html",
+  title = "Study-eye BCVA gains in a synthetic diabetic macular edema study",
+  subtitle = "Observed data, adjusted models, and limitations",
+  author = "MIRA tutorial", date = as.Date("2026-10-01"),
+  sections = c("methods", "data_quality", "descriptives", "missingness",
+               "change", "arms", "models", "diagnostics", "appendix"),
+  extra_objects = list(study_eye_map = eye_map,
+    unadjusted_endpoint_change = endpoint,
+    adjusted_endpoint_change = if (exists("adjusted_endpoint"))
+      adjusted_endpoint else adjusted_conclusion),
+  max_table_rows = 12, max_table_columns = 9, digits = 3,
+  render = FALSE, open = FALSE
+)
+stopifnot(file.exists(report$source), file.exists(report$payload),
+          file.exists(report$runtime), file.exists(report$results_manifest),
+          all(file.exists(report$result_files)), !any(report$rendered),
+          identical(report$mira_result, analysis))
+manifest <- utils::read.csv(report$results_manifest, stringsAsFactors = FALSE)
+stopifnot(all(file.exists(file.path(report$output_dir, manifest$file))))
+utils::head(manifest)
+payload <- readRDS(report$payload)
+stopifnot(inherits(payload$result, "mira_info_long"),
+          identical(payload$extra_objects$study_eye_map, eye_map),
+          identical(payload$result$settings, analysis$settings),
+          identical(payload$result$descriptives, analysis$descriptives),
+          identical(payload$result$change, analysis$change),
+          identical(payload$extra_objects$unadjusted_endpoint_change, endpoint))
+if (exists("adjusted_endpoint")) {
+  stopifnot(identical(payload$extra_objects$adjusted_endpoint_change,
+                      adjusted_endpoint),
+            identical(payload$result$advanced_tests$emmeans$arm_time$interaction_tidy,
+                      analysis$advanced_tests$emmeans$arm_time$interaction_tidy),
+            identical(lme4::fixef(payload$result$model$fitted_model),
+                      lme4::fixef(analysis$model$fitted_model)),
+            identical(as.matrix(vcov(payload$result$model$fitted_model)),
+                      as.matrix(vcov(analysis$model$fitted_model))))
+}
+report$rendered
+report$files
+```
+
+`files` is empty because no finished document has been rendered. The `.qmd`
+source, companion runtime script, and payload must travel together. The CSV
+manifest locates exported tables; display truncation does not remove rows from
+the underlying analytical object. The checks preserve the input object at
+report creation and verify the archived tables, settings, fixed effects, and
+covariance after serialization. Native fitted objects contain environments and
+external pointers, so whole-object `identical()` after `readRDS()` is not a
+meaningful numerical-integrity criterion. Review the report's methods and limitations
+before scientific use: report generation does not validate an analysis.
+
+For an actual project, retain the source dataset, prespecified protocol, seed,
+saved analysis, report bundle, and software versions in a controlled project
+directory. The temporary paths here are for reproducible examples. Use a fresh
+directory or deliberately choose `overwrite = TRUE` when regenerating an
+existing bundle. The [reporting tutorial](frequentist-long-reporting.html)
+covers rendering HTML, PDF, and DOCX with their external requirements.
+
+## Transfer checkpoint: change the endpoint and the subtraction
+
+Before running the solution, adapt the workflow to this request: a colleague
+needs the **adjusted baseline-to-week-8 gain in Strategy A minus that in
+Strategy B**, with the same covariates and the original six-contrast Holm family.
+Identify the native interaction row, predict the direction relative to the
+previous Strategy B-minus-Strategy A definition, and find its exported CSV using
+the manifest. Do not refit the study or replace the original primary endpoint.
+
+The solution below reuses the fitted grid and the original contrast family.
+Changing the endpoint selects another member of that family, so its magnitude
+need not equal the primary Week-12 contrast. For the selected Week-8 contrast,
+reversing the subtraction negates its estimate and reverses its interval
+endpoints while leaving its two-sided p-value unchanged. We preserve explicit labels so the
+display does not silently inherit the native contrast's opposite direction.
+
+```{r workflow-transfer}
+if (exists("adjusted_endpoint")) {
+  target <- interaction[
+    interaction$arm_factor_pairwise == "Strategy A - Strategy B" &
+      interaction$time_factor_pairwise == "Baseline - Week 8", , drop = FALSE]
+  stopifnot(nrow(target) == 1L)
+  native_target <- metric_table(target,
+    c("estimate", "lower.CL", "upper.CL", "p_primary"))
+  transfer <- data.frame(
+    endpoint = "Baseline to Week 8",
+    subtraction = "Strategy A gain minus Strategy B gain",
+    estimate = -native_target$estimate,
+    lower = -native_target$upper.CL,
+    upper = -native_target$lower.CL,
+    p_holm = native_target$p_primary
+  )
+  expected_transfer <-
+    (cell_mean("Strategy A", "Week 8") - cell_mean("Strategy A", "Baseline")) -
+    (cell_mean("Strategy B", "Week 8") - cell_mean("Strategy B", "Baseline"))
+  stopifnot(isTRUE(all.equal(transfer$estimate, expected_transfer)))
+  csv_record <- manifest[
+    manifest$path == "outcome$advanced_tests$emmeans$arm_time$interaction_tidy",
+    , drop = FALSE]
+  stopifnot(nrow(csv_record) == 1L)
+  csv <- read.csv(file.path(report$output_dir, csv_record$file),
+                  check.names = FALSE, stringsAsFactors = FALSE)
+  csv_target <- csv[csv$arm_factor_pairwise == "Strategy A - Strategy B" &
+                      csv$time_factor_pairwise == "Baseline - Week 8", , drop = FALSE]
+  estimate_name <- unname(attr(interaction, "mira_metric_names")[["estimate"]])
+  stopifnot(nrow(csv_target) == 1L,
+            isTRUE(all.equal(csv_target[[estimate_name]], native_target$estimate)))
+  transfer_display <- transfer
+  transfer_display$p_holm <- format.pval(transfer_display$p_holm, digits = 3, eps = 0.001)
+  knitr::kable(transfer_display, digits = 2, row.names = FALSE,
+    caption = "Transfer solution: a different endpoint and reversed subtraction, with the original Holm family.")
+} else {
+  cat("Transfer solution unavailable because the adjusted primary module was unavailable; inspect its diagnostics.")
+}
+```
+
+The exported CSV retains the original numeric estimate and native contrast
+labels; it does not contain the relabeled display copy above or the native
+table attributes. The metric-name mapping comes from the retained analysis
+object. The manifest establishes where this table was exported, while the
+four-cell reconstruction establishes the intended subtraction. This
+additional contrast is a learning exercise, not a replacement selected after
+seeing the original primary result.
+
+## Boundaries and reproducibility record
+
+This workflow estimates observed change, between-arm differences, and adjusted
+trajectories from one coherent dataset. The computed endpoint contrast above
+is the illustrative scientific conclusion. It is the prespecified adjusted
+difference in changes, with the unadjusted contrast as a complementary analysis.
+Its model-based interpretation
+depends on the stated assumptions. Real studies additionally need validated
+measurement scales, a defensible target population, assessment of protocol
+deviations, an appropriate multiplicity strategy, and sensitivity to departures
+from the missingness model. This tutorial performs no power calculation,
+imputation, MNAR analysis, or causal identification exercise.
+
+```{r workflow-session}
+packageVersion("MIRA")
+sessionInfo()
+```
+
+
+Ophthalmic measurement context: [DRCR visual-acuity protocol](https://public.jaeb.org/drcrnet/stdy/149)
+and [DRCR OCT/visual-acuity study in DME](https://pubmed.ncbi.nlm.nih.gov/17123615/).
+These support keeping functional BCVA and anatomical thickness distinct. All
+effects, schedules, missingness parameters and classification thresholds in
+this tutorial are invented. None reproduces a named clinical trial or dictates
+clinical care.

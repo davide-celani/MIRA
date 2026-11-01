@@ -1,5 +1,30 @@
 # MIRA (development version)
 
+- Rebuild all frequentist vignette examples around ophthalmic studies with
+  BCVA ETDRS letters, defined OCT central subfield thickness and IOP in mmHg.
+  Declare one prespecified study eye per participant, scale-dependent direction,
+  illustrative response bands, structure-function distinctions and synthetic
+  strategy comparisons. Recompute scientific results and archive checks while
+  preserving the analysis implementations and API.
+
+- Complete the frequentist handbook's learning bridges: two visits before
+  three, direct reading of means and paired changes, a minimal source-only
+  archive, and a separate first-model article before adjustment and alternatives.
+  Expose all required reader code; add executed reference, independent-missingness,
+  missing-group, one-pair and transfer checkpoints. Validate rendered, extracted
+  and reader-visible paths in separate R processes with a flat linked handbook.
+
+- Refine the frequentist handbook with independent sample, interval, ICC,
+  contrast-orientation and report-archive checks. Align the complete workflow's
+  adjusted primary contrast with its stated difference-in-changes estimand,
+  document the ANOVA adapter's distinct mean structure, and handle unavailable
+  endpoint pairs explicitly in tutorial extraction code.
+
+- Add a ten-article frequentist longitudinal handbook with deterministic
+  datasets, explicit detection and inference assumptions, multi-outcome
+  workflows, diagnostic checks and auditable source-only report examples.
+  Register the standard knitr vignette builder and ordered pkgdown articles.
+
 - Add joint Kenward-Roger F tests, unadjusted unweighted relative marginal
   effects with asymptotic ATS/WTS, and an unstructured Gaussian MMRM with
   REML/Satterthwaite inference, preserving all existing longitudinal methods.

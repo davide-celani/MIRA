@@ -13,3 +13,8 @@
 inst/stan/mira_longitudinal
 _site/
 .quarto/
+vignettes/*.html
+vignettes/*.R
+vignettes/*_files/
+inst/doc/
+docs/

@@ -1,0 +1,781 @@
+---
+title: "Ophthalmic longitudinal models: BCVA, adjustment and sensitivity"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Ophthalmic longitudinal models: BCVA, adjustment and sensitivity}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                      warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+The code below is the complete executable path for this article. The display
+helper reads the table's stored name mapping and changes a copy only.
+
+```{r reader-tools}
+library(MIRA)
+metric_table <- function(x, columns) {
+  mapping <- attr(x, "mira_metric_names")
+  actual <- columns
+  mapped <- columns %in% names(mapping)
+  actual[mapped] <- unname(mapping[columns[mapped]])
+  stopifnot(all(actual %in% names(x)))
+  answer <- x[, actual, drop = FALSE]
+  names(answer) <- columns
+  answer
+}
+display_p <- function(x, columns = c("p_raw", "p_primary")) {
+  answer <- x
+  for (column in intersect(columns, names(answer))) {
+    answer[[column]] <- format.pval(answer[[column]], digits = 3, eps = 0.001)
+  }
+  answer
+}
+```
+
+## Question, design, and estimands
+
+This reference is for readers familiar with regression and repeated-measures
+inference. A synthetic DME study asks whether study-eye BCVA gains differ
+between two hypothetical retinal-treatment strategies after adjustment for
+age, lens status and a separate pre-enrolment OCT screening measurement.
+BCVA is an ETDRS letter score; more letters mean better measured acuity.
+Strategy A and Strategy B are generic teaching labels, not named drugs or
+recommended regimens. The four visits are Baseline, Month 2, Month 4 and
+Month 6. There are 96 independent adults and exactly one eligible study eye
+per adult. Both eyes are assumed eligible in this simulation; the protocol
+randomly designates right or left before generating any response.
+The unselected fellow eye is not analyzed. No result from this simulation
+establishes efficacy or a clinical advantage for an actual treatment.
+
+We distinguish a visit-specific adjusted arm difference, an interaction contrast
+that compares changes, and a global hypothesis about an entire set of
+coefficients. Their p-values answer different questions. None establishes
+clinical importance or transports a synthetic result to a real population.
+
+Read the [first-model article](frequentist-long-first-model.html) first if
+random intercepts, model frames, or a model-based mean change are new to you.
+It explains one population without adjustment. This article changes the
+question to an adjusted comparison of two arms and then serves as a reference
+for the alternative modules. The [treatment tutorial](frequentist-long-treatment-groups.html)
+explains unadjusted comparisons. Here selected covariates affect models;
+descriptive tables and paired comparisons remain unadjusted.
+
+## Generate a sufficiently informative study
+
+The new generator uses a baseline mean of about 57 ETDRS letters, patient
+intercept SD 7 letters, patient slope SD 1.2 letters per scheduled visit and
+measurement-error SD 3.4 letters. Strategy A gains 1.1 letters per visit on
+average; Strategy B has an additional 1.5-letter gain per visit. These are
+arbitrary simulation parameters, not clinical effect-size assumptions.
+
+`screening_cmt` is an always-observed OCT measure obtained before enrolment:
+mean thickness of the central 1-mm retinal subfield, in micrometres. It is a
+separate measurement occasion, not baseline BCVA or a repeated response used
+twice. The variable name is a local CMT alias for this explicitly defined
+central-subfield quantity. A greater thickness in this edema cohort is a
+different biological construct from poorer BCVA; OCT thickness is not a
+validated substitute for visual acuity. Lens status is Phakic or Pseudophakic.
+The three predictors illustrate an explicit scientific working model; their
+coefficients are invented and their inclusion is not a general confounder rule.
+
+Scores are rounded to whole letters and checked within an interior teaching
+window without clipping. The Gaussian methods approximate the conditional
+letter-score distribution and need residual and covariance checks.
+
+```{r model-data}
+set.seed(731411)
+n <- 96L
+eye_map <- data.frame(
+  participant_id = sprintf("RA%03d", seq_len(n)),
+  study_eye = sample(c("R", "L"), n, replace = TRUE)
+)
+eye_map$study_eye_id <- paste(eye_map$participant_id, eye_map$study_eye, sep = "_")
+study <- data.frame(
+  study_eye_id = eye_map$study_eye_id,
+  treatment_arm = sample(rep(c("Strategy A", "Strategy B"), each = n / 2)),
+  age = round(rnorm(n, 67, 9)),
+  lens_status = factor(sample(rep(c("Phakic", "Pseudophakic"), each = n / 2))),
+  screening_cmt = rnorm(n, 420, 60)
+)
+subject_intercept <- rnorm(n, 0, 7)
+subject_slope <- rnorm(n, 0, 1.2)
+scheduled_months <- c(0, 2, 4, 6)
+for (j in seq_along(scheduled_months)) {
+  visit_index <- j - 1L
+  study[[paste0("bcva_t", scheduled_months[[j]])]] <- round(
+    57 - 0.10 * (study$age - 67) -
+    0.035 * (study$screening_cmt - 420) +
+    1.2 * (study$lens_status == "Pseudophakic") + subject_intercept +
+    visit_index * (1.1 + 1.5 * (study$treatment_arm == "Strategy B") +
+               subject_slope) + rnorm(n, 0, 3.4))
+}
+centering <- c(age = mean(study$age), screening_cmt = mean(study$screening_cmt))
+study$age <- study$age - centering[["age"]]
+study$screening_cmt <- study$screening_cmt - centering[["screening_cmt"]]
+visits <- paste0("bcva_t", scheduled_months)
+stopifnot(!anyDuplicated(eye_map$participant_id),
+  !anyDuplicated(study$study_eye_id),
+  identical(eye_map$study_eye_id, study$study_eye_id),
+  all(is.finite(as.matrix(study[visits]))),
+  all(as.matrix(study[visits]) > 10 & as.matrix(study[visits]) < 95),
+  all(study$age + centering[["age"]] > 18),
+  all(study$screening_cmt + centering[["screening_cmt"]] > 200))
+```
+
+Age and screening OCT thickness are centered after generating the responses;
+their stored values are deviations from the study means, in years and
+micrometres. Lens status retains its categorical coding. This changes the covariate reference, while
+preserving each participant's responses. It also gives the repeated-measures
+ANOVA's time effects a meaningful zero-covariate reference. The original
+means are retained in `centering`.
+
+First inspect automatic adjustment choices. Automatic selection excludes
+longitudinal, ID, and arm columns; the remaining covariates must meet variation,
+cardinality, and total fixed-effect cost limits. Numeric variables with at most
+five observed values are treated as categorical. Selection is not a scientific
+confounder-selection procedure. Explicit adjustment is preferable for a
+prespecified analysis.
+
+```{r covariate-detection}
+detected <- mira_info_long(
+  study, id = "study_eye_id", time_vars = visits, arm = "treatment_arm",
+  covariates = "auto", inspect_only = TRUE, verbose = FALSE
+)
+detected$config$covariates
+```
+
+## Request the model bundle and check execution
+
+`analyses` replaces the five logical switches when supplied. Including
+`"model"` requests the primary mixed model and the implemented advanced model
+bundle; there is no public switch for fitting only the random-intercept model.
+Including `"arm_tests"` enables arm-specific work and the time-by-arm model
+terms. Merely setting `arm` while disabling `arm_tests` does not fit the desired
+arm interaction. `analyses = "none"` disables these optional modules but leaves
+core paired comparisons and the Friedman branch active.
+
+The following single call avoids refitting the bundle for every method. It can
+take several seconds. MIRA's current package metadata imports the engines;
+individual modules also provide structured availability and estimation checks.
+Inspect their status even when installation succeeds.
+
+Compared with the first-model example, this is a new dataset with two groups,
+four visits, and three explicitly selected ophthalmic-study predictors. We expect both
+within-arm trajectories and differences between them. First inspect the
+primary fit, then the contrast matching the question; the later engine
+sections explain alternative assumptions rather than selecting a preferred
+p-value from many procedures.
+
+```{r fit-models}
+fit <- mira_info_long(
+  study, id = "study_eye_id", time_vars = visits,
+  time_labels = c("Baseline", "Month 2", "Month 4", "Month 6"),
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = c("age", "lens_status", "screening_cmt"),
+  analyses = c("model", "arm_tests"),
+  alpha = 0.05, p_adjust_method = "holm",
+  improvement_direction = "higher", stable_threshold = 5,
+  verbose = FALSE
+)
+stopifnot(inherits(fit, "mira_info_long"))
+fit$model[c("covariates_requested", "covariates_used", "covariates_skipped",
+            "converged", "singular", "warnings", "error")]
+```
+
+The table below reads every individual module, including correlation-specific
+fits. `performed` indicates that the module returned an available result, not
+that its assumptions hold. An error indicates failed computation; a
+`reason_skipped` can instead identify a disabled module, absent engine, or
+non-estimable analysis. Do not infer the reason from a missing p-value.
+
+```{r module-status}
+modules <- list(
+  emmeans = fit$advanced_tests$emmeans,
+  rm_anova = fit$advanced_tests$rm_anova,
+  friedman = fit$advanced_tests$friedman,
+  kenward_roger = fit$advanced_tests$kenward_roger,
+  rank_longitudinal = fit$advanced_tests$rank_longitudinal,
+  random_slope = fit$advanced_models$random_slope,
+  gee_independence = fit$advanced_models$gee$independence,
+  gee_exchangeable = fit$advanced_models$gee$exchangeable,
+  gee_ar1 = fit$advanced_models$gee$ar1,
+  nlme_cs = fit$advanced_models$nlme$compound_symmetry,
+  nlme_ar1 = fit$advanced_models$nlme$ar1,
+  mmrm = fit$advanced_models$mmrm,
+  cr2 = fit$robustness$club_sandwich
+)
+engine_names <- c(emmeans = "emmeans", rm_anova = "afex", friedman = "stats",
+  kenward_roger = "pbkrtest", rank_longitudinal = "nparLD",
+  random_slope = "lme4", gee_independence = "geepack",
+  gee_exchangeable = "geepack", gee_ar1 = "geepack", nlme_cs = "nlme",
+  nlme_ar1 = "nlme", mmrm = "mmrm", cr2 = "clubSandwich")
+module_status <- do.call(rbind, lapply(names(modules), function(name) {
+  x <- modules[[name]]
+  suberrors <- unlist(x[["errors"]], use.names = TRUE)
+  detailed_errors <- if (length(suberrors)) {
+    paste0(names(suberrors), ": ", as.character(suberrors))
+  } else character(0)
+  explanation <- c(x[["error"]], x[["reason_skipped"]], detailed_errors)
+  state <- if (!isTRUE(x$performed)) "Not completed: inspect reason" else {
+    if (length(c(x[["error"]], suberrors))) "Partially usable: inspect error" else {
+      if (length(x[["warnings"]])) "Completed with warnings" else "Completed"
+    }
+  }
+  data.frame(method = name, requested = TRUE,
+             package = engine_names[[name]],
+             package_version = if (requireNamespace(engine_names[[name]], quietly = TRUE))
+               as.character(packageVersion(engine_names[[name]])) else "not installed",
+             performed = isTRUE(x$performed),
+             status = state,
+             explanation = gsub("[[:space:]]+", " ",
+                                paste(explanation, collapse = "; ")),
+             warnings = gsub("[[:space:]]+", " ",
+                             paste(x$warnings, collapse = "; ")))
+}))
+knitr::kable(module_status[, c("method", "performed", "status")],
+             caption = "Execution status; completion does not validate assumptions.")
+with_notes <- nzchar(module_status$explanation) | nzchar(module_status$warnings)
+if (any(with_notes)) knitr::kable(
+  module_status[with_notes, c("method", "explanation", "warnings")],
+  row.names = FALSE, caption = "Captured diagnostics for modules with notes.")
+```
+
+Here every listed module was requested: Friedman belongs to the core analysis,
+and the others follow from the enabled model bundle. The detected per-outcome
+adaptations are available in `fit$diagnostics$adaptation`; no request should be
+inferred solely from `performed`. The installed engine versions are recorded
+in `module_status`. Some modules expose `requested` themselves, while older
+containers rely on the call and adaptation record for that information.
+
+Use the following distinctions when investigating another dataset. A disabled
+request is **not requested**; an irrelevant arm interaction in a one-arm study
+is **not applicable**. A request adapted away for inadequate information is
+**disabled for insufficient information**. An unavailable engine or insufficient
+version is a **dependency limitation**. An attempted calculation with an error
+and no usable result is a **calculation error**. A returned fit accompanied by
+missing sub-results or nested errors is **partially usable**. A completed
+calculation still requires finite, estimable results and scientific checks;
+where diagnostics do not establish a cause, record **undetermined**, rather
+than guessing from an absent p-value.
+
+## Gaussian mixed models
+
+The primary model has a categorical visit effect, additive adjustment, a
+time-by-arm interaction, and a subject random intercept. It is estimated by
+REML using `lmerTest::lmer()` when available, otherwise `lme4::lmer()`.
+Fixed coefficients describe the conditional mean; random effects describe
+subject deviations. The model assumes independent subjects and a suitable
+Gaussian conditional error and random-effect structure. This mixed-model
+specification has constant additive covariate effects; the public API does
+not expose arbitrary formulas or user-defined covariate-by-time terms for
+this model. The ANOVA adapter's different expansion is described below.
+
+```{r primary-model}
+if (!is.null(fit$model$fitted_model)) {
+  stats::formula(fit$model$fitted_model)
+}
+```
+
+```{r primary-coefficients}
+if (!is.null(fit$model$fitted_model)) {
+  utils::head(coef(summary(fit$model$fitted_model)))
+}
+```
+
+```{r primary-variance}
+if (!is.null(fit$model$fitted_model)) {
+  as.data.frame(lme4::VarCorr(fit$model$fitted_model))
+}
+```
+
+```{r primary-interaction}
+if (!is.null(fit$model$fitted_model)) {
+  fit$model$arm_time_interaction_test
+}
+```
+
+The interaction likelihood-ratio comparison refits nested models by maximum
+likelihood and compares the interaction model with additive time and arm
+effects. This differs from testing one coefficient. Time and arm global
+comparisons are also retained in `model$global_time_test` and
+`model$global_arm_test`. Covariate adjustment addresses measured predictors
+under the specified mean model; it does not establish causal control.
+
+The random-slope module adds a subject-specific slope in the ordered visit
+index. It still uses categorical time for the fixed mean. Its ordinal scale
+does not become elapsed time when labels say "Month 2". In irregular studies,
+that distinction changes the covariance interpretation.
+
+```{r slope-model}
+if (isTRUE(modules$random_slope$performed)) {
+  stats::formula(modules$random_slope$model)
+}
+```
+
+```{r slope-diagnostics}
+if (isTRUE(modules$random_slope$performed)) {
+  modules$random_slope[c("converged", "singular", "warnings", "errors")]
+}
+```
+
+```{r slope-comparison}
+if (isTRUE(modules$random_slope$performed)) {
+  slope_comparison <- modules$random_slope[["random_effects_lrt"]]
+  if (!is.null(slope_comparison)) {
+    slope_comparison
+  } else {
+    detail <- modules$random_slope$errors[["random_effects_comparison"]]
+    data.frame(status = "Random-effects comparison unavailable",
+      reason = if (length(detail)) paste(detail, collapse = "; ") else
+        "No comparison table was returned; inspect the module diagnostics.")
+  }
+}
+```
+
+When available, the random-effects likelihood-ratio comparison is exploratory: zero variance
+is a boundary hypothesis, so an ordinary chi-squared reference is not an exact
+calibration. A singular fit indicates redundant or unsupported random effects;
+it is not repaired by reporting more digits. Convergence failure, extreme
+intercept-slope correlation, sparse cells, and dropped coefficients require
+investigation before inference. A successful random-slope fit does not
+guarantee a comparison table: failed comparison details are stored separately
+in `errors$random_effects_comparison`. The diagnostic above retains that
+distinction instead of interpreting an absent table.
+
+## Marginal means and scientific contrasts
+
+`emmeans` evaluates the fitted reference grid. Numeric predictors are held
+at their means; categorical predictor levels are averaged with equal weights
+under the defaults used here. These are
+model-based adjusted means, rather than raw arm averages or an automatic
+standardization to the study's observed covariate distribution. With an
+interaction present, marginalizing over arms can obscure the scientific
+question; inspect arm-specific contrasts.
+
+```{r marginal-means}
+if (isTRUE(modules$emmeans$performed)) {
+  emm <- modules$emmeans
+  simple_arm <- metric_table(emm$arm_time$simple_arm_tidy,
+    c("time_factor", "contrast", "estimate", "lower.CL", "upper.CL", "p_primary"))
+  knitr::kable(display_p(simple_arm), digits = 2,
+    caption = "Adjusted arm contrasts in ETDRS letters; pointwise 95% intervals and within-family Holm p-values.")
+}
+```
+
+```{r interaction-contrasts}
+if (isTRUE(modules$emmeans$performed)) {
+  interaction <- metric_table(emm$arm_time$interaction_tidy,
+    c("time_factor_pairwise", "arm_factor_pairwise", "estimate", "p_primary"))
+  knitr::kable(display_p(interaction), digits = 2,
+    caption = "Differences between visit-specific arm contrasts, in ETDRS letters.")
+}
+```
+
+```{r marginal-change}
+if (isTRUE(modules$emmeans$performed)) {
+  knitr::kable(display_p(metric_table(emm$baseline_final$tidy,
+    c("contrast", "estimate", "SE", "df", "p_raw", "p_primary"))), digits = 2,
+    caption = "Final-minus-baseline contrast averaged over arms; this is not the arm-by-time interaction.")
+}
+```
+
+The `contrast` labels give subtraction direction. Simple arm contrasts compare
+arms at a visit; interaction contrasts compare such differences over visits.
+`baseline_followup$tidy`, `consecutive$tidy`, `time$pairwise_tidy`, and
+`trends$tidy` provide other prespecified families. Polynomial trends use visit
+order, rather than measured elapsed time. In the standard contrast tables,
+confidence limits are pointwise; adding adjusted p-values does not make them
+simultaneous confidence intervals. Native Tukey and approximate Dunnett
+summaries are retained separately where supported.
+
+Holm controls familywise error within the displayed family under arbitrary
+dependence; BH targets false discovery rate under its applicable dependence
+conditions, and BY is more conservative under general dependence. The stored
+primary, Bonferroni, Holm, BH, and BY columns support inspection, not selection
+of whichever correction gives a preferred result. MIRA does not jointly adjust
+every global test, every outcome, and every sensitivity analysis.
+
+## Alternative procedures: assumptions determine interpretation
+
+| Procedure and result location | Engine and inferential target | Conditions and limitations |
+|:--|:--|:--|
+| `advanced_tests$rm_anova` | `afex`; type-III repeated-measures ANOVA, with uncorrected, Greenhouse-Geisser and Huynh-Feldt tables | Complete repeated profiles under the engine's rules; sphericity matters for uncorrected within-subject tests. Corrections change degrees of freedom, not missing-data bias. Numeric adjustment and between-subject categorical factors are supported. |
+| `advanced_tests$friedman` | Base `stats`; complete-profile blocked rank test, Kendall's W, paired Wilcoxon post hoc | Does not adjust for covariates or model a factorial arm-by-time interaction. Completely tied data can make inference non-estimable. Post hoc comparisons have their own pairwise samples. |
+| `advanced_tests$kenward_roger` | `pbkrtest`; approximate F tests with covariance and denominator-df adjustments for the primary Gaussian model | Requires an adequately converged, nonsingular fit with positive residual variance. This is model-based inference, not a robust sandwich correction. |
+| `robustness$club_sandwich` | `clubSandwich`; CR2 covariance, Satterthwaite coefficient tests, HTZ joint tests | Clusters are study eyes, one per participant here; enough independent clusters and an adequate mean model remain necessary. Inspect reduced-hypothesis diagnostics if fixed coefficients were dropped. |
+| `advanced_models$gee` | `geepack`; Gaussian population-averaged models under independence, exchangeable, and AR(1) working correlation | Sandwich inference is asymptotic in independent subjects; few clusters can undermine calibration. Standard GEE is not a general MAR or MNAR remedy. |
+| `advanced_models$nlme` | `nlme`; random-intercept Gaussian fits with compound-symmetry or AR(1) residual correlation | Mean and covariance specifications must be suitable. AR(1) uses ordered visit index, not unequal calendar intervals. |
+| `advanced_models$mmrm` | `mmrm >= 0.3.17`; marginal Gaussian model with common-across-arm unstructured covariance, REML and Satterthwaite inference | No subject random effect. Requires adequate visit-pair coverage, full-rank design, converged full-rank covariance, and ignorable MAR response missingness conditional on the model. |
+| `advanced_tests$rank_longitudinal` | `nparLD >= 2.3.3`; unweighted relative marginal effects with ATS/WTS | No covariate adjustment. Incomplete profiles contribute observed cells under MCAR; general MAR/MNAR is unsupported. Tests concern relative effects, rather than Gaussian mean coefficients. |
+
+Selected baseline measurements are responses in the mixed model and MMRM.
+Neither automatically fits a constrained-baseline model or an ANCOVA with
+baseline response as a covariate. Incomplete responses are not imputed. Model
+rows must be complete for the required predictors, and sample sizes can differ
+from those in unadjusted summaries.
+
+The ANOVA adapter follows `afex::aov_ez()`: categorical between-subject
+factors form a factorial structure, and within-subject time interacts with
+the between-subject factors and numeric covariates. In this example that
+includes arm-by-lens-status and time-by-covariate terms. Its mean structure therefore
+differs from the additive covariate adjustment in the mixed model, GEE,
+NLME, and MMRM. Centering age and screening OCT thickness makes zero their study
+means; uncentered numeric predictors would change the interpretation of
+lower-order time effects and trigger an engine warning. These ANOVA results
+are another model perspective, rather than a pure change of covariance
+assumptions. See the [afex specification contract](https://search.r-project.org/CRAN/refmans/afex/html/aov_car.html).
+
+The study above deliberately has complete responses and predictors.
+`study_eye_id` is the MIRA subject identifier; `patient_factor` in native
+objects therefore carries study-eye IDs. The one-to-one `eye_map` establishes
+that its 96 eye clusters also represent 96 independent people. Duplicated
+patient observations from fellow eyes would not satisfy that design. We can
+therefore verify the exact subject-by-visit keys against the wide input,
+rather than merely compare the fitted row count with 384. A new dataset
+requires reconstructing these keys using its actual outcome and predictor
+availability. The rank adapter retains explicit unavailable response rows
+in incomplete datasets; its finite-response count and schedule row count
+then have different meanings.
+
+```{r model-sample-audit}
+eligible <- complete.cases(study[c("study_eye_id", "treatment_arm", "age", "lens_status",
+                                  "screening_cmt")])
+expected_keys <- unlist(lapply(seq_along(visits), function(k) {
+  observed <- eligible & is.finite(study[[visits[[k]]]])
+  paste(study$study_eye_id[observed], unname(fit$time_labels[visits[[k]]]), sep = "::")
+}), use.names = FALSE)
+sample_rows <- list()
+formula_rows <- list()
+check_sample <- function(name, frame, model_formula) {
+  keys <- paste(as.character(frame$patient_factor),
+                as.character(frame$time_factor), sep = "::")
+  stopifnot(!anyDuplicated(keys), setequal(keys, expected_keys))
+  sample_rows[[name]] <<- data.frame(
+    method = name, observations = nrow(frame),
+    participants = length(unique(frame$patient_factor)))
+  formula_rows[[name]] <<- data.frame(method = name,
+    formula = paste(deparse(model_formula), collapse = " "))
+}
+if (!is.null(fit$model$fitted_model)) {
+  check_sample("Random intercept", model.frame(fit$model$fitted_model),
+                formula(fit$model$fitted_model))
+}
+if (isTRUE(modules$random_slope$performed)) {
+  check_sample("Random slope", model.frame(modules$random_slope$model),
+                formula(modules$random_slope$model))
+}
+for (name in c("gee_independence", "gee_exchangeable", "gee_ar1")) {
+  if (isTRUE(modules[[name]]$performed)) {
+    frame <- model.frame(modules[[name]]$model)
+    frame$patient_factor <- modules[[name]]$model$id
+    check_sample(name, frame, formula(modules[[name]]$model))
+  }
+}
+for (name in c("nlme_cs", "nlme_ar1")) {
+  if (isTRUE(modules[[name]]$performed)) {
+    check_sample(name, nlme::getData(modules[[name]]$model),
+                  formula(modules[[name]]$model))
+  }
+}
+if (isTRUE(modules$mmrm$performed)) {
+  check_sample("MMRM", modules$mmrm$data, modules$mmrm$formula)
+}
+if (isTRUE(modules$rank_longitudinal$performed)) {
+  rank_data <- modules$rank_longitudinal$data
+  check_sample("Rank: finite responses", rank_data[is.finite(rank_data$value), ],
+                modules$rank_longitudinal$formula)
+}
+sample_ledger <- do.call(rbind, sample_rows)
+formula_ledger <- do.call(rbind, formula_rows)
+knitr::kable(sample_ledger, row.names = FALSE,
+             caption = "Engine samples verified against source subject-by-visit identities.")
+knitr::kable(formula_ledger, row.names = FALSE,
+             caption = "Stored model formulas; covariance and clustering also define each procedure.")
+```
+
+Kenward-Roger, CR2, and `emmeans` operate on the primary fitted model and
+inherit that sample. Repeated-measures ANOVA and Friedman require complete
+profiles here; their sample unit is a participant, rather than a long row.
+This agreement of samples is a property of the complete teaching dataset,
+not a guarantee that the methods answer the same statistical question.
+The NLME formulas display the fixed mean; both NLME fits also have a
+participant random intercept and the residual correlation named in the
+method table. GEE uses participant clusters and its stated working
+correlation. The rank formula specifies the factorial cells, with repeated
+observations grouped by participant in the engine call.
+
+## Change one adjustment value and audit the sample
+
+We have just verified that all 96 people contribute to the complete-data
+models. Now keep their responses, groups, and other predictors fixed, but
+make the first participant's age unavailable on a named copy. The new
+question concerns eligibility, not a different treatment effect: which rows
+will the adjusted primary model retain? Overall visit means do not need age,
+while an adjusted model using age needs its value for every retained row.
+Predict the model's participant and measurement counts before running this
+example.
+
+This is one additional justified public model-bundle fit on changed input.
+The call preserves the original scientific configuration, and MIRA still
+computes the full bundle even though we read only the samples. The existing
+`fit` and `study` are preserved; no p-value is selected or reinterpreted.
+
+```{r missing-covariate-sample}
+study_covariate_missing <- study
+excluded_id <- study_covariate_missing$study_eye_id[[1L]]
+study_covariate_missing$age[study_covariate_missing$study_eye_id == excluded_id] <- NA_real_
+covariate_missing_fit <- mira_info_long(
+  study_covariate_missing, id = "study_eye_id", time_vars = visits,
+  time_labels = c("Baseline", "Month 2", "Month 4", "Month 6"),
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = c("age", "lens_status", "screening_cmt"),
+  analyses = c("model", "arm_tests"),
+  alpha = 0.05, p_adjust_method = "holm",
+  improvement_direction = "higher", stable_threshold = 5,
+  verbose = FALSE
+)
+stopifnot(!is.null(covariate_missing_fit$model$fitted_model),
+          identical(covariate_missing_fit$descriptives, fit$descriptives),
+          identical(study_covariate_missing[visits], study[visits]))
+covariate_frame <- model.frame(covariate_missing_fit$model$fitted_model)
+covariate_keys <- paste(as.character(covariate_frame$patient_factor),
+                        as.character(covariate_frame$time_factor), sep = "::")
+expected_covariate_keys <- unlist(lapply(seq_along(visits), function(k) {
+  eligible <- is.finite(study_covariate_missing[[visits[[k]]]]) &
+    complete.cases(study_covariate_missing[c("study_eye_id", "treatment_arm",
+                                            "age", "lens_status", "screening_cmt")])
+  paste(study_covariate_missing$study_eye_id[eligible],
+         unname(fit$time_labels[visits[[k]]]), sep = "::")
+}), use.names = FALSE)
+stopifnot(!anyDuplicated(covariate_keys),
+          setequal(covariate_keys, expected_covariate_keys),
+          !excluded_id %in% as.character(covariate_frame$patient_factor))
+covariate_sample_audit <- data.frame(
+  configuration = c("Complete adjustment", "One age unavailable"),
+  participants = c(length(unique(model.frame(fit$model$fitted_model)$patient_factor)),
+                   length(unique(covariate_frame$patient_factor))),
+  measurements = c(nrow(model.frame(fit$model$fitted_model)), nrow(covariate_frame)),
+  baseline_descriptive_n = c(fit$descriptives$n[fit$descriptives$time == visits[[1L]]],
+    covariate_missing_fit$descriptives$n[
+      covariate_missing_fit$descriptives$time == visits[[1L]]])
+)
+knitr::kable(covariate_sample_audit, row.names = FALSE,
+  caption = "One missing adjustment value removes one participant's four model rows while preserving descriptive availability.")
+```
+
+The solution is 95 adjusted-model participants (95 study eyes) and 380
+measurements, while the unadjusted baseline summary still uses 96 letter
+scores. Setting strict_id=FALSE would not restore a missing age or supply a
+bilateral-eye covariance model. This exclusion is
+complete-case filtering on a required predictor, not imputation and not
+evidence that missing age is ignorable. In a real study it can change the
+target population and introduce selection bias. The unadjusted rank module
+does not use age; its eligibility must therefore be considered separately.
+
+Return now to `fit` and `modules`, the original complete-data study. The
+remaining engine tables and optional sensitivity use those 96 participants,
+not the age-missing variant. Inspect actual inference rather than assuming
+each method succeeded:
+
+```{r alternative-results}
+if (isTRUE(modules$rm_anova$performed)) {
+  knitr::kable(display_p(metric_table(modules$rm_anova$tidy,
+    c("effect", "df_num_gg", "df_den_gg", "p_gg", "partial_eta_squared")), "p_gg"),
+    digits = 3, caption = "Repeated-measures ANOVA: Greenhouse-Geisser inference and partial eta-squared.")
+}
+```
+
+```{r kenward-roger-results}
+if (isTRUE(modules$kenward_roger$performed)) {
+  knitr::kable(display_p(metric_table(modules$kenward_roger$tidy,
+    c("question", "statistic", "df_num", "df_den", "p_raw"))), digits = 2,
+    caption = "Kenward-Roger model-based joint F tests.")
+}
+```
+
+```{r kenward-roger-hypothesis}
+if (isTRUE(modules$kenward_roger$performed)) {
+  modules$kenward_roger$effect_diagnostics[["TIME"]]$tested_coefficients
+}
+```
+
+```{r cr2-results}
+if (isTRUE(modules$cr2$performed)) {
+  cr2_tests <- do.call(rbind, lapply(names(modules$cr2$effect_tests), function(question) {
+    native <- as.data.frame(modules$cr2$effect_tests[[question]])
+    data.frame(question = question, native[, c("Fstat", "df_num", "df_denom", "p_val")])
+  }))
+  knitr::kable(display_p(cr2_tests, "p_val"), digits = 2,
+    caption = "CR2 joint tests with HTZ small-sample approximation; fields here follow clubSandwich.")
+}
+```
+
+```{r gee-results}
+if (isTRUE(modules$gee_exchangeable$performed)) {
+  knitr::kable(display_p(metric_table(modules$gee_exchangeable$effect_tests,
+    c("question", "statistic", "df", "p_raw"))), digits = 2,
+    caption = "Exchangeable GEE: asymptotic sandwich Wald chi-squared tests.")
+}
+```
+
+```{r mmrm-results}
+if (isTRUE(modules$mmrm$performed)) {
+  knitr::kable(display_p(metric_table(modules$mmrm$effect_tests,
+    c("question", "statistic", "df_num", "df_den", "p_raw"))), digits = 2,
+    caption = "Unstructured MMRM: Satterthwaite joint F tests.")
+}
+```
+
+```{r mmrm-pair-coverage}
+if (isTRUE(modules$mmrm$performed)) {
+  modules$mmrm$pair_coverage
+}
+```
+
+```{r rank-relative-effects}
+if (isTRUE(modules$rank_longitudinal$performed)) {
+  knitr::kable(metric_table(modules$rank_longitudinal$effects,
+    c("arm", "time_label", "n", "relative_effect", "ci_lower", "ci_upper")),
+    digits = 3, caption = "Unadjusted relative marginal effects and pointwise 95% intervals.")
+}
+```
+
+```{r rank-global-tests}
+if (isTRUE(modules$rank_longitudinal$performed)) {
+  knitr::kable(display_p(metric_table(modules$rank_longitudinal$tests,
+    c("question", "method", "statistic", "df_num", "p_raw"))), digits = 2,
+    caption = "Rank-based ATS and WTS; numerical underflow is displayed as p < 0.001.")
+}
+```
+
+For GEE, CR2, Kenward-Roger, and MMRM, `TIME` jointly selects all coefficients
+involving time, including interactions; `ARM` likewise includes interactions;
+`TIME_X_ARM` selects their intersection. These are not main-effect tests
+averaged over the other factor. Where coefficients were dropped, read
+`effect_diagnostics`: a reduced hypothesis does not recover the original
+full-design question.
+
+A relative marginal effect above 0.5 denotes larger responses than the equally
+weighted reference over visit cells, and arm-by-visit cells when applicable.
+It says nothing by itself about improvement direction. Rank confidence
+intervals are pointwise logit intervals. ATS uses the engine's large-denominator
+F approximation; WTS uses an asymptotic chi-squared reference.
+
+## Diagnostics, effects, and sensitivity
+
+Residual-versus-fitted and normal-quantile plots can expose patterns that a
+convergence flag cannot detect. Here the data include random slopes, so a
+random-intercept-only covariance can be too restrictive even if optimization
+succeeds. Observations within a participant remain correlated; treating all
+long rows as independent would understate uncertainty.
+
+```{r residual-diagnostics, fig.cap="Conditional residuals in ETDRS letters from the adjusted random-intercept model: residuals versus fitted values and normal quantiles. The synthetic study has 96 independent participants and four visits per participant."}
+if (!is.null(fit$model$fitted_model)) {
+  local({
+    previous <- par(mfrow = c(1, 2))
+    on.exit(par(previous))
+    residual <- residuals(fit$model$fitted_model)
+    plot(fitted(fit$model$fitted_model), residual,
+         xlab = "Fitted study-eye BCVA (ETDRS letters)", ylab = "Conditional residual (letters)")
+    abline(h = 0, lty = 2)
+    qqnorm(residual, main = "Conditional residuals")
+    qqline(residual)
+  })
+}
+```
+
+```{r sensitivity}
+comparison <- fit$advanced_models$model_comparison
+knitr::kable(metric_table(comparison,
+  c("model", "n", "n_subjects", "AIC", "BIC", "QIC", "CIC")),
+  digits = 2, caption = "Engine-specific fit summaries; not a common ranking scale.")
+interaction_rows <- fit$sensitivity$question == "TIME_X_ARM"
+knitr::kable(display_p(metric_table(fit$sensitivity[interaction_rows, , drop = FALSE],
+  c("question", "method", "n", "p_raw"))), digits = 3, row.names = FALSE,
+  caption = "Selected interaction perspectives; n uses each method's native sample unit.")
+metric_table(fit$effect_sizes$paired_cohens_dz,
+             c("from_label", "to_label", "n", "cohens_dz"))
+fit$effect_sizes$mixed_models$random_intercept
+```
+
+Cohen's paired `dz` standardizes change by the SD of differences; it is not an
+independent-groups standardized effect. Kendall's W, ANOVA eta-squared, model
+ICC, and Nakagawa R-squared answer other questions and use different scales.
+The R-squared modules require `performance` and retain availability diagnostics.
+
+Do not rank GEE QIC/CIC alongside likelihood AIC/BIC, or compare arbitrary
+REML criteria across differing fixed-effect models or engine conventions.
+MMRM's native REML AIC penalizes covariance parameters; its BIC uses independent
+subjects. Model-comparison metadata record these conventions. Sensitivity
+rows contain raw global p-values and do not form a majority-vote analysis.
+The displayed interaction rows reduce the table to one scientific topic,
+but rank effects, Gaussian mean interactions, and different covariance
+assumptions still prevent treating them as duplicate tests. The full
+`sensitivity` object retains method notes and output paths for audit.
+
+An optional second fit removes adjustment while retaining complete profiles.
+All participants in this particular study have complete responses, so the
+sample stays the same and the adjustment specification changes. With incomplete
+data, imposing this restriction would also change the sample. Set the
+environment variable before rendering to
+verify this computationally additional analysis; no chunk is permanently
+disabled.
+
+```{r optional-sensitivity}
+run_extra <- identical(Sys.getenv("MIRA_RUN_ADVANCED_VIGNETTES"), "true")
+if (run_extra) {
+  sensitivity_fit <- mira_info_long(
+    study[stats::complete.cases(study[visits]), ],
+    id = "study_eye_id", time_vars = visits, arm = "treatment_arm",
+    time_labels = c("Baseline", "Month 2", "Month 4", "Month 6"),
+    reference_arm = "Strategy A", covariates = character(0),
+    improvement_direction = "higher", stable_threshold = 5,
+    analyses = c("model", "arm_tests"), verbose = FALSE
+  )
+  stopifnot(!is.null(sensitivity_fit$model$fitted_model))
+  sensitivity_frame <- model.frame(sensitivity_fit$model$fitted_model)
+  # Both fits retain the same labels, response direction and teaching band.
+  primary_frame <- model.frame(fit$model$fitted_model)
+  sensitivity_source_keys <- paste(as.character(sensitivity_frame$patient_factor),
+    visits[as.integer(sensitivity_frame$time_factor)], sep = "::")
+  primary_source_keys <- paste(as.character(primary_frame$patient_factor),
+    visits[as.integer(primary_frame$time_factor)], sep = "::")
+  stopifnot(!anyDuplicated(sensitivity_source_keys),
+            setequal(sensitivity_source_keys, primary_source_keys))
+  sensitivity_fit$model$arm_time_interaction_test
+} else {
+  cat("Additional sensitivity fit omitted. Set MIRA_RUN_ADVANCED_VIGNETTES=true to run it.")
+}
+```
+
+To verify the additional branch, run
+`Sys.setenv(MIRA_RUN_ADVANCED_VIGNETTES = "true")` and render this installed
+package's source vignette with `rmarkdown::render()`. Record `sessionInfo()` and
+the status table, and restore the environment variable afterward. The primary
+model bundle above executes in every routine build.
+
+Continue to the [complete research workflow](frequentist-long-complete-workflow.html)
+for incomplete follow-up and an auditable report. Consult `?mira_info_long` for
+the complete method contracts and primary methodological references.
+
+## Further reading
+
+The engine authors document the
+[Kenward-Roger restriction-matrix interface](https://hojsgaard.github.io/pbkrtest/reference/kr-modcomp.html),
+the [MMRM mean and covariance model](https://openpharma.github.io/mmrm/v0.3.17/articles/methodological_introduction.html),
+and [interpretation of interactions in estimated marginal means](https://rvlenth.github.io/emmeans/articles/interactions.html).
+Read these alongside MIRA's configuration and sample diagnostics: an engine's
+general capabilities may be broader than the options exposed by this wrapper.
+
+
+The ophthalmic context is informed by the [DRCR visual-acuity measurement
+protocol](https://public.jaeb.org/drcrnet/stdy/149) and the DRCR study of
+[OCT thickness and visual acuity in DME](https://pubmed.ncbi.nlm.nih.gov/17123615/).
+Those sources motivate separate functional and anatomical measurements; they
+do not supply this generator's treatment effects, covariance or five-letter
+classification band. The band is illustrative, not an MCID or a clinical
+decision rule.

@@ -1,0 +1,21 @@
+template:
+  bootstrap: 5
+
+articles:
+- title: MIRA
+  navbar: ~
+  contents:
+  - MIRA
+- title: Frequentist Ophthalmic Longitudinal Analysis
+  navbar: Frequentist longitudinal
+  contents:
+  - frequentist-long-getting-started
+  - frequentist-long-data-and-detection
+  - frequentist-long-descriptive-analysis
+  - frequentist-long-treatment-groups
+  - frequentist-long-missing-data
+  - frequentist-long-multiple-outcomes
+  - frequentist-long-first-model
+  - frequentist-long-advanced-models
+  - frequentist-long-reporting
+  - frequentist-long-complete-workflow

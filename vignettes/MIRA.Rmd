@@ -1,0 +1,144 @@
+---
+title: "MIRA: a guide to longitudinal ophthalmic analysis"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{MIRA: a guide to longitudinal ophthalmic analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+MIRA (Multilevel Inference and Regression Analysis) supports the exploration
+and analysis of continuous longitudinal ophthalmic measurements. Researchers, clinical
+scientists and statistical programmers can inspect how wide-format data are
+interpreted, compare within-participant changes and treatment arms, investigate
+frequentist models and preserve results in reproducible report bundles.
+Participants contribute correlated measurements: an analysis must respect
+that dependence and define its scientific target before interpreting a test.
+
+The package includes frequentist and Bayesian functionality. This handbook
+documents the **frequentist longitudinal** interface: `mira_info_long()` and
+`mira_report_freq_long()`. A separate Bayesian tutorial collection can be added
+later; none is claimed here. The two paradigms require their own assumptions
+and interpretations.
+
+## Ophthalmic measurements and the study eye
+
+The examples concern retinal disease or elevated intraocular pressure. Every
+analytical dataset has **one prespecified study eye per participant**. Where
+both eyes could be eligible, the study eye is chosen at enrolment before
+follow-up outcomes; only that eye is simulated. Person identifiers therefore
+identify independent study-eye series. The longitudinal model represents
+repeated measurements of that eye; it does not add a second within-person
+eye level. A real bilateral study needs a design and analysis that account
+for inter-eye dependence rather than treating two eyes as independent or
+setting `strict_id = FALSE` as a workaround. Restricting these teaching
+examples to one eye does not imply that fellow-eye data should be discarded
+without scientific justification in a real study.
+
+| Recorded measure | Units and interpretation in this handbook |
+|:--|:--|
+| BCVA | Best-corrected visual acuity in ETDRS letters in the main retinal examples; larger letter scores indicate better measured acuity. |
+| BCVA on a logMAR scale | A separate import example: smaller values indicate better measured acuity. Set direction explicitly; the column name alone cannot identify the scale. |
+| CMT | Here `cmt` denotes OCT mean retinal thickness in the central 1-mm-diameter subfield, in micrometres (CST). It is not an unspecified center-point thickness. A decrease in an edema example is anatomical, not automatically a visual benefit. |
+| IOP | Intraocular pressure in mmHg. Lower is the specified direction for elevated-pressure glaucoma examples; retinal safety-monitoring examples use unknown direction rather than a universal target. |
+
+Measurement definitions matter: the [DICOM visual-acuity reference](https://dicom.nema.org/dicom/2013/output/chtml/part17/sect_RR.2.html)
+distinguishes acuity notations, the [DRCR retinal structure-function study](https://pubmed.ncbi.nlm.nih.gov/17123615/)
+does not support substituting OCT thickness for visual acuity, and the
+[National Eye Institute](https://www.nei.nih.gov/eye-health-information/eye-conditions-and-diseases/glaucoma/glaucoma-and-eye-pressure)
+explains why eye-pressure interpretation is individualized. The datasets below
+are synthetic and do not reproduce those sources' patient data, effects,
+eligibility criteria or treatment schedules. Thresholds are illustrative
+classification bands, never asserted to be validated MCIDs or treatment targets.
+
+## Installation and a first check
+
+MIRA requires R 4.2 or later. Follow the repository README for installation
+from GitHub and its declared dependencies, including CmdStanR from the Stan
+R-universe repository. This handbook targets **Multilevel Inference and Regression Analysis** from
+the repository linked in its README. Bioconductor distributes an unrelated
+package also named [MIRA](https://bioconductor.org/packages/release/bioc/html/MIRA.html),
+for methylation-based regulatory activity; that package does not provide these
+functions. Check the installed title as well as the version below.
+Installing the R package CmdStanR and installing the CmdStan toolchain are
+separate operations. The frequentist examples do not compile or sample Stan
+models. Creating report sources does not require the Quarto CLI or LaTeX.
+Rendering needs the CLI; only PDF additionally needs TeX.
+Standard package vignette building instead uses knitr, rmarkdown and Pandoc;
+it does not invoke MIRA's Quarto report renderer.
+Package installation still resolves the existing declared
+Imports, including analysis and reporting engines.
+
+```{r versions}
+library(MIRA)
+packageVersion("MIRA")
+packageDescription("MIRA", fields = "Title")
+```
+
+## A learning sequence
+
+Each article generates its own synthetic data without downloads. Seeds and
+data-generating assumptions are given beside the code. Examples use the
+installed public interface; they do not source private development files.
+
+| Article | Question and audience |
+|:--|:--|
+| [Getting started](frequentist-long-getting-started.html) | BCVA letters at two visits, one missing value, a figure and a first archive; new users |
+| [Data and detection](frequentist-long-data-and-detection.html) | IDs, names, visits, explicit choices and validation; data preparers |
+| [Descriptive analysis](frequentist-long-descriptive-analysis.html) | IOP distributions, changes, variation, associations and plots; glaucoma examples |
+| [Treatment groups](frequentist-long-treatment-groups.html) | Hypothetical pressure-management strategies, change differences and multiplicity |
+| [Missing data](frequentist-long-missing-data.html) | Incomplete OCT follow-up: samples, limitations and execution status |
+| [Multiple outcomes](frequentist-long-multiple-outcomes.html) | BCVA, OCT CMT and IOP safety: scales, directions and safe extraction |
+| [A first longitudinal model](frequentist-long-first-model.html) | One-eye BCVA dependence, a random intercept and one contrast before adjustment |
+| [Advanced models](frequentist-long-advanced-models.html) | Adjusted BCVA comparisons, model assumptions and partial results |
+| [Reporting](frequentist-long-reporting.html) | Archive retinal BCVA/CMT results, formats, regeneration and failures |
+| [Complete workflow](frequentist-long-complete-workflow.html) | A synthetic DME BCVA question from study-eye design to audited primary contrast and report |
+
+Choose a route according to the question you need to answer; the routes share
+articles and do not require three separate readings of the same material.
+
+| Route | Reading order and stopping point | What you should be able to do |
+|:--|:--|:--|
+| Essential | Getting started, then the conventional-configuration sections of Data and detection when importing your own file | Prepare a wide table; check identity and chronology; distinguish people, visit observations and pairs; read a mean and paired change; display a figure; retain an RDS and source-only bundle. |
+| Applied | Essential prerequisites, Descriptive analysis, Treatment groups, Missing data, Multiple outcomes as needed, then Reporting | Choose the sample and subtraction for a study question; investigate incomplete or unavailable results; define comparison families and outcome directions; find archived results through the manifest. |
+| Advanced | Applied concepts about groups and missingness, A first longitudinal model, Advanced models, then Complete workflow | Explain dependence and model rows before covariates and interactions; distinguish adjusted visit and change contrasts; inspect assumptions and partial results; align a primary question with its saved estimate. |
+
+Three bridges make the progression explicit. Getting started first separates
+visit means from paired changes, then changes only one follow-up observation
+before adding a third visit. Its first archive reuses that understood result
+with a minimal source-only call; the Reporting reference adds controls later.
+A first longitudinal model introduces the random intercept on a separate,
+adequately sized study before the Advanced models article adds arm, covariates,
+and alternative procedures. Explanatory progression does not imply that MIRA
+offers a public selector for fitting only that first model.
+
+Each article states its prerequisite concepts and supplies its own executable
+data and helpers. In Data and detection, custom regex and parser examples are
+optional import references after the conventional configuration and ID path.
+The Complete workflow ends with an executed transfer checkpoint so that the
+reader can adapt an endpoint, subtraction direction and archive lookup rather than only
+repeat the original commands. These examples teach use of the two functions;
+they cannot determine an appropriate analysis plan for every real study.
+
+Find these locally with `browseVignettes("MIRA")` after installing with
+vignettes built. `vignette("frequentist-long-getting-started", package = "MIRA")`
+opens the first tutorial. On a development checkout, build the package with
+`R CMD build` before installing its source bundle; an installation directly
+from source does not itself build vignettes by default.
+
+## Interpreting examples responsibly
+
+Synthetic effects illustrate estimators rather than real clinical efficacy.
+Statistical significance, uncertainty and scientific importance are separate
+questions. Missing observations can change the participants contributing to
+different tables. A method's successful execution does not confirm its
+assumptions. Check the stored configuration, module status, warnings and
+sample information before interpreting results.
+
+`?mira_info_long` and `?mira_report_freq_long` provide the complete parameter
+reference. The tutorials supply scientific context and tested workflows;
+the help pages remain useful for precise defaults and return structures.

@@ -1,0 +1,584 @@
+---
+title: "Frequentist longitudinal analysis: reproducible scientific reports"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Frequentist longitudinal analysis: reproducible scientific reports}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                      warning = TRUE, fig.width = 6, fig.height = 4)
+```
+
+## From an analysis to an auditable bundle
+
+An analytical result and its written presentation serve different purposes.
+`mira_info_long()` computes results; `mira_report_freq_long()` preserves those
+results, writes a table archive and Quarto source, and optionally renders a
+document. Reporting an existing result does not refit it. The intended readers
+are analysts preparing a reproducible deliverable and researchers checking
+where a reported number came from. Complete the
+[getting-started tutorial](frequentist-long-getting-started.html) first.
+
+Consider a separate synthetic retinal clinic cohort of 48 adults with diabetic
+macular edema (DME). Best-corrected visual acuity (BCVA) is recorded as ETDRS
+letter scores at baseline, month 3 and month 6; larger scores indicate better
+measured acuity. Each participant contributes one eligible study eye, selected
+by a prespecified random choice at enrolment if both eyes are eligible, before
+any follow-up result is available. Only that eye is represented in this table.
+The `study_eye` column records laterality; `subject_id` identifies the independent
+participant and their single study-eye series. The examples do not model two
+eyes within a participant.
+
+We assume the same acuity protocol and best correction at repeated visits.
+The [DRCR Retina Network's measurement protocol](https://public.jaeb.org/drcrnet/stdy/149)
+illustrates why acuity assessment needs a defined procedure. The generator
+below is not a reconstruction of that study, an eligibility rule, or an estimate
+of a real treatment effect. It includes participant heterogeneity, visit noise,
+and rounded letter scores. No values are clipped to force a favorable result.
+
+```{r report-data}
+library(MIRA)
+set.seed(4830)
+n <- 48L
+retina <- data.frame(
+  subject_id = sprintf("O%03d", seq_len(n)),
+  study_eye = sample(c("Right", "Left"), n, replace = TRUE)
+)
+baseline_acuity <- rnorm(n, 58, 7)
+retina$bcva_t0 <- round(baseline_acuity + rnorm(n, 0, 2))
+retina$bcva_t1 <- round(baseline_acuity + 3 + rnorm(n, 0, 3))
+retina$bcva_t2 <- round(baseline_acuity + 6 + rnorm(n, 0, 4))
+acuity_columns <- c("bcva_t0", "bcva_t1", "bcva_t2")
+stopifnot(!anyDuplicated(retina$subject_id),
+  all(is.finite(as.matrix(retina[acuity_columns]))),
+  all(as.matrix(retina[acuity_columns]) >= 0),
+  all(as.matrix(retina[acuity_columns]) <= 100))
+analysis <- mira_info_long(
+  retina, id = "subject_id", covariates = character(0),
+  time_vars = acuity_columns,
+  time_labels = c("Baseline", "Month 3", "Month 6"),
+  improvement_direction = "higher", stable_threshold = 5,
+  analyses = "none", verbose = FALSE
+)
+stopifnot(inherits(analysis, "mira_info_long"))
+```
+
+The bounds check describes the generated chart-score example, not universal
+test limits for every acuity protocol. `stable_threshold = 5` is an illustrative
+five-letter classification band, not a validated MCID or a treatment-response
+definition. A gain of more than five letters receives the configured observed-change
+classification `Improved` in `clinical_direction`; that classification does not assess measurement error
+or establish an individual causal treatment benefit.
+
+First identify the result to be preserved. Select month 6 minus baseline by
+its named visit columns, then independently reconstruct its paired mean.
+
+```{r reported-endpoint}
+endpoint <- analysis$change[analysis$change$from == "bcva_t0" &
+  analysis$change$to == "bcva_t2", , drop = FALSE]
+stopifnot(nrow(endpoint) == 1L, endpoint$n == nrow(retina),
+  isTRUE(all.equal(endpoint$mean_change, mean(retina$bcva_t2 - retina$bcva_t0))))
+knitr::kable(endpoint[c("from_label", "to_label", "n", "mean_change", "ci_lower", "ci_upper")],
+  digits = 2, row.names = FALSE,
+  col.names = c("From", "To", "Pairs", "Mean gain", "Lower", "Upper"),
+  caption = "The BCVA result to archive: month-6-minus-baseline ETDRS letters, with a pointwise 95% mean-change interval.")
+```
+
+The observed mean gain is `r sprintf("%.2f", endpoint$mean_change)` letters,
+with interval `r sprintf("%.2f", endpoint$ci_lower)` to
+`r sprintf("%.2f", endpoint$ci_upper)` letters among `r endpoint$n` paired study
+eyes from the same number of participants. This is uncertainty about a mean
+change, not the range of individual gains. Without a comparison strategy it
+does not identify a treatment effect. Reporting must preserve this result
+rather than manufacture a stronger clinical conclusion.
+
+The core result includes descriptive summaries and paired changes even with
+`analyses = "none"`. A report cannot create an analysis that was disabled in
+the original call. For inference, review the paired samples and the assumptions
+described in the [descriptive](frequentist-long-descriptive-analysis.html) and
+[advanced-model](frequentist-long-advanced-models.html) tutorials.
+
+## Start with the result already understood
+
+You now have an analytical object called `analysis`. The new question is how
+to keep its exact tables and the instructions for presenting them. No new
+data, estimand or analysis method is needed. Reuse this object rather than
+repeating the analysis inside the reporting call.
+
+```{r first-source-bundle}
+first_bundle <- mira_report_freq_long(
+  x = analysis,
+  output_dir = tempfile("mira-first-report-"),
+  format = "html",
+  render = FALSE,
+  open = FALSE
+)
+data.frame(
+  source_exists = file.exists(first_bundle$source),
+  payload_exists = file.exists(first_bundle$payload),
+  html_rendered = unname(first_bundle$rendered[["html"]])
+)
+stopifnot(identical(first_bundle$mira_result, analysis))
+```
+
+The two source checks are true and `html_rendered` is false. That is the
+intended outcome: a **source-only bundle** stores the result, table archive
+and report instructions without producing a finished HTML document. The
+descriptor's `source` and `payload` fields locate those files. It is safe to
+inspect and preserve this bundle without Quarto or TeX.
+
+Use a newly allocated directory for each independent bundle. This avoids
+collisions during repeated vignette builds and keeps generated artifacts out
+of the package source and installation directories. Set `format` explicitly:
+the function's default requests **both HTML and PDF**. Also set `render` and
+`open` explicitly in scripts: their defaults are `TRUE` and `interactive()`.
+
+## Add study metadata and choose visible sections
+
+Keep the same `analysis` and source-only mode. The next bundle changes only
+presentation: a meaningful title, authors, fixed document date, filename and
+selected sections help a colleague identify the study. A second directory
+keeps this independent presentation separate from `first_bundle`.
+
+```{r source-bundle}
+bundle <- mira_report_freq_long(
+  x = analysis,
+  output_dir = tempfile("mira-retina-bcva-"),
+  output_file = "Retinal BCVA longitudinal analysis",
+  format = "html",
+  title = "Study-eye BCVA trajectories in diabetic macular edema",
+  subtitle = "Synthetic one-study-eye cohort: BCVA in ETDRS letters",
+  author = c("A. Researcher", "B. Statistician"),
+  date = as.Date("2026-10-01"),
+  sections = c("methods", "data_quality", "overview", "descriptives",
+               "missingness", "change", "diagnostics", "conclusions"),
+  render = FALSE, open = FALSE, quiet = TRUE
+)
+stopifnot(inherits(bundle, "mira_report_freq_long"))
+stopifnot(identical(basename(bundle$source),
+                    "retinal_bcva_longitudinal_analysis.qmd"))
+basename(bundle$source)
+bundle$rendered
+bundle$render_errors
+```
+
+`render = FALSE` still writes the QMD source, runtime R script, compressed RDS
+payload, eligible CSV tables and manifest. It does not call Quarto. Consequently
+`rendered` is false, `render_errors` is `NA` rather than a failure message, and
+`files` is empty. `expected_files` describes targets; it does not certify
+that documents exist or were successfully generated in this invocation.
+
+The stem is normalized to lowercase ASCII letters, digits and underscores.
+Supply a stem without an extension: `"report.html"` becomes `"report_html"`.
+The default output directory is relative to the working directory, so explicit
+directory management is preferable in reproducible scripts.
+
+## Inspect sources, preserved objects and exported numbers
+
+The descriptor is an invisible return value that is also printed automatically.
+Save it to obtain actual artifact paths instead of predicting filenames.
+
+```{r inspect-bundle}
+sources <- c(bundle$source, bundle$runtime, bundle$payload,
+             bundle$results_manifest)
+stopifnot(all(file.exists(sources)), length(bundle$files) == 0L,
+          !any(bundle$rendered), all(is.na(bundle$render_errors)))
+data.frame(artifact = basename(sources), bytes = file.info(sources)$size)
+payload <- readRDS(bundle$payload)
+names(payload)
+stopifnot(identical(bundle$mira_result, analysis),
+          identical(payload$result$descriptives, analysis$descriptives),
+          identical(payload$result$change, analysis$change),
+          identical(payload$result$settings, analysis$settings),
+          identical(attr(payload$result$descriptives, "mira_metric_names"),
+                    attr(analysis$descriptives, "mira_metric_names")),
+          identical(names(payload), c("result", "extra_objects", "report")))
+```
+
+Keep the QMD, runtime and payload together when moving the bundle. The runtime
+contains report helpers; it does not replace the external R packages needed
+to print native model objects or draw stored plots. The payload always contains
+the original result, including details omitted from the document. It may contain
+participant identifiers and source observations: review the whole bundle before
+sharing it, using the same data-governance rules as for the analysis itself.
+
+The manifest maps each table to its owning object path, outcome and relative
+CSV filename. Do not use a hard-coded filename when a manifest lookup suffices.
+
+```{r manifest}
+manifest <- utils::read.csv(bundle$results_manifest, stringsAsFactors = FALSE)
+stopifnot(identical(names(manifest),
+  c("outcome", "path", "file", "original_class", "rows", "columns")))
+stopifnot(all(file.exists(file.path(bundle$output_dir, manifest$file))),
+          length(bundle$result_files) == nrow(manifest))
+manifest_excerpt <- head(manifest[, c("outcome", "path", "rows", "columns")], 8)
+manifest_excerpt$path <- paste0("`", manifest_excerpt$path, "`")
+knitr::kable(manifest_excerpt,
+             caption = "An excerpt of the machine-readable table manifest.")
+desc_row <- manifest[manifest$path == "outcome$descriptives", , drop = FALSE]
+stopifnot(nrow(desc_row) == 1L)
+archived <- utils::read.csv(file.path(bundle$output_dir, desc_row$file),
+                            check.names = FALSE)
+stopifnot(nrow(archived) == nrow(analysis$descriptives),
+          identical(archived$time, analysis$descriptives$time),
+          identical(archived$n, analysis$descriptives$n),
+          isTRUE(all.equal(archived$mean, analysis$descriptives$mean,
+                           tolerance = 1e-12)))
+```
+
+CSV p-values retain their numeric values; display rounding does not turn them
+into strings such as `"<0.001"`. CSV is a tabular interchange format, however:
+list-valued cells become text and matrix-valued columns may expand. Use the
+RDS payload for exact R objects and their attributes, including metric-name
+maps. RDS files should be read only from trusted sources.
+
+The checks compare the report input before serialization and the relevant
+tables, settings and metric-name attributes after reading it back. For fitted
+models, compare fixed parameters and their covariance matrices, as in the
+[complete workflow](frequentist-long-complete-workflow.html), rather than
+requiring `identical()` for a whole model containing environments or pointers.
+
+## Analyse and report in one call
+
+Supplying `data` forwards `...` to `mira_info_long()`. This creates a fresh
+analysis; it is convenient for a fully specified script. Passing the saved
+`analysis` instead preserves the already reviewed analytical object. Arguments
+in `...` are rejected when an existing result is supplied. Do not supply both
+`x` and `data`; a data frame passed as `x` is also accepted as direct data.
+
+```{r direct-report}
+direct <- mira_report_freq_long(
+  data = retina, id = "subject_id", outcomes = "bcva",
+  covariates = character(0),
+  time_vars = c("bcva_t0", "bcva_t1", "bcva_t2"),
+  time_labels = c("Baseline", "Month 3", "Month 6"),
+  improvement_direction = "higher", stable_threshold = 5,
+  analyses = "none", verbose = FALSE,
+  output_dir = tempfile("mira-direct-"), output_file = "direct_analysis",
+  format = "html", render = FALSE, open = FALSE
+)
+stopifnot(inherits(direct$mira_result, "mira_info_long"),
+          file.exists(direct$payload))
+names(direct$mira_result$descriptives)
+```
+
+Incompatible inputs fail before bundle creation. These checks deliberately
+exercise two API errors; an unrelated error would fail the assertions.
+
+```{r incompatible-inputs}
+both_inputs <- tryCatch({
+  mira_report_freq_long(x = analysis, data = retina, render = FALSE,
+                        output_dir = tempfile("mira-invalid-"), open = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+unused_analysis_args <- tryCatch({
+  mira_report_freq_long(x = analysis, analyses = "none", render = FALSE,
+                        output_dir = tempfile("mira-invalid-"), open = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(grepl("not both", both_inputs, fixed = TRUE),
+          grepl("only when data is supplied", unused_analysis_args, fixed = TRUE))
+```
+
+Here explicit `outcomes = "bcva"` declares the name and prefixes metrics
+with `bcva_`. Selecting `time_vars` alone in the earlier call left the outcome
+inferred and its metrics generic. The report follows the stored conventions.
+The [multiple-outcome tutorial](frequentist-long-multiple-outcomes.html)
+demonstrates safe extraction through the `mira_metric_names` attribute.
+
+## Choose content and presentation settings
+
+Sections appear in scientific order when eligible results exist. Selecting a
+section does not enable a missing analysis, and the order of the `sections`
+vector does not reorder the report.
+
+| Section keys | Content |
+|:--|:--|
+| `abstract`, `methods`, `data_quality`, `overview` | Available outcomes, resolved settings, detected variables and sample structure |
+| `descriptives`, `missingness`, `change`, `arms` | Visit summaries, availability, paired changes and enabled arm analyses |
+| `correlations`, `variability`, `trajectories` | Cross-visit associations, ICC/variation and participant-level changes |
+| `models`, `robustness` | Fitted and advanced analyses; robust inference, effect sizes, multiplicity and sensitivity |
+| `outliers`, `figures`, `diagnostics` | Diagnostic flags, stored plots and relevant recorded warnings/failures |
+| `conclusions` | Difference between first and last observed means; a descriptive summary |
+| `appendix` | Eligible `extra_objects` |
+| `frequencies` | A component of that name if present; standard results need not contain it |
+| `all` | Every eligible route above |
+
+The generated `conclusions` section subtracts observed means. With incomplete
+follow-up those means may refer to different participants; the difference is
+neither necessarily a paired mean change nor a treatment effect.
+
+```{r focused-report}
+auxiliary <- stats::lm(bcva_t2 ~ bcva_t0, data = retina)
+focused <- mira_report_freq_long(
+  analysis, output_dir = tempfile("mira-focused-"), format = "html",
+  sections = c("descriptives", "change", "appendix"),
+  include_complete_output = FALSE,
+  extra_objects = list(baseline_followup_association = auxiliary),
+  max_table_rows = 6, max_table_columns = 8, digits = 4, max_depth = 50,
+  render = FALSE, open = FALSE
+)
+focused_manifest <- utils::read.csv(focused$results_manifest,
+                                    stringsAsFactors = FALSE)
+stopifnot(identical(manifest, focused_manifest),
+  identical(readRDS(focused$payload)$result$descriptives,
+            analysis$descriptives),
+  identical(readRDS(focused$payload)$result$settings, analysis$settings),
+  inherits(readRDS(focused$payload)$extra_objects[[
+    "baseline_followup_association"]], "lm"))
+archived_auxiliary <- readRDS(focused$payload)$extra_objects[[
+  "baseline_followup_association"]]
+stopifnot(
+  isTRUE(all.equal(stats::coef(archived_auxiliary), stats::coef(auxiliary))),
+  isTRUE(all.equal(stats::vcov(archived_auxiliary), stats::vcov(auxiliary))),
+  !any(grepl("extra_objects", focused_manifest$path, fixed = TRUE))
+)
+```
+
+`max_table_rows` (default `Inf`) limits displayed rows, with a truncation note. Wide tables
+are split into blocks by `max_table_columns` (default 12), repeating comparison keys when
+space permits. PDF blocks have at most eight columns and DOCX blocks at most
+seven. `digits` (default 3) controls display precision (1--10), including a lower display
+threshold for recognized p-values. These choices and `sections` leave the
+eligible-table CSV archive unchanged, as the assertion above verifies.
+
+`max_depth` is different: it limits traversal for both visible results and
+CSV export. Lowering it can omit deeply nested tables, although the payload
+remains complete. Retain the default of 50 unless there is a specific reason
+to restrict traversal. Numeric depth/column/precision values are converted to
+integers by the implementation; use whole numbers to make the intent explicit.
+
+The following intentionally shallow archive illustrates that distinction.
+The full-depth manifest remains the appropriate starting point for an audit.
+
+```{r archive-depth}
+shallow <- mira_report_freq_long(
+  analysis, output_dir = tempfile("mira-shallow-"), format = "html",
+  max_depth = 1, render = FALSE, open = FALSE
+)
+shallow_manifest <- utils::read.csv(shallow$results_manifest,
+                                   stringsAsFactors = FALSE)
+stopifnot(nrow(shallow_manifest) < nrow(manifest),
+          all(shallow_manifest$path %in% manifest$path),
+          identical(readRDS(shallow$payload)$result$change, analysis$change))
+data.frame(full_depth_tables = nrow(manifest),
+           shallow_tables = nrow(shallow_manifest))
+```
+
+`include_complete_output` is retained for API compatibility and recorded in
+the configuration. It currently does not change the visible report: eligible
+results are already traversed without a duplicate complete-output appendix.
+It never removes the full result from the payload. `extra_objects` are
+preserved there and appear only with `appendix` or `all`; they are **not**
+exported to CSV. The auxiliary BCVA regression describes a baseline/follow-up association in
+letters, not an adjusted treatment effect. It is retained separately from the
+paired mean-change result already interpreted.
+
+## Add OCT anatomy without replacing the BCVA result
+
+A multi-outcome object uses the same reporting interface. Outcome tables are
+placed in outcome-specific subdirectories; shared context has an empty outcome
+key. Opposite favorable directions require explicit scientific configuration.
+
+The next named copy retains the same people, study eyes and BCVA observations.
+It adds an anatomical outcome: OCT mean retinal thickness in the central
+1-mm-diameter subfield, in micrometres. We use `cmt` as the local column prefix
+for this specified measurement (often called central subfield thickness, CST).
+Assume one OCT platform and segmentation convention across visits. Device-
+specific thicknesses or a center-point measurement are not silently pooled.
+
+This generator shares a modest baseline association with BCVA but adds separate
+anatomical noise and reductions; the resulting numbers are illustrative.
+Decreasing thickness describes less thickening in this edema example, not
+necessarily a visual improvement or a validated surrogate endpoint. The
+[DRCR structure-function study](https://pubmed.ncbi.nlm.nih.gov/17123615/)
+explains why OCT anatomy cannot reliably substitute for visual acuity.
+
+```{r multi-report}
+set.seed(4831)
+retina_multi <- retina
+anatomy <- 420 - 2 * (retina$bcva_t0 - mean(retina$bcva_t0)) + rnorm(n, 0, 35)
+retina_multi$cmt_t0 <- round(anatomy + rnorm(n, 0, 12))
+retina_multi$cmt_t1 <- round(anatomy - 30 + rnorm(n, 0, 20))
+retina_multi$cmt_t2 <- round(anatomy - 65 + rnorm(n, 0, 25))
+stopifnot(identical(retina_multi[c("subject_id", "study_eye", acuity_columns)], retina),
+  all(as.matrix(retina_multi[c("cmt_t0", "cmt_t1", "cmt_t2")]) > 0))
+multi <- mira_info_long(
+  retina_multi, id = "subject_id", outcomes = c("bcva", "cmt"),
+  improvement_direction = c(bcva = "higher", cmt = "lower"),
+  stable_threshold = c(bcva = 5, cmt = 25),
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+multi_bundle <- mira_report_freq_long(
+  multi, output_dir = tempfile("mira-retinal-multi-report-"),
+  format = "all", render = FALSE, open = FALSE
+)
+multi_manifest <- utils::read.csv(multi_bundle$results_manifest,
+                                  stringsAsFactors = FALSE)
+table(multi_manifest$outcome)
+stopifnot(all(c("bcva", "cmt") %in% multi_manifest$outcome),
+          identical(names(multi_bundle$rendered), c("html", "pdf", "docx")))
+```
+
+The five-letter and 25-micrometre bands are teaching settings in different
+units. They do not establish clinical response criteria, and their numerical
+changes must not be pooled. This multi-outcome report archives separate
+analyses, not a joint model of visual function and retinal anatomy. IOP as a
+safety measure with unknown favorable direction is demonstrated in the
+[multiple-outcome article](frequentist-long-multiple-outcomes.html).
+
+`mira_detect_long` objects from `inspect_only = TRUE` are accepted too. They
+produce context and diagnostics, with no outcome analyses to invent.
+
+```{r detection-report}
+detection <- mira_info_long(retina, id = "subject_id", outcomes = "bcva",
+  covariates = character(0), analyses = "none", inspect_only = TRUE, verbose = FALSE)
+detection_bundle <- mira_report_freq_long(
+  detection, output_dir = tempfile("mira-detection-report-"),
+  format = "html", sections = c("methods", "data_quality", "diagnostics"),
+  render = FALSE, open = FALSE
+)
+stopifnot(file.exists(detection_bundle$source))
+```
+
+## Safe regeneration
+
+The default `overwrite = FALSE` protects existing source artifacts, selected
+render targets, the manifest and planned CSV paths before writing them. This
+deliberate error is captured and checked so that it remains a visible example
+of the contract rather than aborting the tutorial.
+
+```{r overwrite-contract}
+collision <- tryCatch({
+  mira_report_freq_long(analysis, output_dir = bundle$output_dir,
+    output_file = "Retinal BCVA longitudinal analysis", format = "html",
+    render = FALSE, open = FALSE)
+  NULL
+}, error = function(e) conditionMessage(e))
+stopifnot(is.character(collision), grepl("already exist", collision))
+cat(collision, "\n")
+regenerated <- mira_report_freq_long(
+  analysis, output_dir = bundle$output_dir,
+  output_file = "Retinal BCVA longitudinal analysis", format = "html",
+  sections = c("overview", "descriptives"),
+  render = FALSE, open = FALSE, overwrite = TRUE
+)
+stopifnot(file.exists(regenerated$source))
+```
+
+Use one directory per independent report even when stems differ: all bundles
+use `results_manifest.csv` and `results/`. Overwriting removes obsolete CSVs
+listed in a prior valid manifest only when safely contained under `results/`.
+It does not clean unrelated files. Bundle writes span several files and are
+not transactional; inspect a partial bundle after a filesystem error.
+
+## Rendering HTML, PDF and DOCX
+
+Rendering requires the `knitr` and `quarto` R packages **and** the Quarto CLI.
+PDF also needs a compatible TeX installation. DOCX generation does not require
+Microsoft Word. `format = "all"` expands to HTML, PDF and DOCX; a character
+vector can request a subset. Source preparation remains useful without any
+external renderer. Installation instructions are in the package README and
+the [Quarto documentation](https://quarto.org/docs/get-started/).
+
+The following executable branch is deliberately opt-in so package builds do
+not require external tools. To verify it with tools already available, set
+`MIRA_RENDER_VIGNETTE_FORMATS=html,docx,pdf` before building this vignette, and
+inspect the returned status and documents. Request a subset if TeX is absent.
+It prepares a new source-only bundle and renders it externally, one format at
+a time. The [Quarto PDF options](https://quarto.org/docs/reference/formats/pdf.html)
+allow `latex-auto-install: false` to prevent automatic TeX package installation.
+Here it is written into a **copy** of the QMD before any render attempt; the
+preserved analytical result is unchanged. The standard Quarto PDF wrapper is
+retained so its normal repeated compilation can resolve references.
+
+```{r optional-rendering}
+requested <- Sys.getenv("MIRA_RENDER_VIGNETTE_FORMATS", "")
+render_status <- data.frame(
+  format = c("html", "pdf", "docx"),
+  status = "not requested", error = NA_character_
+)
+if (nzchar(requested)) {
+  requested <- trimws(strsplit(requested, ",", fixed = TRUE)[[1L]])
+  stopifnot(all(requested %in% c("html", "pdf", "docx")))
+  deferred_bundle <- mira_report_freq_long(
+    analysis, output_dir = tempfile("mira-rendered-"), format = requested,
+    sections = c("methods", "descriptives", "change", "diagnostics"),
+    render = FALSE, open = FALSE, quiet = FALSE
+  )
+  safe_source <- file.path(deferred_bundle$output_dir, "deferred-no-install.qmd")
+  qmd <- readLines(deferred_bundle$source, warn = FALSE)
+  if ("pdf" %in% requested) {
+    pdf_line <- which(qmd == "  pdf:")
+    stopifnot(length(pdf_line) == 1L)
+    qmd <- append(qmd, "    latex-auto-install: false", after = pdf_line)
+  }
+  writeLines(qmd, safe_source)
+  for (fmt in requested) {
+    target <- file.path(deferred_bundle$output_dir, paste0("deferred-no-install.", fmt))
+    problem <- tryCatch({
+      quarto::quarto_render(safe_source, output_format = fmt,
+        output_file = basename(target), execute_dir = deferred_bundle$output_dir,
+        quiet = FALSE, as_job = FALSE)
+      if (!file.exists(target) || file.info(target)$size <= 0) {
+        stop("External renderer returned without a nonempty document.")
+      }
+      NA_character_
+    }, error = function(e) conditionMessage(e))
+    selected <- match(fmt, render_status$format)
+    render_status$status[selected] <- if (is.na(problem)) "rendered externally" else "render failed"
+    render_status$error[selected] <- problem
+  }
+  stopifnot(!any(deferred_bundle$rendered), length(deferred_bundle$files) == 0L)
+} else {
+  cat("External rendering not requested; source bundles were verified.\n")
+}
+knitr::kable(render_status, row.names = FALSE,
+  caption = "External document rendering: one explicit status per format.")
+```
+
+A `render failed` row is a recorded failure, not a successful document. Inspect
+its message and resolve the stated dependency or environment problem before
+relying on that format. The ledger describes this external operation; the
+source-only MIRA descriptor remains unchanged, as the assertion verifies.
+This branch checks that a nonempty document was created; publication still
+requires visual and scientific inspection of that document. In the direct
+`mira_report_freq_long(..., render = TRUE)` workflow, missing R rendering
+packages instead stop the call after sources are written, with no descriptor.
+
+For a deferred render, keep the companion files together and call
+`quarto::quarto_render(regenerated$source, output_format = "html",
+execute_dir = regenerated$output_dir)`. This external operation writes the
+document but does not retroactively update the earlier MIRA descriptor; use
+a new `mira_report_freq_long(..., render = TRUE, overwrite = TRUE)` invocation
+when a fresh descriptor is needed.
+
+Each requested format is attempted independently once rendering starts.
+Inspect `rendered`, `render_errors` and `files` for the current invocation.
+Per-format failures produce an aggregate warning and retain source artifacts;
+missing R rendering packages instead cause an error after the sources are
+written. A previous rendered document may remain after an overwrite attempt
+fails or skips rendering. Its presence is not proof of current success.
+`quiet` controls Quarto console output, not validation warnings or the printed
+descriptor. `open = TRUE` opens the first successful document and should be
+avoided in automated work.
+
+## Reproducibility and scientific review
+
+Record the seed, analysis configuration, software versions and rendering
+environment together with the bundle. Its timestamp is operational metadata,
+so regenerated files need not be byte-identical. Exact preserved analytical
+objects and manifest-linked tables provide stronger traceability than copied
+numbers. A generated report does not assess study design, choose an estimand,
+justify missing-data assumptions or establish scientific validity.
+
+```{r reporting-session}
+packageVersion("MIRA")
+sessionInfo()
+```
+
+Continue with the [complete workflow](frequentist-long-complete-workflow.html)
+to connect study design, diagnostics, inference and the final bundle.

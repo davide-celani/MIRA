@@ -1,0 +1,474 @@
+---
+title: "Preparing ophthalmic data: study eyes, scales, and detection"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Preparing ophthalmic data: study eyes, scales, and detection}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      echo = TRUE, warning = TRUE, message = FALSE)
+```
+
+## Resolve meaning before calculating statistics
+
+MIRA accepts a non-empty `data.frame` in wide format, with one row per
+selected study eye from a different participant and at least two numeric
+measurement columns for each selected outcome. This tutorial asks a configuration question: which columns will MIRA
+treat as participants, outcomes, visits, groups, and adjustment variables?
+Automatic detection helps inspect an unfamiliar dataset; it cannot determine
+whether a name has the intended scientific meaning.
+
+Prerequisites are basic R data frames and the two-visit result in [Getting started](frequentist-long-getting-started.html). The main examples use two explicitly separate synthetic retina datasets,
+followed by a small independent logMAR import example. Each has
+one study eye per participant, selected before follow-up; the right eye is
+selected whenever both eyes are eligible. Person-level independence is
+therefore represented by the row identifier. Neither a new eye identifier
+nor `strict_id = FALSE` would make two eyes of one person independent.
+None needs an external file or network download.
+
+## Inspect the built-in naming rules
+
+The first dataset contains BCVA in ETDRS letters with conventional `_t` suffixes,
+an unambiguous ID, and two time-invariant characteristics.
+
+```{r acuity-data}
+library(MIRA)
+set.seed(3201)
+n <- 30L
+usual_bcva <- rnorm(n, 56, 8)
+acuity <- data.frame(
+  subject_id = sprintf("V%03d", seq_len(n)),
+  age = sample(45:80, n, replace = TRUE),
+  sex = factor(rep(c("Female", "Male"), length.out = n)),
+  bcva_t0 = round(usual_bcva + rnorm(n, sd = 2.5)),
+  bcva_t1 = round(usual_bcva + 3 + rnorm(n, sd = 3)),
+  bcva_t2 = round(usual_bcva + 6 + rnorm(n, sd = 3))
+)
+stopifnot(all(as.matrix(acuity[c("bcva_t0", "bcva_t1", "bcva_t2")]) > 15),
+          all(as.matrix(acuity[c("bcva_t0", "bcva_t1", "bcva_t2")]) < 95))
+configuration <- mira_info_long(
+  acuity, variable_pattern = "auto", inspect_only = TRUE,
+  analyses = "none", verbose = FALSE
+)
+class(configuration)
+configuration$config[c("id", "id_generated", "outcomes", "time_vars",
+                       "covariates_numeric", "covariates_categorical")]
+configuration$detected_variables$longitudinal_map
+configuration$diagnostics$warnings
+stopifnot(inherits(configuration, "mira_detect_long"),
+          identical(configuration$config$id, "subject_id"),
+          identical(configuration$config$outcomes, "bcva"),
+          setequal(configuration$config$covariates, c("age", "sex")),
+          identical(configuration$config$covariates_numeric, "age"),
+          identical(configuration$config$covariates_categorical, "sex"))
+```
+
+`inspect_only = TRUE` validates and resolves configuration without calculating
+outcome statistics. `mira_detect_long()` provides the same configuration-only
+workflow directly; the `mira_info_long()` route additionally records resolved
+optional-analysis switches in `config$analyses`.
+
+The default parser recognizes outcome names separated from time suffixes by
+`_`, `.`, or `-`. Supported suffix families include `t0`, `time1`, `visit1`,
+`vis1`, `v1`, `baseline`/`base`/`BL`, `month3`/`mo3`/`m3`, `week4`/`wk4`/`w4`,
+`day7`/`d7`, `followup1`/`fu1`, and plain numbers. Matching is case-insensitive.
+Baseline-like tokens sort at zero; otherwise the first numeric part supplies
+the order. These numbers do not supply a physical time unit, and mixing
+`week4` with `month3` does not convert months to weeks.
+
+Use the parsed map, not a presumed pattern, to verify what was recognized.
+At least two numeric columns with the same normalized outcome name are needed.
+Unmatched columns are not repeated measurements merely because they are
+numeric. Matched nonnumeric columns are excluded from automatic groups and
+reported in configuration warnings.
+
+## A different naming convention and multiple families
+
+A separate synthetic retina cohort records BCVA in ETDRS letters at baseline
+and months 3 and 6, and OCT thickness at imaging visits 1, 2, and 3. We call
+the thickness family `cmt`; here its precise definition is **mean central
+1-mm subfield thickness**, in micrometers, rather than a single foveal-point
+measurement. The scanner/segmentation convention would need documentation in
+a real dataset. The [DRCR measurement protocol](https://public.jaeb.org/drcrnet/stdy/149)
+uses visual-acuity and central-subfield measurements as separate assessments.
+
+The families deliberately have different visit names. Imaging visit 1 is its
+first selected occasion; names alone do not establish that it coincides with
+the BCVA baseline date. A lower thickness in an edematous macula can describe
+anatomical reduction, but is not itself proof of improved vision or clinical
+benefit. These generated values illustrate parsing rather than efficacy.
+
+```{r retina-data}
+set.seed(3202)
+m <- 36L
+usual_acuity <- rnorm(m, 58, 7)
+usual_thickness <- 420 - 3 * (usual_acuity - 58) + rnorm(m, 0, 35)
+retina <- data.frame(
+  participant_id = sprintf("O%03d", seq_len(m)),
+  bcva_baseline = round(usual_acuity + rnorm(m, sd = 3)),
+  bcva_month3 = round(usual_acuity + 4 + rnorm(m, sd = 3)),
+  bcva_month6 = round(usual_acuity + 7 + rnorm(m, sd = 3)),
+  cmt_visit1 = round(usual_thickness + rnorm(m, sd = 15)),
+  cmt_visit2 = round(usual_thickness - 35 + rnorm(m, sd = 18)),
+  cmt_visit3 = round(usual_thickness - 60 + rnorm(m, sd = 18))
+)
+stopifnot(all(as.matrix(retina[grep("^bcva_", names(retina))]) > 15),
+          all(as.matrix(retina[grep("^bcva_", names(retina))]) < 95),
+          all(as.matrix(retina[grep("^cmt_", names(retina))]) > 150))
+retina_map <- mira_info_long(retina, outcomes = "auto", inspect_only = TRUE,
+                             analyses = "none", verbose = FALSE)
+retina_map$config$time_vars
+stopifnot(setequal(retina_map$config$outcomes, c("bcva", "cmt")))
+```
+
+`outcomes = NULL` and `outcomes = "auto"` select all unambiguous detected
+families. To select one family, specify its name; to select several, use a
+character vector. A vector of at least two existing measurement column names
+in `outcomes`, with `time_vars = NULL`, instead acts as a column selector.
+For a documented analysis plan, the explicit `time_vars` interface is clearer.
+
+## Make the analysis plan explicit
+
+Select BCVA, identify the participant column, and supply meaningful display
+labels. Numeric order is recognized even if clear time suffixes are supplied
+out of order; labels named by source column avoid accidental mismatches.
+
+```{r explicit-configuration}
+bcva_fit <- mira_info_long(
+  retina, id = "participant_id", outcomes = "BCVA",
+  time_vars = c("bcva_month6", "bcva_baseline", "bcva_month3"),
+  time_labels = c(bcva_baseline = "Baseline", bcva_month3 = "Month 3",
+                  bcva_month6 = "Month 6"),
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+bcva_fit$config$specified_manually
+bcva_fit$config$outcome_names
+bcva_fit$time_labels
+stopifnot(identical(bcva_fit$time_vars,
+                    c("bcva_baseline", "bcva_month3", "bcva_month6")),
+          identical(unname(bcva_fit$time_labels),
+                    c("Baseline", "Month 3", "Month 6")))
+```
+
+Declaring `outcomes = "BCVA"` preserves that exact declared name as a prefix on
+MIRA-owned metric fields: `mean` becomes `BCVA_mean`. Automatic detection,
+`outcomes = "auto"`, custom parsing, and a simple `time_vars` vector infer a
+name and retain unprefixed base metrics. A named `time_vars` list also declares
+an outcome name. Inspect `config$outcome_names` to distinguish these cases.
+
+The table attribute `mira_metric_names` maps canonical metric names to actual
+fields. The following local helper works with both explicit and inferred
+outcomes, validates each requested field, and leaves structural fields such as
+`label` and `n` unchanged. It uses no internal package functions.
+
+```{r metric-mapping}
+metric_columns <- function(table, fields) {
+  mapping <- attr(table, "mira_metric_names", exact = TRUE)
+  actual <- fields
+  matched <- fields %in% names(mapping)
+  actual[matched] <- unname(mapping[fields[matched]])
+  stopifnot(all(actual %in% names(table)))
+  actual
+}
+bcva_fit$descriptives[, metric_columns(
+  bcva_fit$descriptives, c("label", "n", "mean", "sd"))]
+```
+
+IDs, source columns, counts, and time/group labels retain their structural
+names. Native fitted models and external model summaries retain their own
+package contracts. Avoid constructing metric names by lowercasing an outcome
+or assuming that all numeric fields follow the same naming convention.
+
+## A BCVA name does not identify its measurement scale
+
+The preceding BCVA variables use letter scores, for which higher values mean
+better measured acuity. The distinction between acuity scales and measurement
+protocols is discussed in [this prospective measurement study](https://pmc.ncbi.nlm.nih.gov/articles/PMC2814576/). MIRA's automatic `bcva` mapping therefore matches
+their scale. It cannot inspect a unit dictionary or distinguish letter scores
+from logMAR. The following **separate** four-eye import example contains
+logMAR-valued BCVA, where lower values mean better measured acuity; it is not
+a conversion of either earlier synthetic dataset.
+
+```{r logmar-direction}
+logmar_import <- data.frame(
+  subject_id = paste0("LM", 1:4),
+  bcva_t0 = c(0.60, 0.42, 0.74, 0.30),
+  bcva_t1 = c(0.50, 0.40, 0.62, 0.28)
+)
+automatic_logmar <- mira_info_long(logmar_import, id = "subject_id",
+  covariates = character(0), analyses = "none", inspect_only = TRUE,
+  verbose = FALSE)
+declared_logmar <- mira_info_long(logmar_import, id = "subject_id",
+  covariates = character(0), analyses = "none", inspect_only = TRUE,
+  improvement_direction = "lower", stable_threshold = 0.05, verbose = FALSE)
+stopifnot(automatic_logmar$config$improvement_direction[["bcva"]] == "higher",
+          declared_logmar$config$improvement_direction[["bcva"]] == "lower")
+data.frame(configuration = c("Name-based default", "Explicit logMAR direction"),
+  direction = c(automatic_logmar$config$improvement_direction[["bcva"]],
+                declared_logmar$config$improvement_direction[["bcva"]]))
+```
+
+Only configuration was inspected; the inappropriate automatic direction was
+not used to label clinical responses. The explicit 0.05-logMAR threshold is
+an arbitrary teaching tolerance, not a validated responder definition or a
+measurement-error model. Preserve scale and units before analysis and do not
+combine ETDRS-letter changes with logMAR changes in one numerical summary.
+
+## Validate types and participant identity
+
+Imported measurements stored as text must be checked before conversion.
+`as.numeric()` applied directly to a factor gives its level codes rather than
+the displayed measurements. Audit units, decimal separators, missing-value
+codes, and impossible values at import. Here a deliberately mistyped follow-up
+column is rejected when explicitly selected.
+
+```{r bad-type}
+mistyped <- acuity
+mistyped$bcva_t2 <- as.character(mistyped$bcva_t2)
+type_message <- tryCatch({
+  mira_info_long(mistyped, time_vars = c("bcva_t0", "bcva_t1", "bcva_t2"),
+                 inspect_only = TRUE, analyses = "none", verbose = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(grepl("must be numeric", type_message, fixed = TRUE))
+cat(type_message, "\n")
+```
+
+Automatic ID detection ranks complete, unique columns with semantic names such
+as `participant_id`, `subject_id`, `patient_id`, or `id`. A unique arbitrary
+measurement is insufficient. Ambiguity or the absence of a safe candidate
+generates an internal row ID and a warning. That generated ID identifies rows;
+it cannot repair a dataset with several rows for the same real participant.
+Use explicit `id` when the study's participant identifier is known.
+
+The next inspection deliberately adds an equally plausible second ID. MIRA
+emits an ambiguity warning and records that a row identifier was generated.
+Explicit selection resolves the ambiguity without changing the original data.
+
+```{r ambiguous-id}
+two_ids <- acuity
+two_ids$participant_id <- sprintf("Alternative%03d", seq_len(n))
+id_map <- mira_info_long(two_ids, inspect_only = TRUE,
+                         analyses = "none", verbose = FALSE)
+id_map$config[c("id", "id_generated", "sources", "alternatives")]
+stopifnot(isTRUE(id_map$config$id_generated))
+chosen_id <- mira_info_long(two_ids, id = "subject_id", inspect_only = TRUE,
+                            analyses = "none", verbose = FALSE)
+stopifnot(!chosen_id$config$id_generated,
+          identical(chosen_id$config$id, "subject_id"))
+```
+
+The same row-ID fallback occurs if the file has no semantically plausible ID
+column. Inspection confirms that the input is preserved, but the study team
+must still establish whether each row represents a different participant.
+
+```{r absent-id}
+without_id <- acuity[setdiff(names(acuity), "subject_id")]
+row_id_map <- mira_info_long(without_id, inspect_only = TRUE,
+                             analyses = "none", verbose = FALSE)
+stopifnot(isTRUE(row_id_map$config$id_generated),
+          !row_id_map$config$id %in% names(without_id),
+          identical(names(without_id), c("age", "sex", "bcva_t0",
+                                         "bcva_t1", "bcva_t2")))
+row_id_map$config[c("id", "id_generated")]
+```
+
+With `strict_id = TRUE`, an explicitly selected ID containing missing or
+duplicated values is an error. This protects the one-row-per-participant
+assumption. The following example checks the failure, then inspects what
+`strict_id = FALSE` permits without fitting a model.
+
+```{r duplicate-id}
+duplicate <- acuity
+duplicate$subject_id[2L] <- duplicate$subject_id[1L]
+duplicate_message <- tryCatch({
+  mira_info_long(duplicate, id = "subject_id", inspect_only = TRUE,
+                 analyses = "none", verbose = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(grepl("duplicate", duplicate_message, fixed = TRUE))
+cat(duplicate_message, "\n")
+permissive <- mira_info_long(
+  duplicate, id = "subject_id", strict_id = FALSE, inspect_only = TRUE,
+  analyses = "none", verbose = FALSE
+)
+permissive$diagnostics$warnings
+```
+
+Missing selected IDs are similarly rejected by the default. This verifies the
+error rather than allowing the analysis to silently replace a known ID.
+
+```{r missing-id}
+missing_id <- acuity
+missing_id$subject_id[1L] <- NA_character_
+missing_id_message <- tryCatch({
+  mira_info_long(missing_id, id = "subject_id", inspect_only = TRUE,
+                 analyses = "none", verbose = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(grepl("missing values", missing_id_message, fixed = TRUE))
+cat(missing_id_message, "\n")
+```
+
+The permissive inspection emits a visible warning. If subsequently analyzed,
+duplicate IDs are treated as the same participant by subject-indexed models,
+while row-based summaries retain those rows. Missing IDs also produce warnings
+and can remove information from subject-indexed methods. This setting is an
+explicit change in interpretation, not a duplicate-removal procedure. Resolve
+accidental duplicates or missing identifiers upstream whenever possible.
+In particular, duplicated person IDs from left/right-eye records are not
+made independent by this switch. The examples use one prespecified eye per
+person; bilateral studies need an analysis that models both dependency levels
+or a justified prespecified one-eye design, not a permissive-ID workaround.
+
+## Other detection decisions and troubleshooting
+
+`arm` can explicitly name a treatment column; otherwise MIRA considers
+arm-like names and plausible cardinality. Ambiguity leaves between-group work
+disabled. `reference_arm` explicitly fixes contrast orientation.
+`covariates = "auto"` (also the default `NULL`) considers eligible remaining
+numeric and low-cardinality categorical characteristics, but selects none if
+their combined fixed-effect cost exceeds `floor(nrow(data) / 10)`.
+Numeric variables with two to five observed distinct values are classified as
+categorical; constants and all-missing variables do not enter either type
+classification. `covariates = character(0)` explicitly requests no adjustment.
+The initial inspection selected `age` and `sex` because they satisfy these
+structural rules, not because they are justified adjustment variables. Automatic
+selection does not establish confounding control, prognostic relevance, or
+whether a variable was measured before treatment.
+Inspect `config$covariates`, the numeric/categorical classifications, and
+`diagnostics$warnings`; choose adjustment variables from the scientific plan
+in the [advanced-model tutorial](frequentist-long-advanced-models.html).
+
+| Observed problem | Investigation and remedy |
+|:--|:--|
+| No longitudinal outcome | Check `str(data)`, the suffix rules, and whether at least two numeric columns form a family; specify `time_vars` or a parser. |
+| Unexpected chronology | Inspect `detected_variables$longitudinal_map` and `config$time_vars`; reconcile visit units and duplicate numeric orders. |
+| Wrong participant column | Inspect `detected_variables$id_candidates`; set `id` and correct duplicate/missing values. |
+| Unexpected metrics | Inspect `config$outcome_names` and `attr(table, "mira_metric_names")`; resolve fields through that map. |
+| Incomplete configuration | Read `diagnostics$warnings` and `data_overview$column_profile`; do not infer success from silence or a printed table alone. |
+
+For reproducible scientific work, retain an inspection result and write explicit
+IDs, time mappings, outcome selection, treatment reference, and covariates in
+the final analysis script. Continue to
+[descriptive analysis](frequentist-long-descriptive-analysis.html) once those
+decisions agree with the study design.
+
+## Optional reference: nonstandard naming and chronology
+
+The preceding configuration path is sufficient for conventional study files.
+Continue to [descriptive analysis](frequentist-long-descriptive-analysis.html)
+if your selected columns and IDs are correct. The following reference is for
+analysts importing unusual names or resolving ambiguous visit order. It keeps
+the same retinal BCVA observations and changes their column names, rather
+than introducing another study or another statistical question.
+
+## Supply a custom regular expression
+
+Suppose an instrument exports columns named `bcva__at__visit0` and so on. A
+custom regular expression must place the outcome in its first capture group
+and the time label in its second. Extra internal parentheses should be avoided
+unless they follow those two required groups. Custom matching uses R's default
+case-sensitive, non-Perl `regexec()` behavior.
+
+```{r custom-regex}
+exported <- retina[c("participant_id", "bcva_baseline", "bcva_month3",
+                     "bcva_month6")]
+names(exported)[-1L] <- c("bcva__at__visit0", "bcva__at__visit3",
+                          "bcva__at__visit6")
+regex_map <- mira_info_long(
+  exported, id = "participant_id",
+  variable_pattern = "^(.+)__at__(visit[0-9]+)$",
+  inspect_only = TRUE, analyses = "none", verbose = FALSE
+)
+regex_map$detected_variables$longitudinal_map
+stopifnot(identical(regex_map$config$time_vars$bcva,
+                    names(exported)[-1L]))
+regex_fit <- mira_info_long(
+  exported, id = "participant_id",
+  variable_pattern = "^(.+)__at__(visit[0-9]+)$",
+  analyses = "none", verbose = FALSE
+)
+regex_change <- subset(regex_fit$change,
+                       from == "bcva__at__visit0" & to == "bcva__at__visit6")
+stopifnot(nrow(regex_change) == 1L,
+          isTRUE(all.equal(regex_change$mean_change,
+            mean(exported$bcva__at__visit6 - exported$bcva__at__visit0))))
+```
+
+This explicitly verified custom rule is distinct from MIRA's built-in suffix
+rules. It does not require renaming the original dataset.
+
+## Supply a parsing function for nonnumeric visit names
+
+For exports labelled `entry`, `interim`, and `endpoint`, a function can provide
+an explicit scientific chronology. Return `NULL` for unrelated columns and a
+list containing `outcome`, `time_label`, and numeric `time_order` for matches.
+Keep the function deterministic and free of side effects because it is called
+for column names during configuration.
+
+```{r custom-function}
+named_visits <- exported
+names(named_visits)[-1L] <- c("bcva__entry", "bcva__interim", "bcva__endpoint")
+parse_visit <- function(variable) {
+  visit_names <- c("bcva__entry", "bcva__interim", "bcva__endpoint")
+  at <- match(variable, visit_names)
+  if (is.na(at)) return(NULL)
+  list(outcome = "bcva",
+       time_label = c("Baseline", "Month 3", "Month 6")[[at]],
+       time_order = c(0, 3, 6)[[at]])
+}
+parser_map <- mira_info_long(
+  named_visits, id = "participant_id", variable_pattern = parse_visit,
+  inspect_only = TRUE, analyses = "none", verbose = FALSE
+)
+parser_map$config$time_labels$bcva
+stopifnot(identical(unname(parser_map$config$time_labels$bcva),
+                    c("Baseline", "Month 3", "Month 6")))
+parser_fit <- mira_info_long(
+  named_visits, id = "participant_id", variable_pattern = parse_visit,
+  analyses = "none", verbose = FALSE
+)
+stopifnot(identical(parser_fit$time_vars, names(named_visits)[-1L]),
+          identical(unname(parser_fit$time_labels),
+                    c("Baseline", "Month 3", "Month 6")))
+```
+
+## Resolve ambiguity rather than accepting an accidental order
+
+`bcva_t1` and `bcva_week1` have the same derived numeric order. They could be
+duplicate exports, different instruments, or distinct occasions with misleading
+names. Automatic detection rejects such an ambiguous outcome group. The next
+example deliberately verifies that error and prints its message; it does not
+hide an unexpected failure. After consulting the study definition and measurement dates, the analyst
+selects the intended three columns explicitly and excludes the duplicate export.
+
+```{r ambiguous-names}
+ambiguous <- acuity
+ambiguous$bcva_week1 <- ambiguous$bcva_t1
+ambiguity_message <- tryCatch({
+  mira_info_long(ambiguous, inspect_only = TRUE, analyses = "none",
+                 verbose = FALSE)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(!is.na(ambiguity_message),
+          grepl("No outcome with at least two numeric longitudinal columns",
+                ambiguity_message, fixed = TRUE))
+cat(ambiguity_message, "\n")
+resolved <- mira_info_long(
+  ambiguous, id = "subject_id", outcomes = "BCVA",
+  time_vars = c("bcva_t0", "bcva_t1", "bcva_t2"),
+  time_labels = c("Baseline", "Week 4", "Week 12"),
+  covariates = character(0), inspect_only = TRUE,
+  analyses = "none", verbose = FALSE
+)
+resolved$config$time_vars
+```
+
+For unparseable names with an intentional input order, provide both `time_vars`
+and unique nonempty `time_labels`. Explicit ordering is a scientific decision;
+record how it was established from the data dictionary.
+

@@ -35,6 +35,32 @@ development.
 
 These are implemented features. See [NEWS.md](NEWS.md) for the release inventory.
 
+## Frequentist longitudinal tutorials
+
+The [frequentist handbook](vignettes/MIRA.Rmd) provides a connected sequence:
+[getting started](vignettes/frequentist-long-getting-started.Rmd),
+[data preparation and detection](vignettes/frequentist-long-data-and-detection.Rmd),
+[descriptive analysis](vignettes/frequentist-long-descriptive-analysis.Rmd),
+[treatment groups](vignettes/frequentist-long-treatment-groups.Rmd),
+[missing data](vignettes/frequentist-long-missing-data.Rmd),
+[multiple outcomes](vignettes/frequentist-long-multiple-outcomes.Rmd),
+[a first longitudinal model](vignettes/frequentist-long-first-model.Rmd),
+[advanced models](vignettes/frequentist-long-advanced-models.Rmd),
+[reporting](vignettes/frequentist-long-reporting.Rmd), and a
+[complete research workflow](vignettes/frequentist-long-complete-workflow.Rmd).
+The index maps essential, applied and advanced reading routes using ophthalmic
+examples: BCVA in ETDRS letters, explicitly defined OCT central subfield
+thickness (CMT), and IOP in mmHg. Each study uses one prespecified study eye
+per participant. Synthetic data illustrate the installed public API; response
+bands and hypothetical strategy effects are not validated clinical criteria.
+Use `browseVignettes("MIRA")` after installing with vignettes built, or request
+`build_vignettes = TRUE` in `remotes::install_github()`.
+
+Routine vignette builds generate report sources without external rendering.
+Quarto and TeX are needed only for the explicitly requested rendering path.
+This collection documents frequentist methods; Bayesian tutorials will be
+developed separately.
+
 ## Installation
 
 MIRA requires R 4.2 or later. It is installed from GitHub and is not currently

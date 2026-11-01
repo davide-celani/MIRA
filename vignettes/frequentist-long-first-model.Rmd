@@ -1,0 +1,280 @@
+---
+title: "A first ophthalmic longitudinal model: BCVA in the study eye"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A first ophthalmic longitudinal model: BCVA in the study eye}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                      warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+## From a paired change to a repeated-response model
+
+This article is for a reader who can already distinguish a visit mean from a
+paired change in the [first analysis](frequentist-long-getting-started.html).
+Some familiarity with the idea of regression is helpful. The new question is:
+**how can we estimate mean change while describing the dependence between
+several responses from the same participant?** We first study one outcome,
+one population, and three visits. Groups and adjustment come later.
+
+A paired t analysis models the distribution of one difference per person. A
+repeated-response model instead models the original score at each visit. Its
+mean structure describes differences between visit means, and its covariance
+structure describes how values from the same person move together. These are
+separate modeling choices. An ordinary regression treating every measurement
+as independent would ignore the participant grouping.
+
+The target is mean **Month 6 minus Baseline best-corrected visual acuity
+(BCVA)**, measured as ETDRS letter score, in adults receiving follow-up for
+diabetic macular edema (DME). More letters mean better measured acuity. Positive
+change describes a visual-acuity gain; without a comparator it does not identify
+a treatment effect. This tutorial is not a treatment recommendation or a
+model-selection rule for every retinal study.
+
+## A new study, large enough for the demonstration
+
+The entry dataset is useful for hand calculation. We now generate a different
+synthetic DME cohort of 80 adults, each with one protocol-designated eligible
+study eye and measurements at baseline, Month 3 and Month 6. Both eyes are
+assumed eligible in this synthetic population; the protocol randomly designates
+one right or left eye before any response is generated. The fellow eye is excluded.
+`eye_map` retains the one-to-one patient/eye mapping. Independent sampling units
+are people; one study eye per person makes the number of independent eyes equal
+to the number of people. A study using both eyes would need an additional
+correlation structure, not `strict_id = FALSE`.
+
+The illustrative population letter-score means are 57, 61 and 65. A shared
+patient deviation (SD 7.5 letters) induces repeated-measure correlation; separate
+measurement errors have SD 3.2 letters. We round to whole letter counts, then
+check that this seeded sample lies in a plausible interior teaching window.
+No value is clipped or replaced. The Gaussian mixed model is a working
+approximation to these discrete scores, not a claim that all acuity data are
+unbounded Gaussian measurements. These generating values are invented for
+teaching, not calibrated treatment effects.
+
+```{r first-model-data}
+library(MIRA)
+set.seed(731017)
+n <- 80L
+eye_map <- data.frame(
+  participant_id = sprintf("DM%03d", seq_len(n)),
+  study_eye = sample(c("R", "L"), n, replace = TRUE)
+)
+eye_map$study_eye_id <- paste(eye_map$participant_id, eye_map$study_eye, sep = "_")
+retina_complete <- data.frame(study_eye_id = eye_map$study_eye_id)
+participant_deviation <- rnorm(n, 0, 7.5)
+retina_complete$bcva_t0 <- round(57 + participant_deviation + rnorm(n, 0, 3.2))
+retina_complete$bcva_t3 <- round(61 + participant_deviation + rnorm(n, 0, 3.2))
+retina_complete$bcva_t6 <- round(65 + participant_deviation + rnorm(n, 0, 3.2))
+visits <- c("bcva_t0", "bcva_t3", "bcva_t6")
+labels <- c("Baseline", "Month 3", "Month 6")
+stopifnot(!anyDuplicated(eye_map$participant_id),
+  !anyDuplicated(eye_map$study_eye_id),
+  identical(retina_complete$study_eye_id, eye_map$study_eye_id),
+  all(is.finite(as.matrix(retina_complete[visits]))),
+  all(as.matrix(retina_complete[visits]) > 10 & as.matrix(retina_complete[visits]) < 95))
+head(retina_complete)
+```
+
+We retain the familiar wide input: one row per participant. The 80 people
+contribute 240 measurements. The labels identify visits; they do not supply
+individual elapsed times to MIRA. The primary model treats visit as a factor,
+so it estimates a separate population mean for each occasion rather than
+forcing change to be linear in months.
+
+## Make one model request and inspect the primary fit
+
+The change from a descriptive call is `analyses = "model"`. This requests
+MIRA's implemented model bundle; there is no public selector that fits only
+the random-intercept model. Our learning sequence reads one component first,
+without pretending that the computation excludes the other modules.
+`covariates = character(0)` states that this demonstration has no adjustment.
+Supplying `analyses` overrides the optional logical switches. The five-letter
+`stable_threshold` only illustrates an observed-change classification band;
+it is not a validated minimal clinically important difference (MCID), treatment
+success rule or measurement-error model.
+
+```{r first-model-fit}
+analysis <- mira_info_long(
+  retina_complete, id = "study_eye_id", time_vars = visits,
+  time_labels = labels, outcomes = "bcva",
+  covariates = character(0), analyses = "model",
+  improvement_direction = "higher", stable_threshold = 5,
+  alpha = 0.05, p_adjust_method = "holm", verbose = FALSE
+)
+analysis$model[c("converged", "singular", "warnings", "error")]
+stopifnot(!is.null(analysis$model$fitted_model))
+primary <- analysis$model$fitted_model
+formula(primary)
+```
+
+The printed formula is `value ~ time_factor + (1 | patient_factor)`.
+`value` is the study-eye BCVA letter score, including baseline as a response. The fixed
+visit term describes population means. The random intercept allows each
+participant to be consistently above or below those means. In notation,
+`BCVA(i, j) = visit_mean(j) + participant_deviation(i) + error(i, j)`.
+The participant deviations are assumed independent across people, normally
+distributed with mean zero, and independent of the normally distributed
+errors. The residual variance is constant in this primary specification.
+
+Two measurements from one person share the random intercept. Under this
+model their covariance is the participant-intercept variance, while each
+measurement's variance also includes residual variance. This accounts for
+dependence without treating a participant-specific deviation as an observed
+covariate or an individual treatment effect. The primary model is fitted by
+REML; the global nested-model likelihood tests stored elsewhere use ML.
+
+`converged` concerns optimization and `singular` concerns unsupported random
+variation. Neither establishes suitable residuals, correct missingness
+assumptions, or scientific adequacy. If no fit is available, stop the
+interpretation and inspect `error`, rather than filling in an estimate.
+
+## Which observations were actually used?
+
+Read the model frame rather than assuming that every input row contributed.
+The assertions below independently construct expected participant-by-visit
+keys from the wide table. They verify identities as well as the count.
+
+```{r first-model-sample}
+frame <- model.frame(primary)
+used_keys <- paste(as.character(frame$patient_factor),
+                   as.character(frame$time_factor), sep = "::")
+expected_keys <- unlist(lapply(seq_along(visits), function(k) {
+  observed <- is.finite(retina_complete[[visits[[k]]]])
+  paste(retina_complete$study_eye_id[observed], labels[[k]], sep = "::")
+}), use.names = FALSE)
+stopifnot(!anyDuplicated(used_keys), setequal(used_keys, expected_keys))
+sample_audit <- data.frame(participants = length(unique(frame$patient_factor)),
+                          measurements = nrow(frame),
+                          complete_profiles = sum(complete.cases(retina_complete[visits])))
+knitr::kable(sample_audit, row.names = FALSE,
+             caption = "Primary model sample: people and measurements are different units.")
+```
+
+All 80 participants have all three values in this particular dataset. With
+incomplete response histories, eligible finite measurements can contribute
+under the model's assumptions; a missing required predictor can exclude a
+person's measurements. A mixed model does not impute missing values. The
+[missing-data article](frequentist-long-missing-data.html) distinguishes
+availability, complete profiles, MAR, and MCAR before such a model is applied.
+
+## Read one mean difference
+
+The `emmeans` component turns the fitted model into model-based means and
+contrasts. We select the named final-minus-baseline contrast. MIRA-owned
+numeric columns can be outcome-prefixed; the table's `mira_metric_names`
+attribute tells us their actual names. The following visible helper creates a
+display copy and also works for unprefixed structural keys.
+
+```{r first-model-contrast}
+metric_table <- function(x, columns) {
+  mapping <- attr(x, "mira_metric_names")
+  actual <- columns
+  mapped <- columns %in% names(mapping)
+  actual[mapped] <- unname(mapping[columns[mapped]])
+  stopifnot(all(actual %in% names(x)))
+  answer <- x[, actual, drop = FALSE]
+  names(answer) <- columns
+  answer
+}
+emmeans_result <- analysis$advanced_tests$emmeans
+stopifnot(isTRUE(emmeans_result$performed),
+          is.data.frame(emmeans_result$baseline_final$tidy))
+endpoint <- metric_table(emmeans_result$baseline_final$tidy,
+  c("contrast", "estimate", "lower.CL", "upper.CL", "p_raw", "p_primary"))
+endpoint <- endpoint[endpoint$contrast == "final - baseline", , drop = FALSE]
+stopifnot(nrow(endpoint) == 1L,
+          all(is.finite(unlist(endpoint[c("estimate", "lower.CL", "upper.CL")]))))
+display <- endpoint[c("contrast", "estimate", "lower.CL", "upper.CL", "p_primary")]
+display$p_primary <- format.pval(display$p_primary, digits = 3, eps = 0.001)
+knitr::kable(display, digits = 2, row.names = FALSE,
+  caption = "Month 6 minus Baseline BCVA in ETDRS letters: model-based mean change and pointwise 95% interval.")
+```
+
+The estimated mean difference is `r sprintf("%.2f", endpoint$estimate)` ETDRS letters,
+with a 95% pointwise interval from `r sprintf("%.2f", endpoint$lower.CL)` to
+`r sprintf("%.2f", endpoint$upper.CL)`. Positive values mean higher scores at
+Month 6. The interval quantifies uncertainty about a population mean
+difference, rather than the range of individual changes. A 95% confidence
+procedure covers the fixed target in 95% of repeated samples under its
+assumptions; it does not assign a 95% frequentist probability that the fixed
+target lies inside this particular interval.
+
+The p-value tests zero mean difference under the fitted model. It is not the
+probability that the null hypothesis is true or a measure of clinical
+importance. This `baseline_final` family contains one comparison, so Holm
+leaves its p-value unchanged. It does not adjust across the other families
+that the bundle also computes. A plan choosing one primary contrast should
+state that choice before inspecting results.
+
+For this balanced, complete, unadjusted design, the fitted mean difference
+equals the mean of the raw paired differences. Verify the estimate from the
+wide data rather than by reading another model field. Agreement of estimates
+does not imply equal standard errors for every covariance specification.
+
+```{r first-model-oracle}
+raw_change <- retina_complete$bcva_t6 - retina_complete$bcva_t0
+stopifnot(isTRUE(all.equal(endpoint$estimate, mean(raw_change), tolerance = 1e-8)),
+          isTRUE(all.equal(endpoint$p_raw, endpoint$p_primary)))
+knitr::kable(data.frame(raw_paired_mean = mean(raw_change),
+                       model_mean_difference = endpoint$estimate),
+             digits = 2, row.names = FALSE,
+             caption = "An independent estimate check from the original paired scores.")
+```
+
+## Check the model, retain the result, then extend the question
+
+Residual checks ask whether the covariance and distributional assumptions are
+plausible. They complement the computational flags. Here the data were
+generated with a random intercept and constant Gaussian residual variation;
+real data may require a different scientific strategy.
+
+```{r first-model-residuals, fig.cap="Conditional residuals from 80 participants and 240 measurements, in ETDRS letters. These diagnostics describe the primary model; they are not confidence intervals or individual predictions."}
+local({
+  previous <- par(mfrow = c(1, 2))
+  on.exit(par(previous))
+  residual <- residuals(primary)
+  plot(fitted(primary), residual,
+       xlab = "Fitted study-eye BCVA (ETDRS letters)", ylab = "Conditional residual (letters)")
+  abline(h = 0, lty = 2)
+  qqnorm(residual, main = "Conditional residuals")
+  qqline(residual)
+})
+```
+
+Save the already interpreted result; the report reuses it without refitting.
+The temporary directory is suitable for a reproducible tutorial. A real
+project should choose a controlled archive location and retain the data,
+protocol, software versions, and source code with appropriate access controls.
+
+```{r first-model-save}
+saved_result <- tempfile(fileext = ".rds")
+saveRDS(analysis, saved_result)
+bundle <- mira_report_freq_long(x = analysis,
+  output_dir = tempfile("mira-first-bcva-model-"), format = "html",
+  render = FALSE, open = FALSE)
+stopifnot(file.exists(saved_result), file.exists(bundle$results_manifest),
+          !any(bundle$rendered))
+```
+
+The source-only bundle is an archive, not a finished HTML report. Detailed
+export and rendering contracts are in the
+[reporting article](frequentist-long-reporting.html). The next
+[model article](frequentist-long-advanced-models.html) introduces a new
+two-arm dataset with scientific adjustment, contrasts between changes,
+alternative covariance structures, and partially usable module results.
+That is a new question and configuration, rather than another reading of
+these same 80 participants. The engine authors explain the
+[mixed-model formula](https://lme4.github.io/lme4/reference/lmer.html) and
+[model-based marginal means](https://rvlenth.github.io/emmeans/articles/basics.html)
+in more depth.
+
+
+The [DRCR Retina Network visual-acuity measurement protocol](https://public.jaeb.org/drcrnet/stdy/149)
+provides the ophthalmic measurement context. Our simulated means, variability,
+follow-up schedule and five-letter teaching band are independent design choices,
+not results or eligibility rules copied from that protocol.

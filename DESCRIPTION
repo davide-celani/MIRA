@@ -30,8 +30,10 @@ Suggests:
     withr,
     yaml,
     pdftools,
+    rmarkdown,
     loo,
     posterior
+VignetteBuilder: knitr, rmarkdown
 Config/testthat/edition: 3
 Imports:
     afex,

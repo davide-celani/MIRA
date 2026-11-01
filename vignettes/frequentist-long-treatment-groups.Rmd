@@ -1,0 +1,451 @@
+---
+title: "Treatment groups: IOP differences, changes, and multiplicity"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Treatment groups: IOP differences, changes, and multiplicity}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                     warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+The code below runs in a new R session with MIRA installed. The small
+helper reads the metric-name map preserved on MIRA tables; keep its definition
+when copying the later extraction examples.
+
+```{r reader-tools}
+library(MIRA)
+metric_columns <- function(table, bases) {
+  mapping <- attr(table, "mira_metric_names")
+  actual <- bases
+  mapped <- bases %in% names(mapping)
+  actual[mapped] <- unname(mapping[bases[mapped]])
+  stopifnot(all(actual %in% names(table)))
+  actual
+}
+display_metrics <- function(table, fields, p_fields = character(0)) {
+  display <- table[, metric_columns(table, fields), drop = FALSE]
+  for (column in metric_columns(table, p_fields)) {
+    display[[column]] <- format.pval(display[[column]], digits = 3,
+                                   eps = 0.001)
+  }
+  display
+}
+```
+
+## Scientific question and study design
+
+This applied article assumes you can read a visit mean and a paired change
+from [Getting started](frequentist-long-getting-started.html). It introduces
+a group comparison while keeping the same follow-up-minus-baseline subtraction.
+You will inspect estimates, intervals, denominators, and separate testing
+families; the examples do not constitute a study-specific analysis plan.
+
+Consider a synthetic glaucoma management study with intraocular pressure
+(IOP) measured in mmHg. We compare two hypothetical pressure-lowering
+strategies, A and B, at baseline, week 6 and week 12. These labels specify
+simulated strategies, not medicines, doses or recommended treatment regimens.
+The [National Eye Institute](https://www.nei.nih.gov/eye-health-information/eye-conditions-and-diseases/glaucoma/glaucoma-and-eye-pressure)
+explains why pressure control matters in glaucoma, while emphasizing that
+pressure tolerance differs between people. We do not specify a universal
+target pressure or infer visual-field preservation from an IOP change.
+
+Each of the 96 adults contributes one prespecified study eye. Its laterality
+is assigned before the response values are generated, independently of
+follow-up, and the fellow eye is not analyzed. The participant ID therefore
+indexes independent people and their one selected eye. A real protocol must
+define selection before inspecting outcomes. Treating both eyes as independent
+or setting `strict_id = FALSE` would not solve bilateral correlation.
+
+A visit-specific difference compares observed group pressures at that visit.
+A difference in change compares follow-up-minus-baseline pressure changes.
+A global time-by-strategy interaction concerns all modeled visits. Separate
+within-group significance tests do not establish a between-group difference.
+
+The simulation allocates 48 adults to each strategy. Shared participant
+variation and visit-specific measurement noise induce imperfect repeated
+measurements. Strategy B is assigned a larger average reduction by construction.
+All readings represent a fictional standardized tonometry schedule and one
+measurement protocol; the simulation is not calibrated to a glaucoma treatment trial.
+
+```{r two-arm-data}
+set.seed(441021)
+n <- 96L
+allocation <- sample(rep(c("Strategy A", "Strategy B"), each = n / 2L))
+selected_eye <- sample(c("Right", "Left"), n, replace = TRUE)
+strategy_b <- allocation == "Strategy B"
+person_pressure <- rnorm(n, 0, 2.6)
+glaucoma <- data.frame(
+  participant_id = sprintf("G%03d", seq_len(n)),
+  study_eye = selected_eye,
+  treatment_arm = allocation,
+  iop_t0 = 26.5 + person_pressure + rnorm(n, 0, 1.1),
+  iop_t1 = 24.5 + person_pressure - 1.0 * strategy_b + rnorm(n, 0, 1.3),
+  iop_t2 = 23.5 + person_pressure - 2.2 * strategy_b + rnorm(n, 0, 1.5)
+)
+stopifnot(!anyDuplicated(glaucoma$participant_id),
+          !anyNA(glaucoma$participant_id),
+          all(is.finite(as.matrix(glaucoma[c("iop_t0", "iop_t1", "iop_t2")]))),
+          all(as.matrix(glaucoma[c("iop_t0", "iop_t1", "iop_t2")]) > 0))
+table(glaucoma$treatment_arm)
+head(glaucoma, 4)
+```
+
+## Specify the groups and reference explicitly
+
+The first ordered visit is baseline. Explicit source variables and labels
+make that decision auditable. `reference_arm` sets the first group in the
+comparison and model order; it does not adjust for baseline. With
+`analyses = NULL`, the individual module switches below apply. Turning off
+models keeps the initial comparison lightweight. Core paired changes and
+the complete-profile Friedman branch still run.
+
+```{r two-arm-analysis}
+group_fit <- mira_info_long(
+  glaucoma, id = "participant_id", outcomes = "iop",
+  time_vars = c("iop_t0", "iop_t1", "iop_t2"),
+  time_labels = c("Baseline", "Week 6", "Week 12"),
+  arm = "treatment_arm", reference_arm = "Strategy A",
+  covariates = character(0), arm_tests = TRUE,
+  alpha = 0.05, p_adjust_method = "holm",
+  improvement_direction = "lower", stable_threshold = 1,
+  plots = TRUE, model = FALSE, outliers = FALSE, correlations = FALSE,
+  verbose = FALSE
+)
+stopifnot(inherits(group_fit, "mira_info_long"),
+          isTRUE(group_fit$arm_analysis$enabled),
+          identical(group_fit$arm_analysis$levels[[1L]], "Strategy A"))
+group_fit$settings[c("reference_arm", "confidence_level", "p_adjust_method")]
+```
+
+`alpha = 0.05` requests 95% confidence intervals; it does not define clinical
+response. Here `stable_threshold = 1` calls observed changes within the closed
+interval [-1, 1] mmHg stable. This is a teaching rule, not a validated minimum
+important difference, measurement-repeatability limit or target-pressure rule.
+With `improvement_direction = "lower"`, the software calls larger reductions
+"Improved" in this pressure-lowering context. This label does not establish
+that every lower pressure is safe or that glaucoma progression was prevented.
+Neither setting removes observations.
+
+Declaring `outcomes = "iop"` prefixes metric names with `iop_`, while
+structural fields such as `arm`, `n`, and `time_label` retain their names.
+The helper above resolves each table's documented `mira_metric_names`
+attribute instead of guessing its metric column spelling.
+
+## Start with estimates and uncertainty
+
+Group-specific means and intervals describe IOP among study eyes of participants
+observed at each visit. These intervals concern a group mean, not the spread
+of individual observations or an individual's prognosis.
+
+```{r arm-descriptives}
+arm_desc <- group_fit$arm_analysis$descriptives
+knitr::kable(arm_desc[, metric_columns(arm_desc, c(
+  "arm", "time_label", "n", "mean", "sd", "ci_lower", "ci_upper"
+))], digits = 2, col.names = c("Arm", "Visit", "n", "Mean", "SD", "Lower", "Upper"),
+caption = "IOP (mmHg) by assigned strategy and visit, with pointwise 95% mean intervals.")
+```
+
+Participants with an unavailable group do not enter these group summaries;
+each visit otherwise uses its finite pressure values. Within-group changes require
+both baseline and that follow-up for the same participant. This complete
+teaching dataset has 48 participants per group at every visit and in each
+change comparison. In incomplete data, those denominators can differ even
+within one group.
+
+Within-group baseline changes describe a different quantity. Positive
+follow-up-minus-baseline values mean increased IOP; negative values mean
+reduced IOP in mmHg. A group-specific interval describes that group's mean change.
+Comparing whether two such intervals separately exclude zero is not a valid
+test of the difference between groups.
+
+```{r arm-changes}
+arm_change <- group_fit$arm_analysis$change_descriptives
+knitr::kable(arm_change[, metric_columns(arm_change, c(
+  "arm", "to_label", "n", "mean_change", "ci_lower", "ci_upper"
+))], digits = 2, col.names = c("Arm", "Visit", "n", "Change", "Lower", "Upper"),
+caption = "Paired IOP change (mmHg) from baseline within each strategy.")
+knitr::kable(arm_change[, metric_columns(arm_change, c(
+  "arm", "to_label", "improved_n", "stable_n", "worsened_n"
+))], col.names = c("Arm", "Visit", "Improved", "Stable", "Worsened"),
+caption = "Software change categories under the illustrative 1-mmHg threshold; these are not clinical target achievements.")
+```
+
+## Distinguish visit differences from differences in change
+
+The tables use `arm_b - arm_a`. A negative Strategy-B-minus-Strategy-A
+difference denotes lower pressure under B in this simulated context. Welch tests allow
+unequal variances and assume independent participants between groups.
+Their confidence intervals are pointwise, not simultaneous intervals
+adjusted to match the multiplicity-adjusted p-values. Hedges' g is a
+small-sample-corrected standardized difference using pooled variability;
+it complements the original mmHg estimate.
+
+```{r between-arm-results}
+at_visit <- group_fit$arm_analysis$time_pairwise
+in_change <- group_fit$arm_analysis$change_pairwise
+knitr::kable(at_visit[, metric_columns(at_visit, c(
+  "time_label", "n_a", "n_b", "mean_difference_b_minus_a",
+  "ci_lower", "ci_upper", "hedges_g"
+))], digits = 3,
+col.names = c("Visit", "n (A)", "n (B)", "Difference", "Lower", "Upper", "g"),
+caption = "Visit IOP differences (mmHg): Strategy B minus Strategy A.")
+knitr::kable(display_metrics(at_visit, c(
+  "time_label", "welch_t_p", "welch_t_p_adj", "wilcoxon_p_adj"
+), p_fields = c("welch_t_p", "welch_t_p_adj", "wilcoxon_p_adj")),
+col.names = c("Visit", "Welch p", "Holm Welch p", "Holm rank p"),
+caption = "Visit-specific inference; Welch and rank tests have separate adjustment families.")
+knitr::kable(display_metrics(in_change, c(
+  "to_label", "n_a", "n_b", "difference_in_change_b_minus_a",
+  "ci_lower", "ci_upper", "welch_t_p_adj"
+), p_fields = "welch_t_p_adj"), digits = 3,
+col.names = c("Visit", "n (A)", "n (B)", "Difference", "Lower", "Upper", "Holm p"),
+caption = "Differences in baseline IOP change (mmHg): Strategy B minus Strategy A.")
+```
+
+Display copies format small p-values as `<0.001`; the numeric values in the
+analysis object remain available for calculation. To verify the direction and
+interval independently, select the final visit and the named group pair,
+then reconstruct its means and Welch interval from the original values,
+sample variances, Welch degrees of freedom and t quantile. This uses no MIRA
+helper or t-test result field and confirms the contributing participant counts.
+It does not validate the scientific design or extend inference beyond its
+sampling and variance assumptions.
+
+```{r verify-final-contrasts}
+final_visit <- at_visit[at_visit$time == "iop_t2" &
+  at_visit$arm_a == "Strategy A" & at_visit$arm_b == "Strategy B", ,
+  drop = FALSE]
+final_change <- in_change[in_change$from == "iop_t0" & in_change$to == "iop_t2" &
+  in_change$arm_a == "Strategy A" & in_change$arm_b == "Strategy B", ,
+  drop = FALSE]
+group_a <- glaucoma$iop_t2[glaucoma$treatment_arm == "Strategy A"]
+group_b <- glaucoma$iop_t2[glaucoma$treatment_arm == "Strategy B"]
+delta <- glaucoma$iop_t2 - glaucoma$iop_t0
+change_a <- delta[glaucoma$treatment_arm == "Strategy A"]
+change_b <- delta[glaucoma$treatment_arm == "Strategy B"]
+welch_interval <- function(b, a) {
+  variance_b <- var(b) / length(b)
+  variance_a <- var(a) / length(a)
+  degrees_freedom <- (variance_a + variance_b)^2 /
+    (variance_a^2 / (length(a) - 1) + variance_b^2 / (length(b) - 1))
+  mean(b) - mean(a) + c(-1, 1) * qt(0.975, degrees_freedom) *
+    sqrt(variance_a + variance_b)
+}
+welch_visit_ci <- welch_interval(group_b, group_a)
+welch_change_ci <- welch_interval(change_b, change_a)
+stopifnot(nrow(final_visit) == 1L, nrow(final_change) == 1L,
+  final_visit$n_a == length(group_a), final_visit$n_b == length(group_b),
+  final_change$n_a == length(change_a),
+  final_change$n_b == length(change_b),
+  isTRUE(all.equal(final_visit[[metric_columns(final_visit,
+    "mean_difference_b_minus_a")]], mean(group_b) - mean(group_a))),
+  isTRUE(all.equal(unname(unlist(final_visit[, metric_columns(final_visit,
+    c("ci_lower", "ci_upper")), drop = FALSE])),
+    welch_visit_ci)),
+  isTRUE(all.equal(final_change[[metric_columns(final_change,
+    "difference_in_change_b_minus_a")]],
+    mean(change_b) - mean(change_a))),
+  isTRUE(all.equal(unname(unlist(final_change[, metric_columns(final_change,
+    c("ci_lower", "ci_upper")), drop = FALSE])),
+    welch_change_ci)))
+```
+
+MIRA also returns omnibus Welch and Kruskal--Wallis tests at each visit
+(`time_omnibus`) and for each baseline change (`change_omnibus`), and
+asymptotic unpaired Wilcoxon tests in the pairwise tables. Rank-based tests
+concern distributional/rank differences; without additional assumptions,
+they are not simply tests of means or medians. Selecting the smallest
+p-value across methods after seeing results is not a defensible plan.
+
+`baseline_balance` is the first-visit subset of the pairwise comparisons.
+In a randomized study, baseline p-values do not diagnose the success of
+randomization or select adjustment variables. Inspect estimated imbalances
+and report the allocation process. In an observational study, balance on
+measured variables does not rule out confounding.
+
+```{r baseline-balance}
+balance <- group_fit$arm_analysis$baseline_balance
+knitr::kable(balance[, metric_columns(balance, c(
+  "time_label", "mean_difference_b_minus_a", "ci_lower", "ci_upper"
+))], digits = 2, col.names = c("Visit", "Difference", "Lower", "Upper"),
+caption = "Exploratory baseline IOP difference (mmHg): Strategy B minus Strategy A.")
+```
+
+## Understand the adjustment family
+
+Holm's method controls family-wise error under arbitrary dependence. MIRA
+adjusts the finite Welch p-values across all visit-by-pair rows in
+`time_pairwise` as one family. Change comparisons form a separate family.
+The Wilcoxon families, omnibus families, and missingness tests are also
+separate: visit-specific Welch omnibus p-values form one family, visit-specific
+Kruskal--Wallis p-values another, and each has a separate IOP-change family.
+The missingness family spans visits. The core all-participant paired t and
+signed-rank comparisons each have their own visit-pair family; Friedman
+post-hoc and model contrasts add further families documented in the advanced
+tutorial. No correction across this entire collection is implied. This
+verification reproduces the adjustment from the stored raw values.
+
+```{r verify-adjustment}
+raw_p <- at_visit[[metric_columns(at_visit, "welch_t_p")]]
+adjusted_p <- at_visit[[metric_columns(at_visit, "welch_t_p_adj")]]
+finite <- is.finite(raw_p)
+stopifnot(isTRUE(all.equal(adjusted_p[finite],
+                          p.adjust(raw_p[finite], method = "holm"))))
+```
+
+Bonferroni also controls family-wise error, but its rule differs from Holm.
+Benjamini--Hochberg (`"BH"`) targets the false discovery rate under independence
+or appropriate positive dependence of true-null p-values;
+Benjamini--Yekutieli (`"BY"`) permits arbitrary dependence, provided the
+individual null p-values are valid, at a cost in power. Prespecify the scientific family and error
+criterion. `p_adjust_method = "none"` does not address multiplicity. An
+adjusted p-value is neither an effect size nor the probability a null
+hypothesis is true.
+
+```{r arm-plots, fig.cap="Observed IOP means (mmHg) and pointwise 95% mean confidence intervals for one study eye from each of 48 adults per strategy at baseline, week 6 and week 12. Symbols and line types distinguish strategies without color. These intervals do not quantify uncertainty in the difference between strategies."}
+stopifnot(inherits(group_fit$plots$arm_mean_ci, "ggplot"))
+print(group_fit$plots$arm_mean_ci + ggplot2::labs(x = "Scheduled visit", y = "IOP (mmHg)"))
+```
+
+`arm_change_ci` visualizes group-specific changes and `arm_difference_ci`
+visualizes between-strategy IOP differences when available. Inspect
+`names(group_fit$plots)` for the plots actually created.
+
+## Predict the sign after changing the reference
+
+Before running the code, predict what changes when Strategy B becomes
+the reference. The underlying people, visits, and IOP values stay fixed.
+The same comparison is now Strategy-A-minus-Strategy-B: its estimate
+changes sign and its interval endpoints reverse; the two-sided p-value
+does not change. This is an orientation check, not a new scientific analysis.
+
+```{r reference-checkpoint}
+reversed_fit <- mira_info_long(
+  glaucoma, id = "participant_id", outcomes = "iop",
+  time_vars = group_fit$time_vars, time_labels = group_fit$time_labels,
+  arm = "treatment_arm", reference_arm = "Strategy B",
+  covariates = character(0), arm_tests = TRUE,
+  alpha = 0.05, p_adjust_method = "holm",
+  improvement_direction = "lower", stable_threshold = 1,
+  plots = TRUE, model = FALSE, outliers = FALSE, correlations = FALSE,
+  verbose = FALSE
+)
+reversed_table <- reversed_fit$arm_analysis$change_pairwise
+reversed_endpoint <- reversed_table[
+  reversed_table$from == "iop_t0" & reversed_table$to == "iop_t2" &
+  reversed_table$arm_a == "Strategy B" &
+  reversed_table$arm_b == "Strategy A", , drop = FALSE]
+estimate_field <- metric_columns(final_change, "difference_in_change_b_minus_a")
+reverse_field <- metric_columns(reversed_endpoint, "difference_in_change_b_minus_a")
+stopifnot(nrow(reversed_endpoint) == 1L,
+  isTRUE(all.equal(final_change[[estimate_field]], -reversed_endpoint[[reverse_field]])),
+  isTRUE(all.equal(final_change[[metric_columns(final_change, "welch_t_p")]],
+    reversed_endpoint[[metric_columns(reversed_endpoint, "welch_t_p")]])),
+  isTRUE(all.equal(final_change[[metric_columns(final_change, "ci_lower")]],
+    -reversed_endpoint[[metric_columns(reversed_endpoint, "ci_upper")]])),
+  isTRUE(all.equal(final_change[[metric_columns(final_change, "ci_upper")]],
+    -reversed_endpoint[[metric_columns(reversed_endpoint, "ci_lower")]])))
+orientation <- data.frame(
+  subtraction = c("Strategy B - Strategy A", "Strategy A - Strategy B"),
+  difference_in_change = c(final_change[[estimate_field]], reversed_endpoint[[reverse_field]])
+)
+knitr::kable(orientation, digits = 3,
+  caption = "The same final IOP-change comparison (mmHg) in the two reference orientations.")
+```
+
+## Extend to three groups
+
+We now generate a separate cohort with 108 adults and three hypothetical
+pressure-lowering strategies. Each contributes one prespecified eye. Units,
+three-visit schedule and later-minus-baseline subtraction are retained; the
+new feature is a third strategy and therefore three group pairs per visit.
+These are not additional measurements from the original 96 people.
+
+```{r multi-arm-study}
+set.seed(441022)
+n3 <- 108L
+arm3 <- sample(rep(c("Strategy A", "Strategy B", "Strategy C"), each = n3 / 3L))
+eye3 <- sample(c("Right", "Left"), n3, replace = TRUE)
+subject3 <- rnorm(n3, 0, 2.8)
+extra_reduction <- c("Strategy A" = 0, "Strategy B" = 2.4, "Strategy C" = 1.3)[arm3]
+glaucoma_three <- data.frame(
+  participant_id = sprintf("H%03d", seq_len(n3)), study_eye = eye3, arm = arm3,
+  iop_t0 = 27 + subject3 + rnorm(n3, 0, 1.2),
+  iop_t1 = 24.8 + subject3 - extra_reduction / 2 + rnorm(n3, 0, 1.4),
+  iop_t2 = 23.8 + subject3 - extra_reduction + rnorm(n3, 0, 1.5)
+)
+stopifnot(!anyDuplicated(glaucoma_three$participant_id),
+  all(as.matrix(glaucoma_three[c("iop_t0", "iop_t1", "iop_t2")]) > 0))
+three_fit <- mira_info_long(
+  glaucoma_three, id = "participant_id", outcomes = "iop", arm = "arm",
+  time_vars = c("iop_t0", "iop_t1", "iop_t2"),
+  time_labels = c("Baseline", "Week 6", "Week 12"),
+  reference_arm = "Strategy A", covariates = character(0),
+  analyses = "arm_tests", improvement_direction = "lower",
+  stable_threshold = 1, p_adjust_method = "holm", verbose = FALSE
+)
+omnibus <- three_fit$arm_analysis$time_omnibus
+knitr::kable(display_metrics(omnibus, c(
+  "time_label", "n", "n_arms", "welch_anova_p", "welch_anova_p_adj",
+  "kruskal_p", "kruskal_p_adj"
+), p_fields = c("welch_anova_p", "welch_anova_p_adj", "kruskal_p", "kruskal_p_adj")),
+row.names = FALSE,
+col.names = c("Visit", "n", "Strategies", "Welch p", "Holm Welch p", "Rank p", "Holm rank p"),
+caption = "Three-strategy IOP omnibus comparisons at each visit.")
+stopifnot(nrow(three_fit$arm_analysis$time_pairwise) == 3L * choose(3L, 2L))
+```
+
+With more than two groups, the reference is first in the level order but
+comparisons also include pairs that do not contain the reference. Retain both
+group names when selecting or displaying any comparison. At the final visit,
+the sign of each estimate follows the printed `Arm B - Arm A` ordering.
+
+```{r three-arm-pairs}
+three_pairs <- three_fit$arm_analysis$time_pairwise
+final_pairs <- three_pairs[three_pairs$time == "iop_t2", , drop = FALSE]
+knitr::kable(display_metrics(final_pairs, c(
+  "arm_a", "arm_b", "n_a", "n_b", "mean_difference_b_minus_a",
+  "ci_lower", "ci_upper", "welch_t_p_adj"
+), p_fields = "welch_t_p_adj"), digits = 2, row.names = FALSE,
+col.names = c("Arm A", "Arm B", "n A", "n B", "B - A", "Lower", "Upper", "Holm p"),
+caption = "Final-visit IOP differences (mmHg) and pointwise 95% intervals; Holm adjusts all nine visit-by-pair tests.")
+```
+
+The Welch omnibus hypothesis asks whether all group mean pressures are equal at a
+visit. It does not identify which groups differ. The pairwise tables answer
+those separate questions with their own adjustment family. The same
+interpretation boundaries apply to change-score tests.
+
+`analyses` replaces all five module switches when supplied: omitting
+`"arm_tests"` disables between-arm work even when an arm is resolved. The
+arm can still be carried in trajectories and long-format output.
+
+```{r disable-arm-tests}
+ungrouped <- mira_info_long(
+  glaucoma_three, id = "participant_id", outcomes = "iop", arm = "arm",
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+stopifnot(!ungrouped$arm_analysis$enabled,
+          is.null(ungrouped$arm_analysis$time_pairwise),
+          "arm" %in% names(ungrouped$long_data))
+```
+
+## From exploratory differences to an analysis plan
+
+Consider mmHg estimates and intervals alongside a prespecified
+clinically meaningful magnitude and the study design. Statistical
+significance alone establishes neither clinical importance nor causation.
+These unadjusted comparisons do not control for covariates; baseline pressure-change
+values are not automatically equivalent to baseline-adjusted follow-up
+models. A treatment-by-time model provides a distinct global question and
+covariate-adjusted contrasts.
+
+Continue with [missing data](frequentist-long-missing-data.html) before
+interpreting incomplete follow-up. See
+[advanced models](frequentist-long-advanced-models.html) for formulas,
+interaction hypotheses, and diagnostics, and
+[reporting](frequentist-long-reporting.html) to preserve an analysis bundle.

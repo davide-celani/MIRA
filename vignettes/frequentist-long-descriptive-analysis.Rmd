@@ -1,0 +1,394 @@
+---
+title: "Describing IOP: repeated levels, changes, and variability"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Describing IOP: repeated levels, changes, and variability}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      echo = TRUE, warning = TRUE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+```
+
+## Describe an observational cohort before modeling it
+
+This article assumes the wide-format, identity, mean, and paired-change concepts in [Getting started](frequentist-long-getting-started.html). It adds distributional summaries, variability, association, and stored plots; it does not require longitudinal models. Consider an observational glaucoma-service cohort selected for a history of
+elevated intraocular pressure (IOP), measured in mmHg by a consistent hypothetical tonometry
+protocol at baseline and three subsequent clinic visits. The objective is
+to describe study-eye pressure levels, within-eye changes, and variation.
+There is no randomized intervention or concurrent control; a temporal fall
+cannot be attributed to treatment from these summaries.
+
+Each person contributes one prespecified study eye: an eligible right eye,
+or the left eye when only that eye is eligible, chosen at enrolment. The
+participant ID indexes the same eye throughout, and different participants
+are the independent sampling units. Entering both eyes as unrelated rows
+would require a different dependence model.
+
+The [National Eye Institute](https://www.nei.nih.gov/eye-health-information/eye-conditions-and-diseases/glaucoma/glaucoma-and-eye-pressure)
+explains why IOP and glaucoma risk must be interpreted for the individual
+eye. Lower pressure is the declared favorable direction for this selected
+elevated-pressure teaching cohort, not a universal rule that ever-lower IOP
+is desirable or that IOP alone establishes visual benefit.
+
+This is a new glaucoma-monitoring study, separate from the introductory
+retinal BCVA dataset. Its assumed decline is chosen to exercise descriptive
+methods and is not a recommended target or treatment effect.
+The generator assumes a mean underlying pressure of 24 mmHg (between-person
+SD 3), a mean fall of 0.9 mmHg per ordered visit (trend SD 0.45), and independent
+measurement noise with SD 1.2 mmHg, rounded to 0.1 mmHg. These are simulation
+choices, not a validated measurement-error specification. Baseline tonometry
+can vary below an individual's prior screening value. Later visits have several
+missing measurements. The complete synthetic values are checked to lie between 8 and 40 mmHg as a
+plausibility check for this chosen generator, not a definition of a safe or
+normal IOP range. The simulation uses visit indices only to construct
+data; the analysis treats visits as ordered occasions.
+
+```{r cohort}
+library(MIRA)
+set.seed(3301)
+n <- 64L
+usual_iop <- rnorm(n, mean = 24, sd = 3)
+individual_trend <- rnorm(n, mean = -0.9, sd = 0.45)
+iop_cohort <- data.frame(participant_id = sprintf("G%03d", seq_len(n)))
+for (visit in 0:3) {
+  iop_cohort[[paste0("iop_visit", visit)]] <- round(usual_iop +
+    visit * individual_trend + rnorm(n, sd = 1.2), 1)
+}
+stopifnot(all(as.matrix(iop_cohort[-1L]) > 8),
+          all(as.matrix(iop_cohort[-1L]) < 40))
+iop_cohort$iop_visit1[c(8, 31)] <- NA_real_
+iop_cohort$iop_visit2[c(7, 19, 44)] <- NA_real_
+iop_cohort$iop_visit3[c(7, 19, 40, 55, 62)] <- NA_real_
+summary(iop_cohort[-1L])
+```
+
+## Request summaries and selected optional components
+
+The configuration requests plots, Pearson/Spearman correlations, and IQR-based
+outlier flags while disabling model fitting and arm comparisons. `alpha = 0.05`
+gives 95% Student-t intervals. `improvement_direction = "lower"` and
+`stable_threshold = 2` supply a declared response convention; two mmHg is an
+illustrative threshold, not a validated individual clinical response criterion.
+
+```{r analysis}
+description <- mira_info_long(
+  iop_cohort, id = "participant_id", outcomes = "IOP",
+  time_vars = paste0("iop_visit", 0:3),
+  time_labels = c("Baseline", "Month 2", "Month 5", "Month 9"),
+  covariates = character(0), alpha = 0.05,
+  improvement_direction = "lower", stable_threshold = 2,
+  plots = TRUE, correlations = TRUE, outliers = TRUE,
+  model = FALSE, arm_tests = FALSE, verbose = FALSE
+)
+description$overview[c("n_rows", "n_patients", "n_timepoints",
+                        "complete_profiles", "complete_profiles_pct")]
+description$settings[c("confidence_level", "improvement_direction",
+                       "stable_threshold")]
+```
+
+Alternatively, `analyses = c("plots", "correlations", "outliers")` selects
+exactly those optional modules. A non-`NULL` `analyses` vector replaces all five
+individual optional switches. `analyses = "none"` provides the fastest core
+workflow, but still includes paired tests and the Friedman branch. Turning off
+plots reduces graphics construction; turning off correlations and outlier flags
+avoids those calculations. None of these settings changes the observed data.
+
+An explicitly declared outcome prefixes MIRA-owned metrics. Use the documented
+metric-name map to select columns without depending on that prefix.
+
+```{r extraction-helper}
+metric_columns <- function(table, fields) {
+  mapping <- attr(table, "mira_metric_names", exact = TRUE)
+  actual <- fields
+  matched <- fields %in% names(mapping)
+  actual[matched] <- unname(mapping[fields[matched]])
+  stopifnot(all(actual %in% names(table)))
+  actual
+}
+show_metrics <- function(table, fields) {
+  table[, metric_columns(table, fields), drop = FALSE]
+}
+```
+
+## Population summaries at each visit
+
+`n` counts finite measurements at that visit. Missing and infinite values have
+distinct counts; MIRA treats infinite measurements as unavailable during
+analysis. Inspect the availability columns alongside the mean and median.
+
+```{r visit-table}
+knitr::kable(
+  show_metrics(description$descriptives,
+    c("label", "n", "missing", "mean", "sd", "median", "q1", "q3")),
+  col.names = c("Visit", "N", "Missing", "Mean", "SD", "Median", "Q1", "Q3"),
+  digits = 2,
+  caption = "Visit-specific availability and IOP distributions (mmHg)."
+)
+knitr::kable(
+  show_metrics(description$descriptives,
+    c("label", "mean", "se", "ci_lower", "ci_upper")),
+  col.names = c("Visit", "Mean", "SE", "Lower 95% CI", "Upper 95% CI"),
+  digits = 2,
+  caption = "Visit-specific mean IOP and its pointwise uncertainty (mmHg)."
+)
+iop_values <- as.matrix(iop_cohort[description$time_vars])
+stopifnot(identical(description$descriptives$n,
+                    as.integer(colSums(is.finite(iop_values)))))
+```
+
+The mean and SD describe location and participant-to-participant spread at a
+visit. The median and quartiles offer complementary distributional summaries.
+The confidence limits estimate uncertainty in a population mean under
+independent participant sampling; they are neither prediction intervals nor
+within-person change intervals. All intervals here are pointwise, rather than
+a simultaneous band over visits. A confidence interval's nominal level does
+not mean that the fixed population mean has a 95% frequentist probability of
+lying inside this particular calculated interval.
+
+The changing denominator matters. If people with high pressures preferentially
+miss later visits, an available-case mean can fall even without comparable
+individual improvement. The artificial missingness here is assigned to fixed
+indices, but a real study needs a substantive missing-data investigation.
+
+## Paired changes and individual trajectories
+
+For each ordered pair of visits, MIRA calculates changes using only people
+observed at both visits. We select all baseline-to-follow-up rows by name.
+
+```{r changes}
+from_baseline <- description$change[
+  description$change$from == "iop_visit0", , drop = FALSE]
+knitr::kable(
+  show_metrics(from_baseline,
+    c("to_label", "n", "mean_change", "sd_change", "ci_lower", "ci_upper",
+      "cohens_dz")),
+  col.names = c("Visit", "N", "Mean change", "SD change", "Lower 95% CI",
+                "Upper 95% CI", "Cohen's dz"),
+  digits = 2,
+  caption = "Paired follow-up-minus-baseline IOP changes (mmHg)."
+)
+complete_final <- complete.cases(iop_cohort[c("iop_visit0", "iop_visit3")])
+final_differences <- iop_cohort$iop_visit3[complete_final] -
+  iop_cohort$iop_visit0[complete_final]
+computed_change <- mean(final_differences)
+final_row <- from_baseline[from_baseline$to == "iop_visit3", , drop = FALSE]
+half_width <- qt(0.975, df = length(final_differences) - 1L) *
+  sd(final_differences) / sqrt(length(final_differences))
+stopifnot(nrow(final_row) == 1L, final_row$n == sum(complete_final),
+  isTRUE(all.equal(final_row[[metric_columns(final_row, "mean_change")]],
+                   computed_change)),
+  isTRUE(all.equal(unname(unlist(show_metrics(final_row,
+    c("ci_lower", "ci_upper")))),
+    computed_change + c(-1, 1) * half_width)))
+```
+
+Negative change indicates lower IOP in mmHg; the favorable label follows
+the explicitly chosen elevated-pressure cohort interpretation. The SD of change describes heterogeneity
+in paired differences. Cohen's `dz` divides the mean paired difference by its
+SD; it is not the independent-groups standardized mean difference. Its value
+depends on within-person variability and correlation, so it should accompany
+the effect in original units rather than replace it.
+
+Individual trajectories distinguish an average decline from a uniform response.
+The relative change uses `100 * (final - baseline) / abs(baseline)` for a
+nonzero finite baseline. That percentage is meaningful only on an appropriate
+measurement scale and can be unstable near zero.
+
+```{r trajectories}
+head(show_metrics(description$trajectories,
+  c("patient", "baseline", "final", "absolute_change",
+    "relative_change_percent", "direction", "clinical_direction")))
+table(description$trajectories$clinical_direction, useNA = "ifany")
+```
+
+Response labels compare the measured change with the supplied threshold; they
+do not account for individual measurement error or establish a treatment
+effect. A missing baseline or final measurement leaves that trajectory change
+unavailable even when intermediate observations exist.
+
+## Correlation and variability answer different questions
+
+Pearson correlation summarizes linear association between visit measurements;
+Spearman correlation summarizes association between ranks. Neither measures
+agreement with the identity line, and a high correlation can coexist with a
+systematic shift in mean pressure. Pairwise-complete samples can differ across
+matrix cells; always inspect `pairwise_n`.
+
+```{r correlations}
+round(description$correlations$pearson, 2)
+round(description$correlations$spearman, 2)
+description$correlations$pairwise_n
+stopifnot(description$correlations$pairwise_n["iop_visit0", "iop_visit3"] ==
+            sum(complete_final))
+```
+
+To isolate why association is different from agreement, keep the same baseline
+IOP values and construct an artificial second measurement exactly 2 mmHg
+higher for every person. Predict the Pearson correlation and mean change
+before reading the solution. This arithmetic demonstration is separate from
+the observed follow-up data above and does not alter `description`.
+
+```{r correlation-shift-checkpoint}
+shifted_iop <- iop_cohort$iop_visit0 + 2
+shift_correlation <- cor(iop_cohort$iop_visit0, shifted_iop)
+shift_mean_change <- mean(shifted_iop - iop_cohort$iop_visit0)
+knitr::kable(data.frame(
+  Pearson_correlation = shift_correlation,
+  Mean_change_mmHg = shift_mean_change
+), digits = 2,
+caption = "Solution: perfect association coexists with a systematic 2-mmHg increase.")
+stopifnot(isTRUE(all.equal(shift_correlation, 1)),
+          isTRUE(all.equal(shift_mean_change, 2)))
+```
+
+Adding a constant preserves the ordering and linear association of people,
+so the correlation is one, yet every person changes by 2 mmHg. Correlation
+alone cannot establish stability, agreement, or absence of systematic change.
+
+The within-participant SD is the ordinary sample SD of all finite residuals
+after subtracting each participant's available-visit mean. Its denominator is
+the number of finite measurements minus one; it is not the pooled ANOVA
+within-participant SD, which would subtract the number of participant means
+estimated. This descriptive residual spread combines measurement noise and
+temporal variation. The between-participant SD is the ordinary sample SD of
+available-visit participant means, giving each available participant mean equal
+weight even when observation counts differ. Neither is automatically a variance
+component from a longitudinal model.
+
+```{r variability}
+knitr::kable(
+  show_metrics(description$variability,
+    c("between_subject_sd", "within_subject_sd",
+      "ICC_anova_complete_profiles", "ICC_model", "ICC")),
+  col.names = c("Between-person SD", "Within-person SD", "ICC(1,1)",
+                "Model ICC", "Preferred ICC"),
+  digits = 3,
+  caption = "Participant variability and available intraclass-correlation estimates."
+)
+```
+
+Here the ICC concerns repeated IOP observations of the selected eye across
+visits; it is not an inter-eye correlation or agreement estimate for fellow eyes.
+
+With models disabled, `ICC_model` is unavailable and the preferred `ICC` uses
+the complete-profile one-way ICC(1,1). For `k` visits, that estimate is
+`(MS_between - MS_within) / (MS_between + (k - 1) * MS_within)`.
+It uses a different sample from a pairwise correlation. A time trend enters the
+within-participant variation, so this ICC should not be interpreted as a pure
+test-retest reliability coefficient without assumptions about stability and
+exchangeability. Negative ANOVA ICC estimates are possible. When a fitted
+random-intercept model is available, the preferred ICC instead uses its
+random-intercept variance divided by random-intercept plus residual variance;
+always identify the estimator being reported.
+
+The following check reconstructs the balanced one-way ANOVA independently
+from complete profiles. Its sample can be smaller than either the number with
+any measurement or the number contributing to a particular paired change.
+The residual-SD check uses all available measurements instead.
+
+```{r verify-variability}
+complete_profiles <- apply(is.finite(iop_values), 1L, all)
+balanced <- iop_values[complete_profiles, , drop = FALSE]
+k <- ncol(balanced)
+icc_data <- data.frame(
+  value = as.vector(t(balanced)),
+  participant = factor(rep(seq_len(nrow(balanced)), each = k))
+)
+one_way <- anova(lm(value ~ participant, data = icc_data))
+ms_between <- one_way$`Mean Sq`[[1L]]
+ms_within <- one_way$`Mean Sq`[[2L]]
+icc_check <- (ms_between - ms_within) /
+  (ms_between + (k - 1L) * ms_within)
+residuals <- iop_values - rowMeans(iop_values, na.rm = TRUE)
+stopifnot(description$overview$complete_profiles == nrow(balanced),
+  isTRUE(all.equal(
+    description$variability[[metric_columns(description$variability,
+      "ICC_anova_complete_profiles")]], icc_check)),
+  isTRUE(all.equal(
+    description$variability[[metric_columns(description$variability,
+      "within_subject_sd")]], sd(residuals[is.finite(residuals)]))))
+knitr::kable(data.frame(
+  Summary = c("Any observed visit", "Baseline and final", "All four visits"),
+  Participants = c(sum(rowSums(is.finite(iop_values)) > 0L),
+                   sum(complete_final), sum(complete_profiles))
+), caption = "Participants and their single study eyes contributing to different IOP summaries.")
+```
+
+## Inspect plots and flagged observations
+
+MIRA stores named `ggplot` objects, permitting ordinary printing and further
+customization. The first figure joins observations from the same participant;
+the second shows visit-specific means and their confidence limits. Time labels
+are equally spaced categories: physical intervals of 2, 3, and 4 months are
+not displayed proportionally.
+
+```{r plot-inventory}
+names(description$plots)
+stopifnot(inherits(description$plots$spaghetti, "ggplot"),
+          inherits(description$plots$mean_ci, "ggplot"))
+```
+
+```{r trajectories-figure, fig.cap="Synthetic IOP (mmHg) in 64 prespecified study eyes from 64 participants over four ordered visits. Available observations are connected across gaps; lines do not impute missing visits. The black line and band show available-case means and pointwise 95% mean confidence intervals. Visits are equally spaced on the axis despite unequal elapsed times."}
+print(description$plots$spaghetti + ggplot2::labs(y = "IOP (mmHg)"))
+```
+
+```{r means-figure, fig.cap="Available-case study-eye IOP means (mmHg) with pointwise 95% confidence intervals. Visit samples are 64, 62, 61, and 59 participants; changing participants can affect the pattern. Confidence intervals describe mean uncertainty, not individual variation. The horizontal axis shows ordered visits."}
+print(description$plots$mean_ci + ggplot2::labs(y = "IOP (mmHg)"))
+```
+
+The `boxplot` and `correlation_heatmap` objects provide distributional and
+association views. `outliers$by_time` and `outliers$change` contain IQR-rule
+diagnostics. These flags request investigation of data validity and scientific
+context; MIRA does not delete flagged observations automatically.
+
+```{r outliers}
+description$outliers$note
+data.frame(
+  visit = names(description$outliers$by_time),
+  flagged_n = vapply(description$outliers$by_time, nrow, integer(1L))
+)
+data.frame(
+  comparison = names(description$outliers$change),
+  flagged_n = vapply(description$outliers$change, nrow, integer(1L))
+)
+head(description$outliers$by_time[["iop_visit0"]])
+```
+
+## Keep descriptive and inferential conclusions distinct
+
+Although the object contains descriptive summaries, the paired t tests,
+asymptotic signed-rank tests, and complete-profile Friedman test also perform
+inference. The paired t test concerns a mean difference and requires
+appropriate sampling and a defensible approximation for the difference
+distribution. Signed-rank interpretation involves the distribution and
+symmetry of paired differences; it is not an assumption-free test of means.
+The Friedman branch compares repeated ranks on complete profiles, with
+participants as blocks.
+
+```{r core-inference-status}
+description$advanced_tests$friedman[c("performed", "reason_skipped")]
+inference_display <- show_metrics(description$change,
+  c("from_label", "to_label", "n", "paired_t_p", "paired_t_p_adj"))
+for (column in metric_columns(description$change,
+  c("paired_t_p", "paired_t_p_adj"))) {
+  inference_display[[column]] <- format.pval(inference_display[[column]],
+                                            digits = 3, eps = 0.001)
+}
+knitr::kable(inference_display,
+  col.names = c("From", "To", "N", "Paired t p", "Holm p"),
+  caption = "Pairwise-complete mean-change tests; display formatting does not alter the analysis.")
+```
+
+The default Holm adjustment applies separately to the finite paired-t and
+signed-rank p-values across the selected visit-pair comparisons. It does not
+turn descriptive confidence limits into simultaneous intervals or cover every
+analysis in the object. Prespecify a scientific hypothesis family before
+interpreting multiple tests; effect magnitude, uncertainty, missingness, and
+clinical relevance remain central. Continue with
+[treatment-group comparisons](frequentist-long-treatment-groups.html) and
+[missing-data analysis](frequentist-long-missing-data.html) before drawing
+study-level conclusions.

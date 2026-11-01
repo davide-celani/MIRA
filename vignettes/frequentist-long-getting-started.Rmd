@@ -1,0 +1,349 @@
+---
+title: "Getting started: BCVA in one study eye per participant"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started: BCVA in one study eye per participant}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      echo = TRUE, warning = TRUE, message = FALSE,
+                      fig.width = 7, fig.height = 4.5)
+```
+
+## A first scientific question
+
+This article is for a researcher beginning with repeated measurements and
+basic R data frames. It requires an installed MIRA package, knitr for tables,
+and ggplot2 for one figure. No model knowledge, Quarto CLI, or external data is
+needed. We will create a small study, read one result, investigate one missing
+observation, and preserve the analysis.
+
+Suppose a retina clinic records best-corrected visual acuity (BCVA) at
+baseline and four weeks after starting a hypothetical management strategy
+for diabetic macular edema. BCVA is an ETDRS letter score: more letters mean
+better measured acuity. Our descriptive question is how the study eyes'
+scores change between these visits. All observations and gains below are
+synthetic assumptions, not estimates of a treatment's effectiveness.
+
+There is **one prespecified study eye per participant**. In this simulation
+the right eye is eligible in every participant and is selected at baseline;
+we do not select the better-responding eye after follow-up. The participant
+ID therefore identifies one independent person and that person's same study
+eye at each visit. Both eyes from one person would require additional
+dependence to be addressed; they are not independent participants. Without
+a concurrent comparator, these changes do not identify a causal treatment
+effect. [DRCR Retina Network's measurement study](https://public.jaeb.org/drcrnet/stdy/149)
+illustrates why visual-acuity measurement and OCT anatomy are distinct
+research measurements; this tutorial is not a reproduction of that trial.
+
+A longitudinal study measures the same people repeatedly. Measurements from
+one person can be correlated. Two measurements from twelve people provide
+twenty-four measurements, rather than twenty-four independent participants.
+Paired changes preserve the association between each person's measurements.
+
+## Begin with two visits and a secure identity
+
+In **wide format**, one row represents the selected study eye of one
+participant and one numeric column represents BCVA at each visit. The
+participant ID is a label, not a measurement or a numeric predictor. We
+simulate different underlying acuities, add visit-specific measurement
+variation, and round scores to whole letters. The assumed four-letter mean
+gain supplies variation for learning; it is neither a treatment recommendation
+nor a validated individual response threshold.
+
+```{r data}
+library(MIRA)
+set.seed(3101)
+n <- 12L
+usual_bcva <- rnorm(n, mean = 58, sd = 8)
+study_complete <- data.frame(
+  participant_id = sprintf("E%02d", seq_len(n)),
+  bcva_t0 = round(usual_bcva + rnorm(n, sd = 3)),
+  bcva_t1 = round(usual_bcva + 4 + rnorm(n, sd = 3))
+)
+knitr::kable(head(study_complete), digits = 3,
+  caption = "First six participants: one study eye each, BCVA in ETDRS letters at baseline (t0) and week 4 (t1).")
+stopifnot(!anyDuplicated(study_complete$participant_id),
+          !anyNA(study_complete$participant_id),
+          all(vapply(study_complete[-1L], is.numeric, logical(1L))),
+          all(as.matrix(study_complete[-1L]) > 20),
+          all(as.matrix(study_complete[-1L]) < 95))
+```
+
+The checks confirm complete, unique IDs, numeric columns, and the chosen
+20-to-95-letter simulation range; these range checks are not general clinical
+eligibility or data-cleaning rules. They
+do not check whether a real-world ID was assigned to the correct person; that
+requires study records. `_t0` and `_t1` let MIRA recognize one outcome,
+`bcva`, and order its visits. The suffixes encode order, not physical weeks.
+MIRA automatically associates `bcva` with higher-is-better, which matches
+ETDRS letters here. A logMAR-valued BCVA variable requires an explicit
+lower-is-better setting, as shown in the data-preparation article. Automatic
+response thresholds default to zero; no clinical responder definition is
+being validated in this first analysis.
+
+## Run once and locate the information
+
+We request the optional plot suite because this first path includes a figure.
+`analyses = "plots"` requests that suite while disabling the optional model,
+correlation, outlier, and arm-comparison modules. Core summaries and paired
+tests still run. `<-` retains their result in `fit` for subsequent steps.
+
+```{r first-analysis}
+fit <- mira_info_long(study_complete, id = "participant_id",
+                      analyses = "plots", verbose = FALSE)
+class(fit)
+fit$overview[c("n_patients", "n_timepoints", "complete_profiles")]
+data.frame(variable = fit$time_vars, label = unname(fit$time_labels))
+stopifnot(inherits(fit, "mira_info_long"),
+          fit$overview$n_patients == n,
+          identical(fit$time_vars, c("bcva_t0", "bcva_t1")))
+```
+
+`fit` is a `mira_info_long` list: named components hold related information.
+`overview` describes supplied profiles; `time_vars` records selected columns
+in order; `descriptives` holds visit summaries; `change` holds paired
+comparisons; and `plots` holds drawable figures. `$` selects a component, so
+`fit$descriptives` means the visit-summary table inside `fit`. The first
+selected visit becomes the baseline for trajectory summaries.
+
+`verbose = FALSE` prevents the extensive printed report, while warnings remain
+visible. A non-`NULL` `analyses` selection overrides the five individual
+optional switches. `analyses = "none"` would also turn off plotting; it still
+computes core paired tests and the base-R Friedman branch when applicable.
+The default `analyses = NULL` instead respects the individual switches, whose
+defaults are all `TRUE`. This tutorial does not fit a model.
+
+## Read a visit mean before reading a change
+
+The **mean** at a visit is the sum of observed BCVA letter scores divided by the
+number observed at that visit. The SD describes differences among participants.
+The confidence interval describes uncertainty in a population mean under
+independent sampling of participants; it does not contain 95% of individual
+acuity letter scores.
+
+```{r descriptives}
+knitr::kable(
+  fit$descriptives[c("label", "n", "mean", "sd", "ci_lower", "ci_upper")],
+  col.names = c("Visit", "N", "Mean", "SD", "Lower 95% CI", "Upper 95% CI"),
+  digits = 3,
+  caption = "Observed BCVA (ETDRS letters): t0 is baseline and t1 is week 4."
+)
+observed_counts <- colSums(is.finite(as.matrix(study_complete[fit$time_vars])))
+stopifnot(all(fit$descriptives$n == unname(observed_counts)),
+          sum(observed_counts) == 24L,
+          isTRUE(all.equal(fit$descriptives$mean,
+            unname(colMeans(study_complete[fit$time_vars])))))
+```
+
+Each row's `N` is twelve. There are twelve people and twenty-four finite
+measurements in total. These denominators answer different questions. Missing
+follow-up can change visit-specific `N` without changing the input cohort.
+
+The outcome name was inferred, so metric fields have base names such as `mean`.
+Explicitly declaring an outcome changes those names. The
+[data and detection article](frequentist-long-data-and-detection.html#make-the-analysis-plan-explicit)
+explains their provenance and the map for safe extraction.
+
+## Read one paired change, its interval, and its test
+
+For a person observed at both visits, subtract **week 4 minus baseline**.
+The average of those differences estimates mean within-person change among
+paired study eyes, in ETDRS letters. Positive change means more letters read. This is
+the quantity of interest, or **estimand**, for our first change question.
+Select its row by source names, which remain meaningful if visits are added.
+
+```{r change}
+baseline_followup <- subset(fit$change,
+                            from == "bcva_t0" & to == "bcva_t1")
+stopifnot(nrow(baseline_followup) == 1L)
+knitr::kable(
+  baseline_followup[c("n", "mean_change", "sd_change", "ci_lower", "ci_upper")],
+  col.names = c("Paired N", "Mean change", "SD change", "Lower 95% CI", "Upper 95% CI"),
+  digits = 3,
+  caption = "Paired week-4-minus-baseline BCVA change (ETDRS letters)."
+)
+```
+
+The mean change is `r sprintf("%.2f", baseline_followup$mean_change)` ETDRS letters,
+with a pointwise 95% interval from
+`r sprintf("%.3f", baseline_followup$ci_lower)` to
+`r sprintf("%.2f", baseline_followup$ci_upper)` letters. Its uncertainty comes from
+participant differences. Exact Student-t coverage requires independent, normally distributed differences.
+For these rounded letter scores it is a working approximation, whose adequacy
+needs particular scrutiny in a small sample. The
+fixed population parameter does not have a 95% frequentist probability of
+lying in this particular interval.
+
+The paired t test asks whether a population mean difference of zero is
+compatible with the data and assumptions. Its two-sided p-value is
+`r format.pval(baseline_followup$paired_t_p, digits = 3, eps = 0.001)`.
+It is not the probability that zero change is true and does not measure
+clinical importance. A large p-value would not establish equivalence. With
+two visits there is one paired-t comparison, so Holm adjustment leaves its
+p-value unchanged. More visits introduce a larger comparison family.
+
+This audit reconstructs the estimate and Student-t interval from raw
+differences. Reading the table does not require deriving the formula.
+
+```{r change-audit}
+differences <- study_complete$bcva_t1 - study_complete$bcva_t0
+independent_ci <- mean(differences) + c(-1, 1) *
+  qt(0.975, df = length(differences) - 1L) *
+  sd(differences) / sqrt(length(differences))
+stopifnot(baseline_followup$n == length(differences),
+  isTRUE(all.equal(baseline_followup$mean_change, mean(differences))),
+  isTRUE(all.equal(unname(unlist(
+    baseline_followup[c("ci_lower", "ci_upper")])), independent_ci)),
+  isTRUE(all.equal(baseline_followup$paired_t_p,
+                   t.test(differences, mu = 0)$p.value)),
+  isTRUE(all.equal(baseline_followup$paired_t_p_adj,
+                   baseline_followup$paired_t_p)))
+```
+
+The p-value check uses the same base-R testing engine as MIRA: it verifies
+extraction and input orientation rather than an independent test implementation.
+The mean and interval are direct raw-data calculations. This small educational
+sample cannot support strong clinical conclusions.
+
+## Change one observation and predict the denominators
+
+Keep the same twelve people, IDs, and measurements, then remove only E01's
+week-4 BCVA measurement. Before running the code, predict the two visit counts and the
+number of complete pairs. No new participant or response is generated.
+
+```{r one-missing}
+study_one_missing <- study_complete
+study_one_missing$bcva_t1[study_one_missing$participant_id == "E01"] <- NA_real_
+fit_one_missing <- mira_info_long(study_one_missing, id = "participant_id",
+                                  analyses = "none", verbose = FALSE)
+paired <- is.finite(study_one_missing$bcva_t0) &
+  is.finite(study_one_missing$bcva_t1)
+available_mean_difference <- mean(study_one_missing$bcva_t1, na.rm = TRUE) -
+  mean(study_one_missing$bcva_t0)
+paired_mean_difference <- mean(study_one_missing$bcva_t1[paired] -
+                               study_one_missing$bcva_t0[paired])
+knitr::kable(data.frame(
+  Quantity = c("Baseline observations", "Week-4 observations", "Complete pairs"),
+  N = c(sum(is.finite(study_one_missing$bcva_t0)),
+        sum(is.finite(study_one_missing$bcva_t1)), sum(paired))
+), caption = "Solution: one absent follow-up changes availability, not the input cohort.")
+knitr::kable(data.frame(
+  Quantity = c("Difference of available visit means", "Mean of paired differences"),
+  Change_ETDRS_letters = c(available_mean_difference, paired_mean_difference)
+), digits = 3, caption = "Two different summaries after removing E01's follow-up.")
+stopifnot(identical(fit_one_missing$descriptives$n, c(12L, 11L)),
+          fit_one_missing$change$n == 11L,
+          isTRUE(all.equal(fit_one_missing$change$mean_change,
+                           paired_mean_difference)),
+          !isTRUE(all.equal(available_mean_difference, paired_mean_difference)))
+```
+
+The solution is twelve baseline observations, eleven week-4 observations, and
+eleven pairs. The available-mean subtraction uses a twelve-person baseline mean
+and an eleven-person follow-up mean. Paired change uses the same eleven people
+on both sides. Neither calculation recovers E01's unobserved BCVA. The reason
+for missingness matters for population interpretation;
+[missing data](frequentist-long-missing-data.html) develops that question.
+
+## Add a third visit without changing the earlier study
+
+Return to the complete study and add week 12. The existing IDs and first two
+measurements are preserved. This new data configuration needs a new analysis.
+The suffix orders the visit; it does not supply physical elapsed weeks.
+
+```{r third-visit}
+study_three_visits <- study_complete
+set.seed(3102)
+study_three_visits$bcva_t2 <- round(usual_bcva + 7 + rnorm(n, sd = 3))
+fit_three_visits <- mira_info_long(study_three_visits, id = "participant_id",
+                                   analyses = "none", verbose = FALSE)
+knitr::kable(fit_three_visits$change[c("from", "to", "n", "mean_change")],
+  digits = 3, caption = "Adding week 12 creates three paired BCVA comparisons (ETDRS letters).")
+stopifnot(identical(study_three_visits[names(study_complete)], study_complete),
+          nrow(fit_three_visits$change) == 3L,
+          isTRUE(all.equal(fit_three_visits$change$paired_t_p_adj,
+            p.adjust(fit_three_visits$change$paired_t_p, method = "holm"))))
+```
+
+There are now three paired comparisons: baseline to week 4, baseline to week
+12, and week 4 to week 12. Their Holm p-values form one paired-t family; the
+confidence intervals remain pointwise. Adding an exploratory visit does not
+automatically redefine the prespecified primary endpoint or multiplicity plan.
+
+## Display the first analysis and retain it
+
+Return to `fit`, the original complete **two-visit** analysis. Its stored
+`mean_ci` plot answers the visit-mean question. It uses equally spaced visit
+categories and shows neither participant spread nor paired-change uncertainty.
+
+```{r first-figure, fig.cap="BCVA means (ETDRS letters) for the original twelve complete study eyes, one per participant, at baseline (t0) and week 4 (t1). Bars show pointwise 95% Student-t confidence intervals for visit means; they do not show individual spread or uncertainty in paired change."}
+stopifnot(inherits(fit$plots$mean_ci, "ggplot"))
+print(fit$plots$mean_ci + ggplot2::labs(y = "BCVA (ETDRS letters)"))
+```
+
+An RDS file preserves the computed R object. Use a temporary path here; use a
+managed project directory for an actual study and retain its input data,
+script, seed, and software versions alongside the result.
+
+```{r save}
+result_file <- tempfile("mira-bcva-", fileext = ".rds")
+saveRDS(fit, result_file)
+restored <- readRDS(result_file)
+stopifnot(identical(restored$descriptives, fit$descriptives),
+          identical(restored$change, fit$change))
+packageVersion("MIRA")
+```
+
+## Create a first reproducible report archive
+
+Reuse the result just read; reporting does not refit it. This minimal call
+writes a **source-only bundle**, selecting HTML as a future target. It needs
+neither Quarto CLI nor TeX and opens no document.
+
+```{r first-bundle}
+bundle <- mira_report_freq_long(
+  x = fit,
+  output_dir = tempfile("mira-report-"),
+  format = "html",
+  render = FALSE,
+  open = FALSE
+)
+data.frame(Artifact = c("Quarto source", "Runtime", "Payload", "CSV manifest"),
+  Present = file.exists(c(bundle$source, bundle$runtime, bundle$payload,
+                          bundle$results_manifest)))
+bundle$rendered
+stopifnot(all(file.exists(c(bundle$source, bundle$runtime, bundle$payload,
+                            bundle$results_manifest))),
+          !any(bundle$rendered),
+          identical(readRDS(bundle$payload)$result$change, fit$change))
+```
+
+The QMD is report source, the runtime supplies its helpers, the payload
+preserves the analysis, and the manifest locates exported CSV tables. Keep
+them together, with one directory per independent bundle. No rendered HTML
+has been produced: `rendered` records that status, whereas `expected_files`
+only names possible targets. The payload can contain source measurements and
+participant IDs; inspect the complete bundle before sharing. CSV files are
+portable tables and do not preserve every R class or attribute.
+
+The [reporting article](frequentist-long-reporting.html) develops manifest
+lookup, metadata, display controls, regeneration, and optional rendering.
+Temporary tutorial paths disappear eventually; bundle creation alone is not
+a long-term retention strategy.
+
+## Continue through the collection
+
+The essential path has covered wide data, identity, one result, a changing
+denominator, a figure, and an archive. Next use
+[data preparation and detection](frequentist-long-data-and-detection.html) to
+make configuration explicit, then
+[descriptive analysis](frequentist-long-descriptive-analysis.html) to distinguish
+distributions, changes, variability, and association. The
+[handbook index](MIRA.html#a-learning-sequence) maps the applied and advanced
+routes, including a [first model](frequentist-long-first-model.html) before the
+advanced reference. The help pages `?mira_info_long` and
+`?mira_report_freq_long` give the full argument contracts.

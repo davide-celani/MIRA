@@ -1,5 +1,101 @@
 # AI assistance record
 
+## Ophthalmic frequentist examples: 2026-10-30
+
+OpenAI Codex (GPT-6 family; exact deployment identifier not exposed) and three
+parallel AI agents redesigned all eleven frequentist articles around new
+synthetic BCVA, defined OCT central-subfield thickness and IOP studies. Work
+covered study-eye definitions, measurement scales and directions, generators,
+clinical covariates, named sensitivity/edge cases, interpretations, figures,
+report bundles and primary/official ophthalmic measurement sources.
+
+All 33 final-source execution modes passed. Fresh unchanged-suite results,
+package build/install/check, native model/sample proof, 71-table/1,665-cell
+and nine-figure/caption reviews, source/archive/installed identities and
+clinical/API/scientific matrices are recorded separately in
+FREQUENTIST_VIGNETTES_OPHTHALMOLOGY_2026-10-30.md. Historical reports and
+pre-existing local edits retain their original evidence. Statistical R,
+public signatures, tests, Rd, dependencies and Bayesian/Stan material did not
+change. External Quarto and browser-inspection limits are explicitly recorded.
+
+All data and effect sizes are invented for teaching; illustrative bands are
+not validated MCIDs or clinical decision rules. The clinical and statistical
+cross-reviews were AI-assisted, not human clinical review. Maintainers remain
+responsible for scientific/editorial review and publication disclosures. No
+commit, staging, push, PR, publication, release or pkgdown build was performed.
+
+## Frequentist handbook closure: 2026-10-30
+
+OpenAI Codex (GPT-6 family; exact deployment identifier not exposed) and three
+parallel AI agents completed a documentation-only closure phase. Assistance
+covered reader-first restructuring, a new first-model article, visible executable
+helpers, focused missingness/reference/sample/transfer cases, API and scientific
+matrices, isolated per-article/code validation, generated-table/image review,
+package build/install/check and primary-source policy/engine research.
+
+The final collection has eleven articles. Native sparse plotting, random-slope
+comparison and GEE ANOVA limitations remain disclosed rather than patched.
+External Quarto formats failed at Windows processx pipe creation; browser file
+URL inspection was blocked. These limits are separate from passing ordinary
+vignettes, source-only archives, unchanged tests and package-manual checks.
+The new report is `FREQUENTIST_VIGNETTES_CLOSURE_2026-10-30.md`; historical
+reports retain their original evidence. Statistical/Bayesian code, public
+signatures, tests and dependency strategy were preserved. No commit, staging,
+push, PR, publication, submission, deployment or pkgdown build was performed.
+
+Cross-review was by AI agents, not human researchers. Human scientific,
+editorial and usability review, responsibility for accepted outputs and a
+truthful manuscript AI disclosure remain pending. No JOSS/CRAN acceptance or
+human-review attestation is made.
+
+## Substantive frequentist handbook revision: 2026-10-29, second phase
+
+OpenAI Codex (GPT-6 family; exact deployment identifier not exposed) and three
+parallel AI agents reviewed the existing ten-article handbook against the
+analysis and reporting implementations, tests, and current primary sources.
+They made targeted scientific and editorial revisions, added independent
+sample/interval/ICC/contrast/export checks, audited rendered output, and
+strengthened the developer validation runner. AI review is not human review.
+
+This phase corrects the primary adjusted contrast in the complete workflow,
+distinguishes afex's expanded mean structure, and documents safe extraction
+when an otherwise valid outcome has no observed endpoint pairs. Statistical
+source code, public signatures, tests, and Bayesian material were preserved.
+The earlier implementation report below remains historical evidence. The
+new phase's commands, final-source hashes, execution results and limitations
+are recorded separately in `FREQUENTIST_VIGNETTES_REVISION_2026-10-29.md`.
+
+The authors must still perform and attest their own scientific/editorial
+review, take responsibility for design and interpretation, and reconcile the
+paper's AI disclosure with the current JOSS policy. This record supplies no
+human-review attestation or formal CRAN/JOSS acceptance judgment. No commit,
+push, PR, release, deployment or pkgdown build was performed in this phase.
+
+## Frequentist longitudinal handbook: 2026-10-29
+
+OpenAI Codex assisted with inspection of the public longitudinal analysis and
+reporting implementation and the design, writing, execution and review of a
+ten-article R Markdown handbook. Assistance covered deterministic synthetic
+studies, scientific explanations, metric-name-safe extraction, module-status
+and report-artifact checks, standard vignette/pkgdown integration, and a
+developer validation script. Parallel agents reviewed distinct tutorial
+groups and reporting claims. The exact runtime/deployment model identifier
+was not exposed and is not invented here.
+
+The implementation report records the actual package build, installation,
+vignette discovery, examples, tests, extended model execution and checks,
+including environmental rendering and website limitations. Statistical
+source files, function signatures, Bayesian examples and tests were preserved.
+An existing sparse-data plotting defect was reproduced and documented rather
+than changing statistical behavior to make a tutorial pass.
+
+Human scientific and editorial review remains pending. This record does not
+assert that the authors have completed the human verification required by
+JOSS, nor that package checks establish scientific validity or eligibility.
+The submitting authors must reconcile the eventual paper disclosure with
+their own review, modifications and validation of the accepted material.
+See `FREQUENTIST_VIGNETTES.md` for scope, commands, results and limitations.
+
 ## CmdStan CI timeout correction: 2026-10-26
 
 OpenAI Codex inspected the supplied setup-r-dependencies log and public GitHub

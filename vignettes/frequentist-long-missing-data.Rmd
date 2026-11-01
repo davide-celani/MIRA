@@ -1,0 +1,459 @@
+---
+title: "Incomplete OCT follow-up: samples, warnings, and limits"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Incomplete OCT follow-up: samples, warnings, and limits}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE,
+                     warning = TRUE, fig.width = 7, fig.height = 4.5)
+```
+
+The code below runs in a new R session with MIRA installed. The small
+helper reads the metric-name map preserved on MIRA tables; keep its definition
+when copying the later extraction examples.
+
+```{r reader-tools}
+library(MIRA)
+metric_columns <- function(table, bases) {
+  mapping <- attr(table, "mira_metric_names")
+  actual <- bases
+  mapped <- bases %in% names(mapping)
+  actual[mapped] <- unname(mapping[bases[mapped]])
+  stopifnot(all(actual %in% names(table)))
+  actual
+}
+```
+
+## Why the analysis sample matters
+
+Read [Getting started](frequentist-long-getting-started.html) first: this
+article builds on observed means and paired changes. You will audit who
+contributes to each result, then distinguish missingness assumptions from
+what availability tables can establish. No missing values are filled in.
+
+An incomplete longitudinal study can have a different sample for every
+question. A participant without baseline can contribute a follow-up scan measurement,
+but cannot contribute a change from baseline. A participant with baseline
+and final observations can contribute that change even with an intermediate
+visit missing. The resulting means, paired changes, and complete-profile
+tests describe different observed subsets.
+
+This tutorial audits a synthetic observational retinal-edema follow-up
+study. The outcome `cmt` is defined here as the **mean retinal thickness in
+the central 1-mm-diameter OCT subfield**, in micrometres (um), often called
+central subfield thickness (CST). The short variable name is a local naming
+choice; it does not mean a central-point reading or interchangeably pooled
+measurements from different OCT devices. The fictional study uses one
+standardized instrument/segmentation protocol across visits. The
+[DRCR Retina Network](https://public.jaeb.org/drcrnet/stdy/149)
+uses OCT central-subfield and visual-acuity measures in retinal-edema research.
+Our generated values are not trial data, diagnostic cutoffs or device norms.
+
+Each adult contributes one study eye selected before follow-up. The record
+contains its participant ID and laterality; no fellow-eye data enter this
+analysis. A thickness decrease describes an anatomical change, not automatically
+better vision or a clinically meaningful treatment response. BCVA is not
+measured in this particular example.
+
+Visits are scheduled at weeks 0, 2, 9 and 18, with unequal strategy groups.
+These labels are hypothetical follow-up schedules, not recommended treatment
+intervals. Missingness includes intermittent gaps, absent baseline scans and
+final dropout generated from baseline thickness and group before some baseline
+scans are masked. With fully observed baseline, that dropout component would
+be compatible with MAR conditional on baseline and group. Masking baseline
+too prevents extending this claim automatically to the joint pattern. The
+dataset teaches availability accounting; observed outcomes cannot establish
+the missingness mechanism in a real retinal study.
+
+```{r incomplete-data}
+set.seed(442031)
+n <- 82L
+group <- sample(c(rep("Strategy A", 50L), rep("Strategy B", 32L)))
+study_eye <- sample(c("Right", "Left"), n, replace = TRUE)
+person_thickness <- rnorm(n, 0, 55)
+retina <- data.frame(
+  participant_id = sprintf("O%03d", seq_len(n)), study_eye = study_eye,
+  arm = group,
+  cmt_t0 = 430 + person_thickness + rnorm(n, 0, 22),
+  cmt_t2 = 410 + person_thickness + rnorm(n, 0, 25),
+  cmt_t9 = 385 + person_thickness - 15 * (group == "Strategy B") + rnorm(n, 0, 28),
+  cmt_t18 = 365 + person_thickness - 25 * (group == "Strategy B") + rnorm(n, 0, 30)
+)
+stopifnot(!anyDuplicated(retina$participant_id),
+  all(as.matrix(retina[c("cmt_t0", "cmt_t2", "cmt_t9", "cmt_t18")]) > 0))
+retina_complete <- retina  # Same people, eyes and measurements before masking.
+dropout_probability <- plogis(-1.5 + 0.006 * (retina$cmt_t0 - 430) +
+                               0.5 * (group == "Strategy A"))
+dropout <- runif(n) < dropout_probability
+retina$cmt_t18[dropout] <- NA_real_
+retina$cmt_t2[sample(seq_len(n), 7)] <- NA_real_
+retina$cmt_t9[sample(seq_len(n), 12)] <- NA_real_
+retina$cmt_t0[c(3, 14, 29, 45)] <- NA_real_
+retina$cmt_t9[8] <- Inf  # Deliberately invalid OCT export value, not a scan result.
+table(retina$arm)
+colSums(!is.finite(as.matrix(retina[c("cmt_t0", "cmt_t2", "cmt_t9", "cmt_t18")])))
+```
+
+The single infinite value is deliberately retained in the input to expose
+the difference between raw missingness and analysis availability. It
+represents a data-quality problem to investigate against the source record,
+not a physiological measurement. MIRA treats `Inf` and `-Inf` as unavailable
+for analysis and reports the condition. It performs no imputation.
+
+## A simpler mechanism: independent missingness
+
+Start with the saved complete version of these same 82 participants. We now
+change only final-visit availability, using a random mask independent of all
+thickness values and groups. This generator is MCAR by construction. Its realized
+sample may still differ by chance; no test on observed data proves that a
+real study is MCAR. The more complex `retina` dataset above remains
+unchanged and is used for the rest of the article.
+
+```{r independent-missingness}
+set.seed(442032)
+retina_mcar <- retina_complete
+independent_mask <- runif(nrow(retina_mcar)) < 0.25
+retina_mcar$cmt_t18[independent_mask] <- NA_real_
+mcar_fit <- mira_info_long(
+  retina_mcar, id = "participant_id", outcomes = "cmt",
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+mcar_changes <- mcar_fit$change
+mcar_endpoint <- mcar_changes[mcar_changes$from == "cmt_t0" &
+  mcar_changes$to == "cmt_t18", , drop = FALSE]
+kept <- !independent_mask
+stopifnot(nrow(mcar_endpoint) == 1L, mcar_endpoint$n == sum(kept),
+  identical(retina_mcar$participant_id, retina_complete$participant_id),
+  isTRUE(all.equal(mcar_endpoint[[metric_columns(mcar_endpoint, "mean_change")]],
+    mean(retina_complete$cmt_t18[kept] - retina_complete$cmt_t0[kept]))))
+mcar_comparison <- data.frame(
+  quantity = c("Complete-data mean change", "Observed-pair mean change",
+    "Difference of observed visit means"),
+  value = c(mean(retina_complete$cmt_t18 - retina_complete$cmt_t0),
+    mean(retina_mcar$cmt_t18[kept] - retina_mcar$cmt_t0[kept]),
+    mean(retina_mcar$cmt_t18, na.rm = TRUE) - mean(retina_mcar$cmt_t0))
+)
+knitr::kable(mcar_comparison, digits = 3,
+  caption = "OCT central-subfield changes (um) after independent final-visit masking; the latter two quantities use different baseline samples.")
+```
+
+Only the observed-pair row describes within-person change among retained
+pairs. The difference of visit means uses all baselines and fewer final
+measurements. Even an independent missingness mechanism does not make those two
+sample calculations algebraically identical. Neither calculation estimates
+an individual causal effect.
+
+## Fit an available-data descriptive analysis
+
+The labels state scheduled weeks. They do not supply actual individual
+visit dates, create additional measurements, or make an ordinal-time slope
+a per-week rate. Irregular participant-specific visit times cannot be
+encoded merely by changing display labels in this wide interface.
+
+```{r missing-analysis}
+missing_fit <- mira_info_long(
+  retina, id = "participant_id", outcomes = "cmt",
+  time_vars = c("cmt_t0", "cmt_t2", "cmt_t9", "cmt_t18"),
+  time_labels = c("Baseline", "Week 2", "Week 9", "Week 18"),
+  arm = "arm", reference_arm = "Strategy A", covariates = character(0),
+  improvement_direction = "lower", stable_threshold = 25,
+  analyses = c("arm_tests", "correlations"), verbose = FALSE
+)
+missing_fit$overview[c("n_patients", "complete_profiles", "complete_profiles_pct")]
+missing_fit$diagnostics$warnings
+```
+
+
+The explicit `"lower"` direction and 25-um threshold provide a numerical
+classification rule for this edema example only. MIRA's "Improved" label then
+means a thickness reduction exceeding 25 um; it is not a validated response
+definition, an OCT repeatability limit or evidence of better BCVA. The threshold
+does not alter mean changes or inferential tests.
+
+Warnings remain visible. `verbose = FALSE` prevents the large automatic
+printout; it does not suppress warnings. Some checks performed inside
+protected statistical modules are instead recorded on that module.
+Configuration warnings and within-analysis warnings need not have identical
+storage locations, so inspect both the emitted warnings and result fields.
+
+```{r availability-tables}
+knitr::kable(missing_fit$missing$by_time, digits = 1,
+             caption = "Raw missing values, non-finite values, and their combined unavailability.")
+desc <- missing_fit$descriptives
+knitr::kable(desc[, metric_columns(desc, c(
+  "label", "n", "mean", "sd", "ci_lower", "ci_upper"
+))], digits = 2, col.names = c("Visit", "n", "Mean", "SD", "Lower", "Upper"),
+caption = "Available OCT central-subfield thickness (um) at each scheduled visit, with pointwise 95% mean intervals.")
+affected <- missing_fit$missing$by_patient$unavailable_n > 0L
+head(missing_fit$missing$by_patient[affected, , drop = FALSE], 6)
+stopifnot(sum(missing_fit$missing$by_time$non_finite_n) == 1,
+          identical(retina$cmt_t9[8], Inf))
+```
+
+The missing-by-participant table has one row per wide input row. Its
+`patient` field carries the resolved participant identifier. Descriptive
+intervals still describe observed-value means; differing visit populations
+can make their difference unlike the average within-participant change.
+
+## Verify the paired and complete-profile samples
+
+MIRA uses a separate pairwise-complete subset for each change. We can
+independently count those pairs directly from the source variables.
+
+```{r compare-samples}
+changes <- missing_fit$change
+expected_n <- vapply(seq_len(nrow(changes)), function(i) {
+  sum(is.finite(retina[[changes$from[i]]]) &
+        is.finite(retina[[changes$to[i]]]))
+}, integer(1L))
+stopifnot(identical(changes$n, expected_n))
+expected_mean <- vapply(seq_len(nrow(changes)), function(i) {
+  from <- retina[[changes$from[i]]]
+  to <- retina[[changes$to[i]]]
+  paired <- is.finite(from) & is.finite(to)
+  mean(to[paired] - from[paired])
+}, numeric(1L))
+stopifnot(isTRUE(all.equal(
+  changes[[metric_columns(changes, "mean_change")]], expected_mean)))
+change_display <- changes[, metric_columns(changes, c(
+  "from_label", "to_label", "n", "mean_change", "ci_lower", "ci_upper",
+  "paired_t_p_adj"
+))]
+p_column <- metric_columns(changes, "paired_t_p_adj")
+change_display[[p_column]] <- format.pval(change_display[[p_column]], digits = 3, eps = 0.001)
+knitr::kable(change_display, digits = 3,
+col.names = c("From", "To", "n", "Change", "Lower", "Upper", "Holm p"),
+caption = "Pair-specific OCT thickness changes (um), pointwise 95% intervals and Holm-adjusted paired t tests.")
+friedman <- missing_fit$advanced_tests$friedman
+friedman[c("performed", "reason_skipped", "warnings", "error")]
+friedman$tidy[, metric_columns(friedman$tidy, c("n", "n_timepoints", "p_raw"))]
+finite_profiles <- apply(is.finite(as.matrix(retina[missing_fit$time_vars])),
+                         1, all)
+stopifnot(friedman$tidy$n == sum(finite_profiles))
+```
+
+Each change is later minus earlier in micrometres of central-subfield thickness; a negative
+change denotes reduced thickness, without establishing functional benefit. Its interval is a pointwise Student t interval
+for the mean of the observed paired differences, not an interval for a
+difference between two independently observed visit means. The Holm
+adjustment pools the selected visit-pair t tests within this outcome; it
+does not adjust these intervals or the separate Friedman test. Independent
+participants and an adequate approximation for the sampling distribution
+of the mean difference remain necessary; available pairs do not repair
+selection bias.
+
+Counts alone do not identify a sample. The baseline-to-final trajectory
+table lets us verify exactly which participants contribute that endpoint.
+The following check also reconstructs its interval without MIRA helpers.
+
+```{r endpoint-identities-and-interval}
+endpoint_pair <- is.finite(retina$cmt_t0) &
+  is.finite(retina$cmt_t18)
+trajectory <- missing_fit$trajectories
+trajectory_change <- trajectory[[metric_columns(trajectory, "absolute_change")]]
+stopifnot(setequal(trajectory$patient[is.finite(trajectory_change)],
+                   retina$participant_id[endpoint_pair]))
+endpoint <- changes[changes$from == "cmt_t0" & changes$to == "cmt_t18", ,
+                    drop = FALSE]
+delta <- retina$cmt_t18[endpoint_pair] -
+  retina$cmt_t0[endpoint_pair]
+half_width <- qt(0.975, df = length(delta) - 1L) * sd(delta) / sqrt(length(delta))
+expected_interval <- mean(delta) + c(-1, 1) * half_width
+stopifnot(nrow(endpoint) == 1L, isTRUE(all.equal(
+  as.numeric(unlist(endpoint[1L, metric_columns(endpoint, c("ci_lower", "ci_upper"))],
+                    use.names = FALSE)),
+  expected_interval)))
+data.frame(sample = c("Enrolled", "Baseline-final pairs", "Complete profiles"),
+           participants = c(nrow(retina), sum(endpoint_pair),
+                            sum(finite_profiles)))
+```
+
+The Friedman test requires a complete profile at every selected visit;
+its pairwise Wilcoxon follow-ups retain their own pairwise-complete
+samples. The global test concerns within-participant rank differences,
+whereas the paired t tests concern mean differences. A complete-profile
+Friedman test is not a correction for informative dropout. Its interpretation
+as evidence about all enrolled participants needs appropriate missingness
+assumptions beyond the algebra of a rank test.
+
+Correlations use pairwise-complete observations as well. Their sample-size
+matrix is essential: two coefficients need not describe the same people.
+Pairwise deletion can also yield a correlation matrix that is not positive
+semidefinite, so do not assume it is suitable as a fitted covariance matrix.
+
+```{r correlation-samples}
+missing_fit$correlations$pairwise_n
+round(missing_fit$correlations$pearson, 2)
+```
+
+The complete-profile ANOVA ICC uses only complete rows; the baseline-to-final
+trajectory needs its two endpoints. Neither uses an imputed history.
+Group-specific change comparisons need both endpoints and a usable arm.
+Missing arm values would exclude participants from between-arm work but
+would not remove their values from summaries that do not use arm.
+
+```{r differential-availability}
+arm_missing <- missing_fit$arm_analysis$missingness
+missing_display <- arm_missing[, metric_columns(arm_missing, c(
+  "time_label", "test", "p_value", "p_value_adj"
+))]
+for (column in metric_columns(arm_missing, c("p_value", "p_value_adj"))) {
+  missing_display[[column]] <- format.pval(missing_display[[column]], digits = 3, eps = 0.001)
+}
+knitr::kable(missing_display, digits = 3, col.names = c("Visit", "Test", "p", "Holm p"),
+caption = "Exploratory tests of differing unavailability by group.")
+```
+
+MIRA chooses Fisher's exact test when any expected cell count is below
+five and otherwise a Pearson chi-squared test. A nonsignificant result does
+not establish MCAR, equivalent missingness mechanisms, or absence of bias.
+These tests have their own across-visit adjustment family.
+
+## Change only one participant's group availability
+
+Keep the OCT thickness measurements fixed and remove one observed group label.
+Predict which denominators should change. Overall visit summaries and overall
+paired changes do not need group; group-specific summaries exclude that
+participant at each visit where their scan measurement is available. The selected ID
+lets us audit the change without treating a missing group as a new category.
+
+```{r missing-group-checkpoint}
+missing_arm_data <- retina
+masked_person <- which(endpoint_pair)[1L]
+masked_id <- missing_arm_data$participant_id[masked_person]
+missing_arm_data$arm[masked_person] <- NA_character_
+missing_arm_fit <- mira_info_long(
+  missing_arm_data, id = "participant_id", outcomes = "cmt", arm = "arm",
+  time_vars = missing_fit$time_vars, time_labels = missing_fit$time_labels,
+  reference_arm = "Strategy A", covariates = character(0),
+  improvement_direction = "lower", stable_threshold = 25,
+  analyses = c("arm_tests", "correlations"), verbose = FALSE
+)
+stopifnot(identical(missing_arm_fit$descriptives, missing_fit$descriptives),
+  identical(missing_arm_fit$change, missing_fit$change))
+group_rows <- missing_arm_fit$arm_analysis$descriptives
+available_with_group <- vapply(missing_arm_fit$time_vars, function(visit) {
+  sum(is.finite(missing_arm_data[[visit]]) & !is.na(missing_arm_data$arm))
+}, integer(1L))
+group_counts <- vapply(missing_arm_fit$time_vars, function(visit) {
+  sum(group_rows$n[group_rows$time == visit])
+}, integer(1L))
+stopifnot(identical(unname(group_counts), unname(available_with_group)),
+  masked_id %in% missing_arm_fit$trajectories$patient)
+knitr::kable(data.frame(
+  visit = unname(missing_arm_fit$time_labels),
+  all_finite_scans = missing_arm_fit$descriptives$n,
+  finite_scans_with_group = unname(group_counts)),
+  caption = "Group availability changes group denominators while preserving overall summaries.")
+```
+
+The warning identifies the absent group. The participant remains in the
+overall result; excluding their record entirely would answer a different
+question. Missing adjustment covariates similarly affect the model's rows,
+as audited in [the advanced-model sample case](frequentist-long-advanced-models.html),
+and do not justify inferring the model sample from descriptive counts.
+
+## Audit adaptation and execution status
+
+A missing number is not automatically a failed analysis. The following
+audit distinguishes the evidence stored by modules; status interpretation
+requires the request, reason, error, and warnings together.
+
+| Observed state | Interpretation and next action |
+|:--|:--|
+| `performed = TRUE` | The module reports completed work; still inspect individual effects, samples, diagnostics, and assumptions. |
+| Model disabled in `config$analyses` | Deliberately not requested; no conclusion about model feasibility. |
+| `diagnostics$adaptation` records insufficient data | Requested work was disabled for an outcome before fitting. |
+| `reason_skipped` names an absent package/version | Dependency unavailable; install the required version and rerun to validate it. |
+| Design or effect not estimable | Data/design do not support that procedure or hypothesis; increasing software availability is insufficient. |
+| Nonempty `error` or fitting warnings | Inspect the recorded failure, convergence, and numerical conditions before using output. |
+| An effect has diagnostics while other effects are estimable | Output is partially usable; inspect each effect and do not extend successful inference to the failed hypothesis. |
+| Procedure requires a design that is absent | Not applicable to that question; for example, an arm comparison needs at least two observed arms. |
+
+The categories can overlap: a model can finish with warnings, and a failed
+global test can leave successful pairwise tests. Do not replace every
+`performed = FALSE` with a single generic label.
+
+```{r execution-audit}
+missing_fit$config$analyses
+missing_fit$diagnostics$adaptation[["cmt"]]
+missing_fit$advanced_tests$emmeans[c(
+  "performed", "package", "reason_skipped", "error", "warnings"
+)]
+packages <- c("lme4", "emmeans", "afex", "geepack", "pbkrtest", "mmrm", "nparLD")
+data.frame(package = packages,
+           installed = vapply(packages, requireNamespace, logical(1L), quietly = TRUE))
+```
+
+Those model modules are disabled in this example, regardless of installed
+software. Most analysis engines are currently declared in MIRA's `Imports`;
+the implementation also guards individual engine calls. In a normal
+installation their packages are installation requirements, even though
+executing a particular statistical module is optional.
+
+For an intentionally sparse OCT series, there may be too little information
+even to estimate change variability. This separate diagnostic example has
+only one observed value in total. The outcome remains a successful
+*container* of availability information; that does not mean inference
+succeeded.
+
+```{r insufficient-information}
+sparse <- data.frame(participant_id = sprintf("S%02d", 1:6),
+                     cmt_t0 = c(420, rep(NA_real_, 5)),
+                     cmt_t1 = rep(NA_real_, 6),
+                     cmt_t2 = rep(NA_real_, 6))
+sparse_fit <- mira_info_long(
+  sparse, id = "participant_id", outcomes = "cmt",
+  covariates = character(0), analyses = c("model", "correlations"),
+  verbose = FALSE
+)
+sparse_fit$diagnostics$adaptation[["cmt"]]
+sparse_fit$advanced_tests$friedman[c("performed", "reason_skipped", "error")]
+stopifnot(!sparse_fit$advanced_tests$friedman$performed,
+          is.null(sparse_fit$correlations$pearson),
+          is.null(sparse_fit$model$fitted_model))
+```
+
+This is insufficient information, not a plausible small-sample treatment
+analysis. An unexpected outcome-level error is fatal in a single-outcome
+call; in a multiple-outcome call it is isolated as a `mira_info_error_long`
+element. That error class is different from the adapted successful container
+above. Investigate its `error` field rather than accessing nonexistent tables.
+
+In the current implementation, requesting plots for an outcome with no
+available baseline-to-follow-up pair can raise an error while constructing
+empty change-plot data. The sparse example therefore requests only model
+and correlation diagnostics. Verify paired availability before requesting
+plots for such an OCT series; this limitation does not indicate a successful
+graphical analysis. This is a software defect to repair separately, not a
+statistical requirement that every plotted participant have a complete
+profile. The ordinary examples here do not depend on that defect.
+
+## Modeling does not remove missing-data assumptions
+
+Mixed models, GEE, and residual-correlation models use long rows complete
+for outcome, participant, required arm, and retained covariates. Their
+samples can differ from all the tables above. Repeated-measures ANOVA
+also imposes its engine's completeness requirements. Check native model
+frames and module counts when fitting them; do not infer model sample size
+from `nrow(data)` or the largest descriptive count.
+
+Likelihood-based Gaussian mixed models and MMRM can use incomplete outcome
+profiles under suitable model specification and an ignorable MAR mechanism.
+That is conditional on the variables actually included. Ordinary GEE with
+unweighted available responses generally needs stronger response-missingness
+conditions for unbiased marginal inference. MIRA's rank-longitudinal module
+assumes MCAR and does not adjust for selected covariates. None of these
+procedures is an automatic MNAR sensitivity analysis, and no imputation is
+performed. See [advanced models](frequentist-long-advanced-models.html).
+
+Before interpreting a study, tabulate missingness by visit and group,
+investigate reasons for absent visits, verify endpoint and model samples,
+and judge whether the scientific estimand survives selection into those
+samples. A specialist missing-data analysis may be needed when dropout
+depends on unobserved responses. Preserve those limitations alongside the
+results in a [report bundle](frequentist-long-reporting.html).

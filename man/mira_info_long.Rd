@@ -93,7 +93,10 @@ overridden by \code{analyses}.}
 
 \item{alpha}{A finite numeric scalar strictly between 0 and 1; the default is
 \code{0.05}. The confidence level is \code{1 - alpha} for mean, change, Welch,
-marginal-mean, and supported model-based confidence intervals. It is not
+marginal-mean, MMRM coefficient, and supported model-based confidence
+intervals, and for pointwise logit intervals for rank relative effects.
+These intervals are not automatically simultaneous; adjusting a table's
+p-values does not adjust its confidence intervals. This argument is not
 used to remove results or to define clinical improvement.}
 
 \item{plots}{A non-missing logical scalar, defaulting to \code{TRUE}, requesting
@@ -103,8 +106,11 @@ unavailable, analysis continues, \code{plots} is empty, and \code{plot_error} re
 the reason.}
 
 \item{model}{A non-missing logical scalar, defaulting to \code{TRUE}, requesting
-the random-intercept mixed model and the optional model-based longitudinal
-modules. It is automatically disabled for an outcome with fewer than three
+the random-intercept mixed model and the additional longitudinal modules,
+including Kenward-Roger joint tests, unadjusted rank inference, and MMRM.
+Despite its name, this switch also controls the nonparametric rank module;
+there are no separate public switches for these three extensions.
+It is automatically disabled for an outcome with fewer than three
 finite values in total or no timepoint containing at least two distinct
 finite values, and it can be overridden by \code{analyses}. The base-R Friedman
 module is attempted independently of this switch.}
@@ -163,8 +169,10 @@ estimated or clinically validated by the function.}
 \code{TRUE}, missing or duplicated values in a selected, non-generated ID column
 are fatal because wide input is assumed to contain one row per subject. With
 \code{FALSE}, these conditions generate warnings and duplicated IDs are treated
-as records from the same subject by subject-indexed models. Use \code{FALSE} only
-when that interpretation is intentional.}
+as records from the same subject where a subject-indexed model permits
+them. This does not guarantee support in every module: rank and MMRM reject
+duplicate subject-by-visit records and do not aggregate them. Use \code{FALSE}
+only when that interpretation is intentional.}
 
 \item{outcomes}{\code{NULL} (the default), \code{"auto"}, or a character vector of
 outcome names, unique after case-and-punctuation normalization. \code{NULL} and
@@ -320,6 +328,14 @@ multi-outcome, error, or full single-outcome reports as appropriate;
 and invisibly returns a stored plot; for a multi-outcome object, specify
 \code{outcome} when more than one successful outcome is available. Requesting a
 plot that was not generated is an error.
+The single-outcome printer accepts \code{digits}, \code{max_rows}, and presentation
+switches such as \code{model}, \code{correlations}, \code{outliers}, \code{trajectories},
+\code{missingness}, and \code{plots}; these neither refit nor remove stored results.
+Its model view includes the three additional modules and their availability
+diagnostics. For one outcome, \code{summary(result)$advanced} exposes \code{kenward_roger},
+\code{rank_effects}, \code{rank_tests}, and an \code{mmrm} list of status, coefficients,
+and joint-effect tests. Use the full object for native fits, samples, and
+complete diagnostics. There are no separate MMRM or rank-specific plots.
 }
 \description{
 Performs analyses of one or more numeric longitudinal outcomes stored in wide format,
@@ -372,8 +388,9 @@ convention in MIRA-owned result summaries. Raw and adjusted p-values,
 counts and percentages, variance and standard deviation, and preferred and
 method-specific ICCs remain distinct. Fitted models, their native summaries,
 native analysis tables and plot objects keep their external contracts.
-In particular, native \code{summary_emm}, \code{afex}, \code{anova}, \code{nlme}, and
-\code{clubSandwich} structures are preserved; MIRA-owned adjusted contrast,
+In particular, native \code{summary_emm}, \code{afex}, \code{anova}, \code{nlme},
+\code{clubSandwich}, \code{KRmodcomp}, \code{nparld_fit}, \code{mmrm}, and MMRM summary structures
+are preserved; MIRA-owned adjusted contrast,
 standardized ANOVA/Friedman/GEE and coefficient tables use the rule above.
 Correlation matrix dimensions remain source-column names. Direction and
 clinical-direction labels are categorical states. The long-data \code{value}
@@ -434,9 +451,13 @@ data. These adaptations are recorded under \code{diagnostics$adaptation}.
 For a single outcome, an analysis error stops the call. With multiple
 outcomes, each outcome is protected separately: successful outcomes remain
 available, failures become \code{mira_info_error_long} entries, and one warning names
-the failed outcomes. Missing optional packages and most advanced-model
+the failed outcomes. Missing analysis-engine namespaces and most advanced-model
 failures instead produce structured skipped modules with \code{performed = FALSE},
 an error or \code{reason_skipped}, and any captured warnings.
+Warnings and a successful fit are not substitutes for checking design,
+residual assumptions, missingness, and the scientific interpretation of the
+selected comparisons. These exploratory outputs do not specify a study's
+confirmatory analysis plan or its multiplicity strategy.
 }
 }
 \section{Input data and longitudinal naming}{
@@ -503,8 +524,9 @@ paired t test, asymptotic paired Wilcoxon signed-rank test (\code{exact = FALSE}
 and direction/response counts;
 \item availability summaries; baseline-to-final trajectories with relative change
 \code{100 * (final - baseline) / abs(baseline)} when baseline is finite and
-nonzero; pooled within-subject residual standard deviation; between-subject
-standard deviation of subject means; and a complete-profile one-way
+nonzero; the standard deviation of available observations centered on each
+subject's available mean; between-subject standard deviation of subject
+means; and a complete-profile one-way
 ICC(1,1);
 \item a Friedman test on complete repeated profiles, Kendall's W, and all
 asymptotic pairwise Wilcoxon signed-rank post-hoc tests with paired
@@ -524,6 +546,19 @@ the number of selected timepoints. The model ICC, when available, is the
 random-intercept variance divided by the sum of random-intercept and residual
 variances; the \code{ICC} metric in \code{variability} prefers this estimate and otherwise uses the
 ANOVA estimate.
+The within-subject descriptive SD uses denominator \code{N - 1}, where \code{N} counts
+finite stacked centered observations, rather than a pooled within-subject
+degrees-of-freedom correction, and does not remove a systematic time trend. The one-way
+ICC likewise does not adjust for time or covariates and can be negative;
+the model ICC depends on the fitted fixed effects and covariance model.
+Neither is automatically a clinically validated measure of reliability.
+
+Paired t inference concerns mean paired change and relies on independent
+subjects and a suitable sampling distribution of those changes. The paired
+Wilcoxon signed-rank procedure is a rank-based test of paired differences;
+its usual location interpretation requires symmetry, and it is not a general
+test of equality of means. Friedman uses complete subject blocks, whereas
+its pairwise post-hoc tests can have larger, comparison-specific samples.
 
 Requested correlations, IQR flags, plots, arm analyses, and model-based
 methods are added conditionally. The primary mixed model, when estimable and
@@ -585,9 +620,13 @@ with an explicit non-estimability note. These diagnostics do not change the
 retained contrasts, their degrees of freedom, or their p-values.
 
 The mixed models specify a conditional mean with subject-specific random
-effects, whereas GEE describes a population-averaged marginal mean under the
-stated working correlation. These are different inferential targets even when
-their numerical estimates are similar.
+effects; GEE specifies a marginal mean and working correlation. For the
+Gaussian identity-link models used here, integrating zero-mean random effects
+leaves the same fixed mean function, so conditional and marginal fixed-effect
+coefficients need not represent different estimands. Covariance assumptions,
+estimation, uncertainty calculations, hypotheses, and effective samples can
+nevertheless differ. Compare the actual questions and samples rather than
+treating the methods as interchangeable.
 
 A model-comparison table reports likelihood criteria for likelihood-based
 models and QIC/CIC for GEE without treating those criteria as a single common
@@ -603,9 +642,16 @@ can use different analysis samples or null hypotheses.
 When \code{model} is enabled, three further modules supplement the existing
 mixed-model, ANOVA, Friedman, GEE, residual-correlation, and CR2 results.
 Each module is protected separately and records \code{requested}, \code{performed},
-its actual analysis sample, and a failure or non-estimability explanation.
+and applicable diagnostics. Prepared samples, native fits, and result tables
+are retained only when the corresponding preparation, fit, and extraction
+stages have been reached; an early skip need not contain them.
 \code{inspect_only = TRUE} performs no fitting. A resolved false model switch,
 for example with \code{analyses = "none"}, disables all three modules.
+\code{requested} reflects that outcome's resolved model switch, after adaptation;
+compare \code{config$analyses$model} with \code{diagnostics$adaptation} when a globally
+requested model was disabled for insufficient data. \code{performed = FALSE}
+describes unavailable inference, not evidence for a null effect. A performed
+module may still have unavailable individual hypotheses or contrasts.
 
 \code{advanced_tests$kenward_roger} uses \code{pbkrtest::KRmodcomp()} for approximate
 joint F tests of the primary Gaussian random-intercept fit. Its \code{tidy} table
@@ -620,7 +666,11 @@ established convergence, a nonsingular fit, and positive residual variance.
 Rank-deficient hypotheses expose requested, tested, and dropped coefficients
 in \code{effect_diagnostics}; a reduced hypothesis is labelled explicitly, and a
 wholly unavailable hypothesis has no finite test result. Native tests,
-restriction matrices, and the fitted analysis frame are retained.
+restriction matrices, and the fitted analysis frame are retained in \code{tests},
+\code{constraints}, and \code{data}, respectively, when available. The sample is that
+of the primary mixed fit. This explicit global-testing module is distinct
+from Kenward-Roger degrees of freedom that \code{emmeans} may already use for
+individual mixed-model contrasts and their intervals.
 
 \code{advanced_tests$rank_longitudinal} uses the formula interface of
 \verb{nparLD >= 2.3.3} with unweighted relative marginal effects (\code{H0p}),
@@ -629,6 +679,10 @@ tests, and pointwise logit confidence intervals at level \code{1 - alpha}.
 Its reference distribution weights the resolved time cells, and arm-by-time
 cells when enabled, equally. An effect greater than 0.5 denotes larger
 responses relative to that reference, independently of clinical direction.
+More precisely, it is the probability that an independent response from the
+target cell exceeds one drawn from that reference mixture, with half weight
+for ties. It is not a subject's probability of improvement, a mean difference,
+or a causal treatment effect.
 These factorial effect hypotheses differ from the Gaussian joint coefficient
 hypotheses; they do not test mean equality. Selected adjustment covariates
 are not used. The original subject-by-visit schedule retains missing response
@@ -636,12 +690,16 @@ rows, and incomplete profiles contribute observed cells under an MCAR
 assumption; general MAR and MNAR mechanisms are not handled. Subjects with
 no finite response are excluded. \code{effects} reports cell counts, estimator
 SE, and pointwise intervals; \code{tests} identifies ATS/WTS and their null
-questions. If the native covariance estimates the covariance of the
-sqrt-N-scaled effect estimator, MIRA stores \code{covariance = Sigma / N} and
+questions. In the supported modern API, native \code{Sigma} describes the
+sqrt-N-scaled effect estimator. MIRA stores \code{covariance = Sigma / N} and
 \code{SE = sqrt(diag(Sigma) / N)}, where N counts independent observed subjects.
 The native object remains unchanged. ATS uses the engine's large-denominator
 F approximation (\code{df_den = 1e10}); WTS is asymptotic chi-squared and has no
-denominator degrees of freedom. No permutation test is requested.
+denominator degrees of freedom. No permutation test is requested. The
+adapter requires at least two observed subjects in each enabled arm and two
+finite responses in every requested cell, unique subject-by-visit records,
+and at least two distinct finite responses overall. These are computational
+guards, not guarantees of accurate small-sample asymptotic inference.
 
 \code{advanced_models$mmrm} fits a marginal Gaussian repeated-measures model with
 \verb{mmrm >= 0.3.17}: categorical visits, the resolved mean-model covariates and
@@ -656,7 +714,12 @@ an MNAR sensitivity analysis. Missing predictors can remove observations.
 The module preserves the requested visit order, requires observed modeled
 visits, one observation per subject and visit, a full-rank fixed design,
 joint observations for every visit pair, convergence, and finite,
-numerically full-rank covariance estimates. It records coefficient and
+numerically full-rank covariance estimates. Empty visits, including after
+predictor filtering, make this module unavailable; they are not dropped to
+create a new baseline or final visit. These guards do not establish that the
+fitted model is scientifically adequate. An empirical initializer, with a
+standard initializer as fallback, affects only optimization starting values.
+It records coefficient and
 joint-effect tests, marginal means and contrast families, covariance,
 visit-pair coverage, actual engine data/counts, and native fit/summary.
 
@@ -668,6 +731,15 @@ criteria; the combined comparison table is not a cross-engine ranking rule.
 All three perspectives enter \code{sensitivity} with their own sample, hypothesis,
 and source path. Raw global tests are not pooled into a new adjustment family.
 MMRM contrast adjustments remain within their respective contrast families.
+The principal table paths are \code{kenward_roger$tidy},
+\code{rank_longitudinal$effects}, and \code{rank_longitudinal$tests} below
+\code{advanced_tests}, and \code{mmrm$coefficients}, \code{mmrm$effect_tests},
+\code{mmrm$covariance}, \code{mmrm$pair_coverage}, and \code{mmrm$emmeans} below
+\code{advanced_models}. \code{criterion_convention} is a column of the combined
+model-comparison table when an MMRM row was added; the MMRM module itself
+stores \code{criteria_note}. MIRA-owned metric fields can be outcome-prefixed;
+use their \code{mira_metric_names} maps. Structural labels/counts and native
+engine objects keep their own names.
 }
 
 \section{Treatment-arm analyses}{
@@ -714,7 +786,7 @@ each timepoint. Output distinguishes raw \code{NA} counts (\code{missing}), \cod
 \code{-Inf} counts (\code{non_finite}), and their combined analysis-unavailable count.
 Change estimates and paired tests use a separate pairwise-complete subset for
 each comparison; correlations also use pairwise-complete observations.
-Baseline-to-final trajectories require both endpoints, and arm change
+Baseline-to-final trajectory estimates require both endpoints, and arm change
 comparisons require baseline and the relevant
 follow-up. The complete-profile ANOVA ICC and Friedman test require every
 selected timepoint. The \code{afex} analysis receives the prepared repeated-
@@ -722,7 +794,14 @@ measures data and applies its own repeated-measures completeness requirements.
 Mixed, GEE, and residual-correlation models use long rows complete for
 outcome, ID, required arm, and retained covariates, so their analysis samples
 can differ from the descriptive and pairwise samples. Module-specific sample
-sizes and prepared data are retained where available.
+sizes and prepared data are retained where available. Kenward-Roger uses
+the primary mixed-model frame. MMRM uses available response rows complete
+for its predictors and retains all resolved visit levels for its checks.
+Rank inference instead uses the original subject-by-visit calendar with
+explicit missing response rows, ignores adjustment-covariate completeness,
+and removes wholly unobserved profiles. Computational use of incomplete
+data does not establish an ignorable missingness mechanism: rank inference
+assumes MCAR; MMRM inference assumes ignorable MAR with an adequate model.
 }
 
 \section{Multiplicity}{
@@ -737,18 +816,35 @@ store primary, Bonferroni, Holm, BH, and BY adjustments. Global
 likelihood-ratio, ANOVA, GEE, CR2, Kenward-Roger, rank ATS/WTS, MMRM joint,
 and sensitivity-table p-values are not pooled
 into a single adjustment family.
+For MMRM contrasts, \code{multiplicity$mmrm} contains the families \code{time_pairwise},
+\code{baseline_vs_followup}, \code{consecutive_time}, \code{ordinal_trends}, \code{arm_pairwise},
+\code{simple_arm}, \code{simple_time}, and \code{interaction}. Each entry records
+\code{primary_method}, \code{available_adjustments}, and \code{object_path}; an unavailable
+table has an \code{NA} path. This branch is created only when both the MMRM fit
+and its marginal-mean module were performed. The single
+\code{advanced_models$mmrm$emmeans$baseline_final$tidy} contrast is separately
+accessible; there is no \code{multiplicity$mmrm$baseline_final} family. Ordinary
+MIRA-adjusted contrast tables retain pointwise intervals. The separately
+stored Tukey and approximate Dunnett summaries use their engine adjustment
+conventions; adjusted p-values alone do not make an interval simultaneous.
 }
 
-\section{Optional dependencies and failure handling}{
+\section{Dependencies and failure handling}{
 
-Base summaries and rank tests use R's \code{stats} package. Optional capabilities
+Base summaries, paired rank tests, and Friedman use R's \code{stats} package.
+The following analysis modules are optional requests, but their engines are
+declared installation dependencies in \code{DESCRIPTION} (\code{Imports}), not
+optional \code{Suggests}. A normal package installation must satisfy them.
+The modules
 require \code{ggplot2} (plots), \code{lme4} (mixed models), \code{lmerTest} (used in place of
 \code{lme4::lmer()} when present), \code{emmeans} (marginal means and contrasts), \code{afex}
 (repeated-measures ANOVA), \code{geepack} (GEE), \code{nlme} (residual correlation
 models), \code{clubSandwich} (CR2 inference), \code{pbkrtest} (Kenward-Roger joint
 tests), \verb{nparLD >= 2.3.3} (relative marginal effects), \verb{mmrm >= 0.3.17}
 (unstructured marginal repeated measures), and \code{performance} (Nakagawa
-R-squared). Except for plotting, each advanced module records \code{performed},
+R-squared). Runtime namespace/version guards are defensive handling for an
+unavailable engine; they do not redefine the installation requirements.
+Except for plotting, each advanced module records \code{performed},
 package, warnings, error, and/or \code{reason_skipped} information. Absence of one
 package does not prevent independent modules from being attempted. Absence of
 \code{ggplot2} is recorded in \code{plot_error}. Captured model-fitting warnings are
@@ -770,6 +866,28 @@ entry during a multi-outcome call.
 }
 
 \examples{
+# Keep deterministic examples local and restore the caller's RNG state.
+local({
+run_examples_long <- function() {
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  saved_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv) else NULL
+  on.exit({
+    if (had_seed) {
+      assign(".Random.seed", saved_seed, envir = .GlobalEnv)
+    } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  }, add = TRUE)
+  initial_devices <- grDevices::dev.list()
+  on.exit({
+    for (device in rev(setdiff(grDevices::dev.list(), initial_devices))) {
+      grDevices::dev.off(device)
+    }
+  }, add = TRUE)
+  # Plot demonstrations write only to a temporary device, closed on exit.
+  example_plot_file <- tempfile("mira-info-examples-", fileext = ".pdf")
+  grDevices::pdf(file = example_plot_file)
+
 # Resolve field references from canonical bases in either naming convention.
 metric_columns_long <- function(table, base) {
   map <- attr(table, "mira_metric_names", exact = TRUE)
@@ -808,30 +926,30 @@ auto_fit <- mira_info_long(
 
 # Start with sample size and completeness, then verify the ordered mapping
 # from source columns to display labels.
-auto_fit$overview[c(
+print(auto_fit$overview[c(
   "n_patients", "n_timepoints", "complete_profiles",
   "complete_profiles_pct"
-)]
-data.frame(
+)])
+print(data.frame(
   order = seq_along(auto_fit$time_vars),
   variable = auto_fit$time_vars,
   label = unname(auto_fit$time_labels)
-)
-utils::head(auto_fit$long_data[, metric_columns_long(auto_fit$long_data, c(
+))
+print(utils::head(auto_fit$long_data[, metric_columns_long(auto_fit$long_data, c(
   "patient", "outcome", "time", "time_index", "time_label", "value"
-))])
+))]))
 
 # Per-timepoint availability and descriptive statistics.
-auto_fit$descriptives[, metric_columns_long(auto_fit$descriptives, c(
+print(auto_fit$descriptives[, metric_columns_long(auto_fit$descriptives, c(
   "label", "n", "missing", "mean", "sd", "ci_lower", "ci_upper"
-))]
+))])
 
 # Every ordered to-minus-from comparison is in $change. The adjusted columns
 # belong to the paired-t and paired-Wilcoxon families, respectively.
-auto_fit$change[, metric_columns_long(auto_fit$change, c(
+print(auto_fit$change[, metric_columns_long(auto_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "cohens_dz",
   "paired_t_p", "paired_t_p_adj", "wilcoxon_p_adj"
-))]
+))])
 
 # Select the clinically common baseline-to-final row without relying on row
 # position. This remains reliable if more visits are added later.
@@ -841,31 +959,31 @@ baseline_final <- auto_fit$change[
   ,
   drop = FALSE
 ]
-baseline_final[, metric_columns_long(baseline_final, c(
+print(baseline_final[, metric_columns_long(baseline_final, c(
   "n", "mean_from", "mean_to", "mean_change", "ci_lower", "ci_upper"
-))]
+))])
 
 # Variability and the preferred available ICC are kept in a one-row table.
-auto_fit$variability[, metric_columns_long(auto_fit$variability, c(
+print(auto_fit$variability[, metric_columns_long(auto_fit$variability, c(
   "between_subject_sd", "within_subject_sd",
   "ICC_anova_complete_profiles", "ICC_model", "ICC"
-))]
+))])
 
 # $trajectories contains one baseline-to-final record per input row.
-utils::head(auto_fit$trajectories[, metric_columns_long(auto_fit$trajectories, c(
+print(utils::head(auto_fit$trajectories[, metric_columns_long(auto_fit$trajectories, c(
   "patient", "baseline", "final", "absolute_change", "direction"
-))])
-table(auto_fit$trajectories$direction, useNA = "ifany")
+))]))
+print(table(auto_fit$trajectories$direction, useNA = "ifany"))
 
 # Friedman is attempted with base R even though model fitting was disabled.
-auto_fit$advanced_tests$friedman$tidy[,
+print(auto_fit$advanced_tests$friedman$tidy[,
   metric_columns_long(auto_fit$advanced_tests$friedman$tidy, c(
   "statistic", "df", "p_raw", "kendalls_w", "n", "n_timepoints"
-))]
-auto_fit$advanced_tests$friedman$posthoc$tidy[,
+))])
+print(auto_fit$advanced_tests$friedman$posthoc$tidy[,
   metric_columns_long(auto_fit$advanced_tests$friedman$posthoc$tidy, c(
   "from_label", "to_label", "n", "p_raw", "p_holm", "rank_biserial"
-))]
+))])
 
 # ------------------------------------------------------------------
 # Example 2: Audit what mira_info_long() detected before fitting anything
@@ -911,37 +1029,37 @@ detected <- mira_info_long(
 
 # These are the principal resolved choices. Control is selected as the
 # reference because its label is recognized as control-like.
-detected$config[c(
+print(detected$config[c(
   "id", "id_generated", "outcomes", "arm", "reference_arm", "covariates"
-)]
-detected$config$time_vars[["outcome"]]
-detected$config$time_labels[["outcome"]]
-detected$config$analyses
+)])
+print(detected$config$time_vars[["outcome"]])
+print(detected$config$time_labels[["outcome"]])
+print(detected$config$analyses)
 
 # These fields distinguish inferred choices from explicit overrides and
 # record why an ID, arm, direction, or threshold was chosen.
-detected$config$auto_detected
-detected$config$specified_manually
-detected$config$sources
-detected$config$alternatives
+print(detected$config$auto_detected)
+print(detected$config$specified_manually)
+print(detected$config$sources)
+print(detected$config$alternatives)
 # Per-outcome name provenance is separate from manual column selection.
-detected$config$outcome_names
+print(detected$config$outcome_names)
 
 # The parsed map is the compact audit trail for outcome grouping and time
 # ordering. Candidate tables and covariate classes explain the other choices.
-detected$detected_variables$longitudinal_map[,
+print(detected$detected_variables$longitudinal_map[,
   metric_columns_long(detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern", "numeric"
-))]
-detected$detected_variables$id_candidates
-detected$detected_variables$arm_candidates
-detected$detected_variables$covariates_numeric
-detected$detected_variables$covariates_categorical
+))])
+print(detected$detected_variables$id_candidates)
+print(detected$detected_variables$arm_candidates)
+print(detected$detected_variables$covariates_numeric)
+print(detected$detected_variables$covariates_categorical)
 
 # Empty vectors are informative: they mean that no unresolved alternatives or
 # diagnostic warnings remained. Non-empty entries explain what needs review.
-detected$config$alternatives
-detected$diagnostics$warnings
+print(detected$config$alternatives)
+print(detected$diagnostics$warnings)
 
 # ------------------------------------------------------------------
 # Example 3: Take control when column names do not encode time
@@ -974,30 +1092,46 @@ explicit_fit <- mira_info_long(
   verbose = FALSE
 )
 
-data.frame(
+print(data.frame(
   order = seq_along(explicit_fit$time_vars),
   variable = explicit_fit$time_vars,
   label = unname(explicit_fit$time_labels)
-)
-explicit_fit$config$outcomes
-explicit_fit$config$specified_manually[c(
+))
+print(explicit_fit$config$outcomes)
+print(explicit_fit$config$specified_manually[c(
   "id", "outcomes", "time_vars", "time_labels"
-)]
-explicit_fit$change[
+)])
+print(explicit_fit$change[
   explicit_fit$change$from == "pre" & explicit_fit$change$to == "final",
   metric_columns_long(explicit_fit$change, c(
     "from_label", "to_label", "n", "mean_change",
     "improved_n", "stable_n", "worsened_n", "paired_t_p_adj"
   )),
   drop = FALSE
-]
+])
+
+# Declaring a name is distinct from selecting source columns. Spaces and
+# capitalization are preserved in metric prefixes; use the map to read them.
+space_fit <- mira_info_long(
+  explicit_data, id = "case_id",
+  time_vars = stats::setNames(list(c("pre", "week4", "final")), "Symptom burden"),
+  time_labels = c("Baseline", "Week 4", "Week 12"),
+  covariates = character(0), analyses = "none", verbose = FALSE
+)
+print(space_fit$config$outcome_names)
+print(attr(auto_fit$descriptives, "mira_metric_names")[c("mean", "sd")])
+print(attr(space_fit$descriptives, "mira_metric_names")[c("mean", "sd")])
+print(space_fit$descriptives[, metric_columns_long(space_fit$descriptives,
+  c("label", "n", "mean", "sd"))])
+# Labels follow resolved column order; they are not sorted lexicographically.
+# Week 4 therefore precedes Week 12 even though string sorting differs.
 
 # Wide format means one row per subject. strict_id = TRUE is the protective
 # default; these quick checks should both be zero before analysis.
-c(
+print(c(
   missing_ids = sum(is.na(explicit_data$case_id)),
   duplicated_ids = sum(duplicated(explicit_data$case_id))
-)
+))
 
 # ------------------------------------------------------------------
 # Example 4: Parse a non-standard naming convention with a regex
@@ -1023,12 +1157,12 @@ regex_detected <- mira_info_long(
   inspect_only = TRUE,
   verbose = FALSE
 )
-regex_detected$detected_variables$longitudinal_map[,
+print(regex_detected$detected_variables$longitudinal_map[,
   metric_columns_long(regex_detected$detected_variables$longitudinal_map, c(
   "outcome", "variable", "time_label", "time_order", "pattern"
-))]
-regex_detected$config$time_vars[["pain"]]
-regex_detected$config$time_labels[["pain"]]
+))])
+print(regex_detected$config$time_vars[["pain"]])
+print(regex_detected$config$time_labels[["pain"]])
 
 regex_fit <- mira_info_long(
   regex_data,
@@ -1037,18 +1171,18 @@ regex_fit <- mira_info_long(
   analyses = "none",
   verbose = FALSE
 )
-data.frame(
+print(data.frame(
   order = seq_along(regex_fit$time_vars),
   variable = regex_fit$time_vars,
   label = unname(regex_fit$time_labels)
-)
-regex_fit$change[
+))
+print(regex_fit$change[
   regex_fit$change$from == regex_fit$time_vars[[1L]] &
     regex_fit$change$to == regex_fit$time_vars[[length(regex_fit$time_vars)]],
   metric_columns_long(regex_fit$change,
     c("from_label", "to_label", "n", "mean_change", "paired_t_p_adj")),
   drop = FALSE
-]
+])
 
 # ------------------------------------------------------------------
 # Example 5: Treatment-arm comparisons without fitting a model
@@ -1068,47 +1202,52 @@ arm_fit <- mira_info_long(
   stable_threshold = 2,
   verbose = FALSE
 )
-arm_fit$arm_analysis[c("enabled", "arm_variable", "reference_arm", "levels")]
+print(arm_fit$arm_analysis[c("enabled", "arm_variable", "reference_arm", "levels")])
 
 # Values are compared between arms at every visit. The column name states the
 # direction exactly: mean_difference_b_minus_a is arm_b minus arm_a.
-arm_fit$arm_analysis$time_pairwise[, metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
+print(arm_fit$arm_analysis$time_pairwise[, metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
   "time_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_difference_b_minus_a", "ci_lower", "ci_upper",
   "welch_t_p", "welch_t_p_adj"
-))]
+))])
 
 # Baseline balance is the first-timepoint subset; omnibus p-values form their
 # own across-time families and therefore have their own adjusted columns.
-arm_fit$arm_analysis$baseline_balance[,
+print(arm_fit$arm_analysis$baseline_balance[,
   metric_columns_long(arm_fit$arm_analysis$baseline_balance, c(
   "arm_a", "arm_b", "mean_difference_b_minus_a", "welch_t_p_adj"
-))]
-arm_fit$arm_analysis$time_omnibus[, metric_columns_long(arm_fit$arm_analysis$time_omnibus, c(
+))])
+print(arm_fit$arm_analysis$time_omnibus[, metric_columns_long(arm_fit$arm_analysis$time_omnibus, c(
   "time_label", "n", "welch_anova_p", "welch_anova_p_adj",
   "kruskal_p_adj"
-))]
+))])
 
 # Change comparisons are baseline-to-follow-up differences. Here a negative
 # difference_in_change_b_minus_a means a larger reduction in Treatment.
-arm_fit$arm_analysis$change_pairwise[,
+print(arm_fit$arm_analysis$change_pairwise[,
   metric_columns_long(arm_fit$arm_analysis$change_pairwise, c(
   "to_label", "arm_a", "arm_b", "n_a", "n_b",
   "mean_change_a", "mean_change_b", "difference_in_change_b_minus_a",
   "ci_lower", "ci_upper", "welch_t_p_adj"
-))]
-arm_fit$arm_analysis$change_descriptives[,
+))])
+print(arm_fit$arm_analysis$change_descriptives[,
   metric_columns_long(arm_fit$arm_analysis$change_descriptives, c(
   "arm", "to_label", "n", "mean_change",
   "improved_n", "stable_n", "worsened_n"
-))]
+))])
 
 \donttest{
 # ------------------------------------------------------------------
 # Example 6: Covariate-adjusted longitudinal model
 # ------------------------------------------------------------------
-# lme4 is the required engine for the primary mixed model. Other advanced
-# packages are optional and record a structured skip when unavailable.
+# This workflow fits several inference engines; it is excluded from routine
+# examples for runtime, and can be run explicitly with example(...,
+# run.donttest = TRUE).
+# Model modules are optional requests; their engines, including lme4,
+# pbkrtest, nparLD, and mmrm, are Imports required by normal installation.
+# Namespace guards also let the result explain an unavailable engine.
+# This single fit is reused for the three additional perspectives below.
 if (requireNamespace("lme4", quietly = TRUE)) {
   adjusted_fit <- mira_info_long(
     trial,
@@ -1127,25 +1266,36 @@ if (requireNamespace("lme4", quietly = TRUE)) {
   # Requested, retained, and skipped covariates are distinguished explicitly.
   # Covariate adjustment changes model-based estimates; it does not make the
   # treatment comparison causal.
-  adjusted_fit$model[c(
+  print(adjusted_fit$model[c(
     "covariates_requested", "covariates_used", "covariates_skipped",
     "converged", "singular", "warnings", "error"
-  )]
+  )])
   if (!is.null(adjusted_fit$model$fitted_model)) {
-    stats::formula(adjusted_fit$model$fitted_model)
+    print(stats::formula(adjusted_fit$model$fitted_model))
   }
 
   # These likelihood-ratio tables answer different global questions. They are
   # not combined into the contrast-level multiplicity families.
-  adjusted_fit$model$global_time_test
-  adjusted_fit$model$global_arm_test
-  adjusted_fit$model$arm_time_interaction_test
-  adjusted_fit$variability[,
-  metric_columns_long(adjusted_fit$variability, c("ICC_model", "ICC"))]
+  print(adjusted_fit$model$global_time_test)
+  print(adjusted_fit$model$global_arm_test)
+  print(adjusted_fit$model$arm_time_interaction_test)
+  print(adjusted_fit$variability[,
+  metric_columns_long(adjusted_fit$variability, c("ICC_model", "ICC"))])
 
   # ----------------------------------------------------------------
   # Example 7: Estimated marginal means and targeted contrasts
   # ----------------------------------------------------------------
+  compact_contrasts_long <- function(table) {
+    if (is.null(table)) return(NULL)
+    keep <- intersect(
+      metric_columns_long(table,
+        c("contrast", "estimate", "SE", "df", "p_raw", "p_holm")),
+      names(table)
+    )
+    table[, keep, drop = FALSE]
+  }
+
+  # This first emmeans module belongs to the primary random-intercept fit.
   if (requireNamespace("emmeans", quietly = TRUE) &&
       isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
     emm <- adjusted_fit$advanced_tests$emmeans
@@ -1164,48 +1314,60 @@ if (requireNamespace("lme4", quietly = TRUE)) {
       interaction_contrasts = emm$arm_time$interaction_tidy,
       ordinal_trends = emm$trends$tidy
     )
-    vapply(
+    print(vapply(
       emm_tables,
       function(table) if (is.null(table)) 0L else nrow(table),
       integer(1L)
-    )
+    ))
 
     # Estimated marginal means are adjusted for age and site because those
     # covariates were included in the fitted model.
-    emm$time$tidy
-
-    compact_contrasts_long <- function(table) {
-      if (is.null(table)) return(NULL)
-      keep <- intersect(
-        metric_columns_long(table,
-          c("contrast", "estimate", "SE", "df", "p_raw", "p_holm")),
-        names(table)
-      )
-      table[, keep, drop = FALSE]
-    }
+    print(emm$time$tidy)
 
     # Pairwise enumerates every pair of visits. Baseline-versus-final is one
     # prespecified endpoint contrast, stored separately for direct retrieval.
-    compact_contrasts_long(emm$time$pairwise_tidy)
-    compact_contrasts_long(emm$baseline_final$tidy)
+    print(compact_contrasts_long(emm$time$pairwise_tidy))
+    print(compact_contrasts_long(emm$baseline_final$tidy))
 
     # Simple arm effects compare arms within each visit. The path index above
     # also exposes time-within-arm and interaction contrasts.
-    compact_contrasts_long(emm$arm_time$simple_arm_tidy)
+    print(compact_contrasts_long(emm$arm_time$simple_arm_tidy))
 
     # With four ordered visits, linear, quadratic, and cubic trends can be
     # returned. These use visit order, not assumed equal chronological spacing.
-    compact_contrasts_long(emm$trends$tidy)
+    print(compact_contrasts_long(emm$trends$tidy))
+  }
+
+  # MMRM emmeans belongs to a separate marginal fit with unstructured
+  # covariance. Read its canonical table and its own adjustment-family path.
+  if (isTRUE(adjusted_fit$advanced_models$mmrm$performed) &&
+      isTRUE(adjusted_fit$advanced_models$mmrm$emmeans$performed)) {
+    mmrm_emm <- adjusted_fit$advanced_models$mmrm$emmeans
+    print(compact_contrasts_long(mmrm_emm$time$pairwise_tidy))
+    print(adjusted_fit$multiplicity$mmrm$time_pairwise[c(
+      "primary_method", "available_adjustments", "object_path"
+    )])
+    # This one final-minus-baseline contrast has a separate table, but no
+    # multiplicity$mmrm$baseline_final family is created.
+    print(compact_contrasts_long(mmrm_emm$baseline_final$tidy))
   }
 
   # ----------------------------------------------------------------
   # Example 8: Advanced modules and sensitivity analysis
   # ----------------------------------------------------------------
   # Check performed before attempting to read module-specific tables. This
-  # remains safe when some optional packages are not installed or a fit fails.
+  # remains safe when a defensive dependency guard or a fit diagnostic
+  # prevents inference. It does not replace checking the diagnostic reason.
   advanced_status <- c(
     rm_anova = isTRUE(adjusted_fit$advanced_tests$rm_anova$performed),
     friedman = isTRUE(adjusted_fit$advanced_tests$friedman$performed),
+    kenward_roger = isTRUE(
+      adjusted_fit$advanced_tests$kenward_roger$performed
+    ),
+    rank_longitudinal = isTRUE(
+      adjusted_fit$advanced_tests$rank_longitudinal$performed
+    ),
+    mmrm = isTRUE(adjusted_fit$advanced_models$mmrm$performed),
     gee_independence = isTRUE(
       adjusted_fit$advanced_models$gee$independence$performed
     ),
@@ -1224,67 +1386,113 @@ if (requireNamespace("lme4", quietly = TRUE)) {
       adjusted_fit$robustness$club_sandwich$performed
     )
   )
-  advanced_status
+  print(advanced_status)
+
+  kr_result <- adjusted_fit$advanced_tests$kenward_roger
+  rank_result <- adjusted_fit$advanced_tests$rank_longitudinal
+  mmrm_result <- adjusted_fit$advanced_models$mmrm
+  # The extensions record requested and performed separately. A module may
+  # be performed yet retain warnings or unavailable individual questions.
+  print(lapply(list(kenward_roger = kr_result, rank = rank_result, mmrm = mmrm_result),
+    function(module) module[c(
+      "requested", "performed", "reason_skipped", "warnings", "error", "errors"
+    )]))
+
+  if (advanced_status[["kenward_roger"]]) {
+    print(kr_result$tidy[, metric_columns_long(kr_result$tidy, c(
+      "question", "n", "n_subjects", "statistic", "df_num", "df_den",
+      "F_scaling", "p_raw"
+    ))])
+    # TIME and ARM include interaction coefficients; these are joint
+    # coefficient hypotheses, not averaged marginal effects or type-III tests.
+    print(kr_result$effect_diagnostics$TIME)
+  }
+  if (advanced_status[["rank_longitudinal"]]) {
+    print(rank_result$effects[, metric_columns_long(rank_result$effects, c(
+      "arm", "time", "time_index", "time_label", "n_subjects", "n", "missing_n",
+      "relative_effect", "SE", "ci_lower", "ci_upper"
+    ))])
+    print(rank_result$tests)
+    # Effects above 0.5 mean larger responses against the equal-cell
+    # reference mixture; they do not mean clinical improvement.
+    print(rank_result[c("n_subjects", "n_observations", "missingness_assumption")])
+  }
+  if (advanced_status[["mmrm"]]) {
+    print(utils::head(mmrm_result$coefficients))
+    print(mmrm_result$effect_tests)
+    print(mmrm_result$covariance)
+    print(mmrm_result$pair_coverage)
+    print(mmrm_result[c(
+      "n", "n_subjects", "n_timepoints", "data_source", "method", "df_method",
+      "ic_penalty_parameters", "bic_sample_size", "criteria_note"
+    )])
+  }
 
   if (advanced_status[["rm_anova"]]) {
-    adjusted_fit$advanced_tests$rm_anova$tidy
+    print(adjusted_fit$advanced_tests$rm_anova$tidy)
   }
-  adjusted_fit$advanced_tests$friedman$tidy
+  print(adjusted_fit$advanced_tests$friedman$tidy)
 
   if (advanced_status[["gee_exchangeable"]]) {
-    adjusted_fit$advanced_models$gee$exchangeable$effect_tests
+    print(adjusted_fit$advanced_models$gee$exchangeable$effect_tests)
   }
   if (advanced_status[["random_slope"]]) {
     slope_result <- adjusted_fit$advanced_models$random_slope
-    slope_result[metric_columns_long(slope_result, c(
+    print(slope_result[metric_columns_long(slope_result, c(
       "formula", "converged", "singular",
       "random_intercept_slope_correlation"
-    ))]
+    ))])
   }
   if (advanced_status[["nlme_compound_symmetry"]] ||
       advanced_status[["nlme_ar1"]]) {
-    adjusted_fit$advanced_models$nlme$comparison
+    print(adjusted_fit$advanced_models$nlme$comparison)
   }
   if (advanced_status[["robust_cr2"]]) {
-    utils::head(adjusted_fit$robustness$club_sandwich$coefficient_tests)
+    print(utils::head(adjusted_fit$robustness$club_sandwich$coefficient_tests))
   }
 
   # Likelihood criteria and GEE QIC/CIC are retained on different scales.
   model_comparison <- adjusted_fit$advanced_models$model_comparison
   if (is.data.frame(model_comparison) && nrow(model_comparison) > 0L) {
-    model_comparison[, metric_columns_long(model_comparison, c(
+    print(model_comparison[, metric_columns_long(model_comparison, c(
       "model", "AIC", "BIC", "QIC", "CIC", "converged", "singular",
       "object_path"
-    ))]
+    ))])
+    if ("criterion_convention" \%in\% names(model_comparison)) {
+      print(model_comparison[, c("model", "criterion_convention"), drop = FALSE])
+    }
   }
 
   # Effect-size and multiplicity objects point back to their source families.
   paired_dz <- adjusted_fit$effect_sizes$paired_cohens_dz
   if (!is.null(paired_dz)) {
-    paired_dz[, metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))]
+    print(paired_dz[, metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))])
   }
   # Multiplicity metadata references these canonical tables without copies.
-  adjusted_fit$multiplicity$friedman_posthoc$object_path
+  print(adjusted_fit$multiplicity$friedman_posthoc$object_path)
+  # The MMRM branch uses its own canonical references, never copies of
+  # primary-fit contrasts. It can be NULL if MMRM/emmeans was unavailable.
+  print(lapply(adjusted_fit$multiplicity$mmrm, function(family) family$object_path))
   friedman_family <- adjusted_fit$advanced_tests$friedman$posthoc$tidy
   if (!is.null(friedman_family)) {
-    friedman_family[, metric_columns_long(friedman_family, c(
+    print(friedman_family[, metric_columns_long(friedman_family, c(
       "from_label", "to_label", "p_raw", "p_holm", "p_bh"
-    ))]
+    ))])
   }
   if (isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
     time_family <- adjusted_fit$advanced_tests$emmeans$time$pairwise_tidy
     if (!is.null(time_family)) {
-      time_family[, metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))]
+      print(time_family[, metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))])
     }
   }
 
   # Sensitivity rows align methods by scientific question and give the exact
   # source path. They may use different samples or hypotheses, so this table
   # must not be interpreted as a vote among p-values.
-  adjusted_fit$sensitivity[, metric_columns_long(adjusted_fit$sensitivity, c(
+  print(adjusted_fit$sensitivity[, metric_columns_long(adjusted_fit$sensitivity, c(
     "question", "method", "statistic", "df", "p_raw", "effect_size",
     "effect_size_type", "n", "object_path"
-  ))]
+  ))])
 }
 }
 
@@ -1335,13 +1543,14 @@ multi_fit <- mira_info_long(
 
 # A multi-outcome result is an outcome-indexed container. Each element is a
 # complete single-outcome mira_info_long object with the same internal paths.
-names(multi_fit$outcomes)
-multi_fit$config$improvement_direction
-multi_fit$config$stable_threshold
-multi_fit$outcomes[["symptom"]]$settings[c(
+print(names(multi_fit$outcomes))
+print(multi_fit$config$improvement_direction)
+print(multi_fit$config$stable_threshold)
+print(multi_fit$outcomes[["symptom"]]$settings[c(
   "improvement_direction", "stable_threshold"
-)]
-summary(multi_fit)
+)])
+print(summary(multi_fit))
+print(multi_fit$diagnostics)
 
 # Extract the same result for every outcome instead of exploring nested lists.
 baseline_to_final_long <- function(result) {
@@ -1355,12 +1564,12 @@ baseline_to_final_long <- function(result) {
     drop = FALSE
   ]
 }
-lapply(
+print(lapply(
   multi_fit$outcomes,
   function(result) result$descriptives[,
   metric_columns_long(result$descriptives, c("label", "n", "mean", "sd"))]
-)
-lapply(multi_fit$outcomes, baseline_to_final_long)
+))
+print(lapply(multi_fit$outcomes, baseline_to_final_long))
 
 # Compare response labels under a zero threshold and the practical thresholds.
 # With a zero threshold, even negligible simulated deviations count as change.
@@ -1382,12 +1591,13 @@ response_counts_long <- function(result) {
     }
   )
 }
-list(
+print(list(
   zero_threshold = response_counts_long(multi_zero),
   practical_threshold = response_counts_long(multi_fit)
-)
+))
 
 \donttest{
+# Building complete plot suites for both outcomes is a longer illustration.
 # The multi-outcome plot method needs outcome = when several outcomes succeed.
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   multi_plot_fit <- mira_info_long(
@@ -1416,30 +1626,86 @@ missing_fit <- mira_info_long(
 
 # mira_info_long() does not impute. Descriptives use all finite observations at
 # each visit, while complete_profiles requires all selected visits.
-missing_fit$overview[c(
+print(missing_fit$overview[c(
   "n_patients", "complete_profiles", "complete_profiles_pct"
-)]
-missing_fit$descriptives[, metric_columns_long(missing_fit$descriptives, c(
+)])
+print(missing_fit$descriptives[, metric_columns_long(missing_fit$descriptives, c(
   "label", "n", "missing", "non_finite", "unavailable"
-))]
-missing_fit$missing$by_time
+))])
+print(missing_fit$missing$by_time)
+print(missing_fit$correlations$pairwise_n)
 
 # Identify affected subjects without printing all rows.
 affected <- missing_fit$missing$by_patient$unavailable_n > 0L
-missing_fit$missing$by_patient[affected, , drop = FALSE]
+print(missing_fit$missing$by_patient[affected, , drop = FALSE])
 
 # Each paired comparison has its own pairwise-complete N. Friedman instead
 # uses complete profiles across all visits, reported in its tidy row.
-missing_fit$change[, metric_columns_long(missing_fit$change, c(
+print(missing_fit$change[, metric_columns_long(missing_fit$change, c(
   "from_label", "to_label", "n", "mean_change", "paired_t_p_adj"
-))]
-missing_fit$advanced_tests$friedman$tidy[,
+))])
+print(missing_fit$advanced_tests$friedman$tidy[,
   metric_columns_long(missing_fit$advanced_tests$friedman$tidy,
-    c("n", "n_timepoints", "p_raw"))]
+    c("n", "n_timepoints", "p_raw"))])
 
 # Per-outcome adaptation records show usable counts and any requested module
 # disabled because of insufficient data.
-missing_fit$diagnostics$adaptation[["score"]]
+print(missing_fit$diagnostics$adaptation[["score"]])
+
+\donttest{
+# These two additional multi-method fits illustrate distinct missingness
+# contracts; run them explicitly together with the longer model examples.
+# Reuse the larger trial to distinguish the rank calendar from the
+# predictor-complete MMRM frame. A missing age excludes that subject's rows
+# from adjusted models; it does not change the unadjusted rank sample.
+incomplete_trial <- trial
+incomplete_trial$outcome_t1[[1L]] <- NA_real_
+incomplete_trial$age[[3L]] <- NA_real_
+incomplete_fit <- mira_info_long(
+  incomplete_trial, id = "subject_id", outcomes = "outcome", arm = "arm",
+  reference_arm = "Control", covariates = c("age", "site"),
+  analyses = c("model", "arm_tests"), verbose = FALSE
+)
+rank_missing <- incomplete_fit$advanced_tests$rank_longitudinal
+mmrm_missing <- incomplete_fit$advanced_models$mmrm
+print(rank_missing[c("requested", "performed", "reason_skipped")])
+print(mmrm_missing[c("requested", "performed", "reason_skipped")])
+if (isTRUE(rank_missing$performed) && isTRUE(mmrm_missing$performed)) {
+  print(data.frame(
+    method = c("Rank calendar", "MMRM engine frame"),
+    rows = c(nrow(rank_missing$data), nrow(mmrm_missing$data)),
+    subjects = c(rank_missing$n_subjects, mmrm_missing$n_subjects),
+    observed_responses = c(rank_missing$n_observations, mmrm_missing$n)
+  ))
+  # Explicit unavailable response row remains in the original rank calendar.
+  print(rank_missing$data[!is.finite(rank_missing$data$value),
+    c("patient", "time", "time_index", "time_label", "value"), drop = FALSE])
+  # The subject with missing age remains in rank, but is absent from MMRM.
+  print(c(
+    rank = incomplete_trial$subject_id[[3L]] \%in\% rank_missing$data$patient,
+    mmrm = incomplete_trial$subject_id[[3L]] \%in\% mmrm_missing$data$patient_factor
+  ))
+}
+
+# An entirely unavailable selected baseline is an explicit non-estimable
+# MMRM request. The remaining visits must not silently become a new baseline.
+empty_baseline <- trial
+empty_baseline$outcome_t0 <- NA_real_
+unavailable_fit <- mira_info_long(
+  empty_baseline, id = "subject_id", outcomes = "outcome", arm = "arm",
+  reference_arm = "Control", covariates = c("age", "site"),
+  analyses = c("model", "arm_tests"), verbose = FALSE
+)
+print(unavailable_fit$time_vars)
+print(unavailable_fit$advanced_models$mmrm[c(
+  "requested", "performed", "n_timepoints", "reason_skipped"
+)])
+print(is.null(unavailable_fit$advanced_models$mmrm$coefficients))
+print(is.null(unavailable_fit$multiplicity$mmrm))
+# Contrast with auto_fit: model was disabled, rather than requested and
+# unavailable. Neither state is a finding of no difference.
+print(auto_fit$advanced_models$mmrm[c("requested", "performed", "reason_skipped")])
+}
 
 # ------------------------------------------------------------------
 # Example 11: Correlations, outlier diagnostics, and public plot methods
@@ -1452,25 +1718,25 @@ diagnostic_fit <- mira_info_long(
   verbose = FALSE
 )
 
-diagnostic_fit$correlations$pearson
-diagnostic_fit$correlations$pairwise_n
+print(diagnostic_fit$correlations$pearson)
+print(diagnostic_fit$correlations$pairwise_n)
 
 # Outliers are Tukey 1.5-IQR flags only; they are never removed automatically.
-vapply(diagnostic_fit$outliers$by_time, nrow, integer(1L))
-diagnostic_fit$outliers$by_time[["score_t2"]]
+print(vapply(diagnostic_fit$outliers$by_time, nrow, integer(1L)))
+print(diagnostic_fit$outliers$by_time[["score_t2"]])
 change_flag_counts <- vapply(
   diagnostic_fit$outliers$change, nrow, integer(1L)
 )
-change_flag_counts
+print(change_flag_counts)
 most_flagged_change <- names(change_flag_counts)[which.max(change_flag_counts)]
-diagnostic_fit$outliers$change[[most_flagged_change]]
+print(diagnostic_fit$outliers$change[[most_flagged_change]])
 
 # Use plot() rather than reaching into $plots when displaying a stored plot.
 # If ggplot2 is absent, the analysis still succeeds and $plot_error explains
 # why no plot was stored.
-diagnostic_fit$plot_error
+print(diagnostic_fit$plot_error)
 if (requireNamespace("ggplot2", quietly = TRUE)) {
-  names(diagnostic_fit$plots)
+  print(names(diagnostic_fit$plots))
   plot(diagnostic_fit, which = "mean_ci")
   plot(diagnostic_fit, which = "spaghetti")
   plot(diagnostic_fit, which = "missingness")
@@ -1504,18 +1770,37 @@ module_switches_long <- function(configuration) {
     use.names = TRUE
   )
 }
-rbind(
+print(rbind(
   none = module_switches_long(cfg_none),
   arm_tests = module_switches_long(cfg_arm),
   model_correlations = module_switches_long(cfg_model_cor),
   all = module_switches_long(cfg_all)
-)
+))
 
 # Core summaries remain enabled under analyses = "none". On a real analysis,
 # the base-R Friedman branch is also attempted independently of model =.
-cfg_none$config$analyses$core
+print(cfg_none$config$analyses$core)
+}
+run_examples_long()
+})
 }
 \references{
+Kenward, M. G. and Roger, J. H. (1997). Small Sample Inference for Fixed
+Effects from Restricted Maximum Likelihood. \emph{Biometrics}, 53, 983-997.
+\doi{10.2307/2533558}.
+
+Halekoh, U. and Højsgaard, S. (2014). A Kenward-Roger Approximation and
+Parametric Bootstrap Methods for Tests in Linear Mixed Models: The R Package
+pbkrtest. \emph{Journal of Statistical Software}, 59(9), 1-32.
+\doi{10.18637/jss.v059.i09}.
+
+Rubarth, K., Pauly, M. and Konietschke, F. (2022). Ranking procedures for
+repeated measures designs with missing data: Estimation, testing and
+asymptotic theory. \emph{Statistical Methods in Medical Research}, 31(1), 105-118.
+\doi{10.1177/09622802211046389}.
+
+These methodological sources describe the inference; the following engine
+documentation describes the supported implementations and conventions:
 \href{https://hojsgaard.github.io/pbkrtest/reference/kr-modcomp.html}{pbkrtest joint Kenward-Roger tests};
 \href{https://openpharma.github.io/mmrm/v0.3.17/articles/methodological_introduction.html}{mmrm methodology};
 \href{https://openpharma.github.io/mmrm/v0.3.17/reference/mmrm_tmb_methods.html}{mmrm likelihood-criterion conventions};

@@ -41,14 +41,14 @@ RDS payloads retain canonical names.
 | `variability`, `trajectories`, `outliers` | single-outcome analyzer | ICC/variance diagnostics, trajectory change magnitudes and diagnostic bounds are metrics. Subject IDs, rows, source observed values and direction/clinical-direction states remain unprefixed and aligned. |
 | `correlations` | `stats::cor` plus pairwise sample counts | Method containers and matrices retain their source-variable dimensions; these are not metric column labels. |
 | `model` | lme4/lmerTest native fits, summaries, ANOVA and tests | Native contracts remain unchanged; model status flags, warnings and design counts are metadata. |
-| `advanced_tests` | emmeans, RM-ANOVA and Friedman helpers | MIRA standardized/adjusted tables receive metric naming. Native emmeans means and Tukey/Dunnett summaries, `emmGrid`, afex objects/tables, sphericity and `htest` objects keep their native classes, fields and attributes. |
-| `advanced_models` | random-slope, nlme, GEE and comparison helpers | Owned extracted coefficient tables, GEE effect tests, model-fit scalars and comparison tables receive metric naming. Native model/summary/ANOVA objects, nlme coefficient matrices, variance-component tables and QIC vectors retain their contracts. |
+| `advanced_tests` | emmeans, RM-ANOVA, Friedman, Kenward-Roger and rank helpers | MIRA standardized/adjusted tables receive metric naming. Native emmeans means and Tukey/Dunnett summaries, `emmGrid`, afex objects/tables, sphericity, `htest`, `KRmodcomp` and `nparld_fit` objects keep their native classes, fields and attributes. |
+| `advanced_models` | random-slope, nlme, GEE, MMRM and comparison helpers | Owned extracted coefficient tables, joint effect tests, model-fit scalars and comparison tables receive metric naming. Native model/summary/ANOVA objects, nlme coefficient matrices, variance-component tables and QIC vectors retain their contracts. |
 | `robustness` | clubSandwich helper | Native covariance matrices, coefficient/interval/Wald tables retain their external contracts. Hypothesis diagnostics, omitted coefficients and failure explanations remain intact. |
 | `effect_sizes`, `sensitivity` | advanced-inference helpers | Owned effect sizes, R-squared, preferred model ICC and sensitivity statistics receive metric names. Method, question, effect-size type, source path and sample size are metadata. |
 | `multiplicity` | advanced-inference helper | Adjustment metadata and canonical table `object_path`; no second copy of the result table. Raw/primary/individual adjustment results remain at their owning contrast table. |
 | `plots`, `long_data` | single-outcome analyzer | Native ggplot contracts and source response/covariate columns are preserved. The derived `patient_mean` support metric follows naming. Plot rows and IDs are not reordered. |
 | multiple outcomes / failures | public wrapper | One ordered result per outcome; failed outcomes retain their error class and messages. A single result has no duplicate `$outcomes` copy. |
-| report source, runtime, manifest, CSV, RDS | report builder and dumped runtime helpers | Canonical names/order flow through export; rendering resolves names from maps. User `extra_objects` and environment/package/dependency versions are preserved. |
+| report source, runtime, manifest, CSV, RDS | report builder and dumped runtime helpers | Canonical names/order flow through export; rendering resolves names from maps. User `extra_objects` and existing user/native metadata remain in the payload. The report adds normalized settings and a creation timestamp, without generating an environment/dependency version inventory or lockfile. |
 
 ## Proven duplicate inventory
 
@@ -126,6 +126,21 @@ CR2, effect-size, and contrast branches retain their roles. The additional
 modules are independently protected and are requested by the model switch.
 `requested = FALSE` distinguishes a disabled module from requested inference
 that could not be estimated. Inspection does not evaluate these adapters.
+The adapters are integrated in `R/mira_info_long.R`; older audit notes naming
+separate extension files describe a historical source layout. `analyses`
+replaces all five optional switches when non-NULL, including explicitly supplied
+logical values; those logical values are validated first. With `analyses = NULL`
+the supplied switches are retained. Request `c("model", "arm_tests")` for arm-adjusted models;
+`analyses = "model"` alone does not request arm tests. The core summaries and
+eligible Friedman calculation can remain with `analyses = "none"`.
+
+The analysis modules are optional to request, while `pbkrtest`,
+`mmrm >= 0.3.17` and `nparLD >= 2.3.3` are installation dependencies in
+`Imports`. Namespace/version guards are defensive. Module fields depend on
+the stage reached: early unavailability need not retain prepared engine data,
+a native fit or estimated tables. `NULL`, empty tables, disabled modules,
+requested unavailable methods, partial inference and failed outcomes are
+distinct states.
 
 | Canonical path | Owned scientific fields | Native boundary / diagnostics |
 |---|---|---|
@@ -183,18 +198,63 @@ MMRM requires nonempty modeled visits, unique subject/visit records, a full-rank
 fixed design, observed overlap for every visit pair, convergence, and finite,
 numerically full-rank covariance estimates. A wholly unavailable requested
 visit must not be silently dropped and reinterpreted as a new baseline.
-`data`, `n`, and `n_subjects` describe the engine analysis frame. Native REML
+After successful engine-component extraction, `data`, `n` and `n_subjects`
+describe the engine analysis frame. Before fitting, available counts can refer
+to the candidate frame while `data` remains `NULL`. Native REML
 criteria are retained: the penalty counts covariance parameters and BIC uses
 the independent subject count. `ic_penalty_parameters`, `bic_sample_size`, and
 `criteria_note` expose these conventions. Combined likelihood criteria are not
 harmonized across mmrm/lme4/nlme and do not establish a shared ranking scale.
 
-Each successful method adds finite sensitivity rows with its canonical source
-path. MMRM contrast families have separate multiplicity metadata pointing to
+Finite estimable global tests append sensitivity rows with their canonical source
+paths; successful fitting alone does not guarantee every joint test. MMRM
+contrast families have separate multiplicity metadata pointing to
 their owning adjusted tables. No new pooled adjustment spans these global
 tests or methods. Reports keep disabled methods absent, include the recorded
 reason when a requested method is unavailable, and preserve actual native
 objects in the saved payload without exporting their internal machinery.
+
+The MMRM family keys under `multiplicity$mmrm` are `time_pairwise`,
+`baseline_vs_followup`, `consecutive_time`, `ordinal_trends`, `arm_pairwise`,
+`simple_arm`, `simple_time` and `interaction`. Each `object_path` points below
+`$advanced_models$mmrm$emmeans` to the corresponding canonical table. A family
+without a table can retain an `NA` path. In particular,
+`time_pairwise$object_path` references `$time$pairwise_tidy` below that root.
+The single `$emmeans$baseline_final$tidy` contrast is separately accessible;
+there is no `multiplicity$mmrm$baseline_final` family. Pointwise rank intervals,
+raw global tests, adjusted contrast p-values and native simultaneous
+Tukey/Dunnett summaries have different inferential roles.
+
+## Report presentation and archival boundaries
+
+Precomputed results are consumed without refitting. The `models` section
+contains available KR/rank/MMRM results; `robustness` contains sensitivity,
+multiplicity and the existing robustness/effect-size components. An unperformed
+module is pruned from analytical sections. Diagnostic traversal can retain
+errors/warnings and a reason for requested unavailable modules, as well as
+non-estimable native Friedman/RM-ANOVA objects. Disabled modules carrying only
+a reason are omitted. Diagnostic visibility requires the `diagnostics`
+section and sufficient `max_depth`; selecting models alone cannot expose an
+unavailable model's diagnostic explanation.
+
+The RDS payload stores `result`, `extra_objects` and `report` independently
+of display sections, row/column limits and the compatibility no-op
+`include_complete_output`. CSV collection uses all sections and full tables,
+but respects `max_depth`. The manifest records `outcome`, `path`, `file`,
+`original_class`, `rows` and `columns`; relative filenames are resolved against
+the bundle directory. `extra_objects` is not recursively archived as CSV.
+Native fit/summary nodes, including MMRM/TMB internals, are terminal. Numeric
+CSV values retain both raw and adjusted analytical results without display
+rounding, subject to floating-point decimal serialization.
+
+Source-only bundle generation, exported-runtime/knitr execution and actual
+Quarto HTML/PDF/DOCX rendering are separate validation levels. `expected_files`
+names intended rendered destinations; `files`, `rendered` and `render_errors`
+describe the last call's outcomes. Old rendered files on disk cannot establish
+that the last attempt succeeded. Each independent bundle needs its own
+directory because the manifest and `results` directory have shared names.
+The payload and CSVs can contain IDs and individual responses; no automatic
+anonymization is supplied.
 
 ## Verification strategy
 

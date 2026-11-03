@@ -1,5 +1,13 @@
 # MIRA (development version)
 
+- Audit and refine the complete help for `mira_info_long()` and
+  `mira_report_freq_long()` against their implementation. Clarify model-switch
+  resolution, analysis samples, native engine boundaries, rank uncertainty,
+  MMRM contrast families and likelihood criteria, report diagnostics and
+  archive depth. Extend the existing examples with direct KR/rank/MMRM result
+  access, incomplete-data and unavailable-visit cases, and executable
+  source-only report workflows; preserve the analytical implementation and API.
+
 - Rebuild all frequentist vignette examples around ophthalmic studies with
   BCVA ETDRS letters, defined OCT central subfield thickness and IOP in mmHg.
   Declare one prespecified study eye per participant, scale-dependent direction,

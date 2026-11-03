@@ -191,6 +191,7 @@ exploration <- mira_info_long(
 report <- mira_report_freq_long(
   x = exploration,
   output_dir = file.path(tempdir(), "mira-example-report"),
+  format = "html",
   render = FALSE,
   open = FALSE
 )
@@ -219,14 +220,36 @@ exploration_models <- mira_info_long(
   verbose = FALSE
 )
 
-exploration_models$advanced_tests$kenward_roger$tidy
-exploration_models$advanced_tests$rank_longitudinal$effects
-exploration_models$advanced_tests$rank_longitudinal$tests
-exploration_models$advanced_models$mmrm$effect_tests
-exploration_models$advanced_models$mmrm$emmeans$baseline_final$tidy
+modules <- list(
+  kenward_roger = exploration_models$advanced_tests$kenward_roger,
+  rank_longitudinal = exploration_models$advanced_tests$rank_longitudinal,
+  mmrm = exploration_models$advanced_models$mmrm
+)
+vapply(modules, function(x) isTRUE(x$performed), logical(1))
+lapply(modules, function(x) x$reason_skipped)
+if (isTRUE(modules$kenward_roger$performed)) modules$kenward_roger$tidy
+if (isTRUE(modules$rank_longitudinal$performed)) {
+  modules$rank_longitudinal$effects
+  modules$rank_longitudinal$tests
+}
+if (isTRUE(modules$mmrm$performed)) {
+  modules$mmrm$effect_tests
+  modules$mmrm$emmeans$baseline_final$tidy
+  modules$mmrm$emmeans$time$pairwise_tidy
+  exploration_models$multiplicity$mmrm$time_pairwise$object_path
+}
+
+model_report <- mira_report_freq_long(
+  exploration_models,
+  output_dir = tempfile("mira-model-report-"),
+  format = "html",
+  sections = c("models", "robustness", "diagnostics"),
+  render = FALSE,
+  open = FALSE
+)
 ```
 
-These methods answer different questions and may use different subjects.
+These methods can answer different questions and may use different subjects.
 Relative effects above 0.5 mean larger responses, rather than clinical
 improvement. MMRM treats selected baseline measurements as responses and does
 not automatically impose baseline equality or adjust for baseline response.
@@ -234,11 +257,31 @@ No method here supplies an MNAR sensitivity analysis. MMRM's native AIC/BIC
 conventions differ from lme4/nlme, so their values do not define a common
 cross-engine ranking. See `?mira_info_long` for assumptions and diagnostics.
 
-The three modules are conditional on data adequacy, preserve failure reasons,
-and flow through printing, summaries, `sensitivity`, report tables, and
-CSV/RDS exports. Pass `exploration_models` to `mira_report_freq_long()` to
-include them. A resolved false model switch, for example with
+The three modules are conditional on data adequacy. Inspect `requested`,
+`performed` and recorded reasons before interpreting their tables; an early
+skip may precede preparation of an engine sample or native fit. Successful
+results flow through printing, summaries, `sensitivity`, report tables and
+CSV/RDS exports. The report above consumes the existing result without
+refitting it. Requested unavailable methods can contribute diagnostic reasons
+when diagnostics are selected and the depth limit reaches them. A resolved
+false model switch, for example with
 `analyses = "none"`, disables these additions; inspection performs no fitting.
+
+The optional analysis modules use packages declared in `Imports`, including
+`pbkrtest`, `mmrm >= 0.3.17` and `nparLD >= 2.3.3`; defensive runtime guards
+do not make these installation dependencies optional. `analyses` resolves
+the five optional switches: a non-NULL selection replaces their supplied
+values, after those logical values have been validated. Request both `model`
+and `arm_tests` for the adjusted arm workflow.
+
+Report sections and display row/column limits do not truncate the saved RDS
+or the table archive. `max_depth` also limits CSV traversal, and
+`include_complete_output` is retained as a compatibility argument without
+controlling visibility or payload completeness. The source-only bundle is
+not evidence of successful Quarto rendering. Keep its QMD, runtime, RDS,
+manifest and `results` directory together, and use a distinct directory for
+each independent bundle. Inspect the payload and CSV files before sharing:
+they can retain participant identifiers and individual observations.
 
 ## Data and model assumptions
 

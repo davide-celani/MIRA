@@ -1455,12 +1455,15 @@
 #' Native external model objects and supplementary user objects keep their
 #' own field names and metadata.
 #'
-#' Requested Kenward-Roger, rank longitudinal, and MMRM modules are included
-#' with their standardized tables, native fits, assumptions, and actual sample
-#' information. Unavailable requested modules retain their diagnostic reasons;
-#' disabled modules are omitted. MMRM contrast families keep their canonical
-#' adjustment references. See [mira_info_long()] for the methods and assumptions.
-#' Native text printing preserves the caller's numeric display precision.
+#' Performed Kenward-Roger, rank longitudinal, and MMRM modules contribute their
+#' available standardized results, assumptions, sample metadata, and native
+#' objects under \code{"models"}. Their sensitivity rows and MMRM contrast-family
+#' references appear under \code{"robustness"}. A requested module that could not
+#' be estimated contributes its recorded reason under \code{"diagnostics"},
+#' subject to section selection and \code{max_depth}; it does not contribute a
+#' fabricated result table. Disabled modules with only a skip reason are omitted.
+#' Early exits can precede construction of an analysis sample or native fit.
+#' See [mira_info_long()] for the methods, sample definitions, and assumptions.
 #'
 #' @param x \code{NULL}; an object inheriting from \code{mira_info_long},
 #'   \code{mira_info_multi_long}, or \code{mira_detect_long}; or a data frame. A data frame
@@ -1494,6 +1497,7 @@
 #' @param format A non-empty character vector containing one or more of
 #'   \code{"html"}, \code{"pdf"}, \code{"docx"}, or \code{"all"}. Matching is
 #'   case-insensitive and duplicates are removed while preserving order.
+#'   The default requests \code{c("html", "pdf")}; DOCX is requested explicitly.
 #'   \code{"all"} expands to HTML, PDF, and DOCX, in that order. With
 #'   \code{render = FALSE}, this argument still controls the formats declared in
 #'   the Quarto source and the paths listed in \code{expected_files}.
@@ -1516,8 +1520,8 @@
 #'   \code{"outliers"}, \code{"trajectories"}, \code{"figures"},
 #'   \code{"diagnostics"}, \code{"conclusions"}, and \code{"appendix"}.
 #'   Selection affects only the visible report and does not reorder it: the
-#'   payload remains complete, and all eligible MIRA result tables are still
-#'   exported to CSV.
+#'   payload remains complete, and all eligible MIRA result tables within
+#'   \code{max_depth} are still exported to CSV.
 #' @param include_complete_output A non-missing logical scalar retained for API
 #'   compatibility. The current renderer already traverses all eligible
 #'   scientific results without adding a duplicate complete-output appendix, so
@@ -1537,8 +1541,9 @@
 #'   whole-row limit during rendering, with at least one row shown. Truncation
 #'   is explicitly noted below the displayed table and never truncates the CSV
 #'   export.
-#' @param max_table_columns A finite numeric scalar greater than or equal to
-#'   two, converted to an integer for rendering. It is an upper bound per
+#' @param max_table_columns A finite numeric scalar from two through
+#'   \code{.Machine$integer.max}, converted to an integer for rendering.
+#'   The default is \code{12L}. It is an upper bound per
 #'   displayed table block, not a request to discard columns. Wide tables are
 #'   split into blocks. Comparison tables repeat \code{from}, \code{to} and
 #'   any \code{arm}, \code{arm_a}, \code{arm_b} identifiers. Arm comparisons at
@@ -1551,11 +1556,13 @@
 #'   original relative order. Width heuristics can produce smaller blocks;
 #'   PDF blocks are capped at eight columns and non-HTML, non-LaTeX blocks at seven.
 #' @param digits A finite numeric scalar from 1 through 10, converted to an
-#'   integer. It controls numeric display precision in tables. Recognized
+#'   integer. The default is \code{3L}. It controls numeric display precision
+#'   in tables. Recognized
 #'   numeric p-value columns below \code{10^-digits} are displayed as less than
 #'   that threshold. CSV values are exported without this display formatting.
-#' @param max_depth A finite numeric scalar greater than or equal to one,
-#'   converted to an integer. This is a safety limit for recursive traversal of
+#' @param max_depth A finite numeric scalar from one through
+#'   \code{.Machine$integer.max}, converted to an integer; default \code{50L}.
+#'   This is a safety limit for recursive traversal of
 #'   nested result and supplementary objects. Deeper content is omitted from
 #'   the visible report. For MIRA results, the limit also applies to CSV
 #'   traversal; supplementary objects are never exported to CSV. All original
@@ -1599,14 +1606,19 @@
 #'
 #' The visible renderer is deliberately selective. It presents meaningful
 #' analytical results while omitting machinery and source-data fields, disabled
-#' or unperformed modules, empty non-result structures, all-missing correlation
-#' matrices, duplicate equivalent model tables, and models without a fitted
-#' object. Primary-model, plotting, and failed advanced-module errors or
-#' warnings can instead appear under diagnostics, with recorded reasons when
-#' available. A non-estimable Friedman test or repeated-measures ANOVA also
-#' appears there with its reason when the engine returned an object without an
-#' error or warning.
-#' Disabled modules with only a skip reason remain omitted.
+#' or unperformed modules from analytical sections, empty non-result structures,
+#' all-missing correlation matrices, duplicate equivalent model tables, and
+#' models without a fitted object. Selecting \code{"diagnostics"} or \code{"all"}
+#' provides a separate route for recorded failures: primary-model and plotting
+#' errors or warnings, advanced-module errors or warnings, and reasons from
+#' requested, unperformed modules. The latter includes Kenward-Roger, rank, and
+#' MMRM even when no error or warning was raised. Non-estimable Friedman and
+#' repeated-measures ANOVA objects can likewise supply their reasons. Traversal
+#' remains bounded by \code{max_depth}; selecting only \code{"models"} does not
+#' enable diagnostics. Disabled modules with only a skip reason remain omitted.
+#' A performed module can contain partially estimable hypotheses or unavailable
+#' contrasts; inspect its retained diagnostics rather than interpreting a
+#' missing p-value as evidence of no difference.
 #' Headings and inline metadata preserve labels as literal text, including
 #' characters with special meaning in Markdown or HTML.
 #' This presentation policy does not modify the original MIRA object and does
@@ -1617,6 +1629,11 @@
 #' DOCX uses portable pipe-table output. If \code{knitr} cannot format an
 #' individual table, its contents fall back to a text block. If a stored plot
 #' cannot be drawn, the report receives a warning callout and continues.
+#' Native text printing saves and restores \code{options("digits")}, including
+#' when an external printer fails. This protects subsequent numeric display;
+#' it does not isolate arbitrary side effects of third-party printers or
+#' supplementary objects. Report-table \code{digits} is a separate display
+#' setting and does not change the analytical result.
 #'
 #' @section Report sections:
 #' Sections are emitted only when the corresponding eligible content exists.
@@ -1644,14 +1661,16 @@
 #'   \item{\code{variability}}{Within- and between-participant variability and
 #'     ICC results.}
 #'   \item{\code{models}}{The primary model, advanced tests, advanced models,
-#'     fitted objects, summaries, and model comparisons that have results.}
+#'     fitted objects, summaries, and model comparisons that have results,
+#'     including performed Kenward-Roger, rank longitudinal, and MMRM modules.}
 #'   \item{\code{robustness}}{Robust inference, effect sizes, multiplicity
 #'     families, and sensitivity results.}
 #'   \item{\code{outliers}}{Eligible IQR-based diagnostic outlier tables.}
 #'   \item{\code{trajectories}}{Participant-level trajectory summaries.}
 #'   \item{\code{figures}}{Stored MIRA plots that can be drawn.}
 #'   \item{\code{diagnostics}}{Configuration diagnostics, relevant model and
-#'     plotting errors or warnings, and failed outcomes from multi-outcome
+#'     plotting errors or warnings, recorded reasons for requested but
+#'     unperformed advanced methods, and failed outcomes from multi-outcome
 #'     analyses.}
 #'   \item{\code{conclusions}}{A generated descriptive table comparing the
 #'     first and last observed means, when there are at least two descriptive
@@ -1689,13 +1708,20 @@
 #' is an RDS list with exactly three top-level components:
 #' \code{result}, \code{extra_objects}, and \code{report}. The last component
 #' records normalized section and table settings plus a UTC creation timestamp.
-#' Keep the QMD, runtime, and payload together when moving or rerendering the
-#' source. For example, a deferred render can use
+#' Analysis configuration and any environment or dependency information already
+#' present in the result remain in \code{result}; the bundle does not create a
+#' dependency lockfile or embed the installed R packages. Keep the QMD, runtime,
+#' and payload together when moving or rerendering the source, and retain the
+#' manifest with its \code{results} directory to preserve the table archive.
+#' For example, a deferred render can use
 #' \code{quarto::quarto_render(report$source, execute_dir =
 #' report$output_dir)}.
 #' Deferred rendering still requires \pkg{knitr}, the Quarto CLI, and any R
 #' packages needed to print or draw stored model and plot classes. The runtime
 #' script supplies the MIRA-specific report helpers, not those dependencies.
+#' Restoring serialized native objects can load their defining namespaces;
+#' independence from MIRA report-helper calls does not imply an isolated or
+#' package-free R environment.
 #'
 #' Because \code{results_manifest.csv} and the \code{results} directory have
 #' bundle-level names, use a separate \code{output_dir} for each independently
@@ -1705,8 +1731,12 @@
 #' Every eligible tabular result found across all MIRA report sections is
 #' exported independently of \code{sections}, \code{max_table_rows}, and
 #' \code{max_table_columns}. Consequently, presentation choices cannot silently
-#' truncate the analytical archive. P-values remain raw numeric values in CSV
-#' files. Matrix-valued columns are expanded where possible, list-valued cells
+#' truncate the analytical archive. Unlike these presentation choices,
+#' \code{max_depth} also limits archive traversal. Raw and adjusted p-values
+#' retain their distinct columns and numeric values without display-threshold
+#' formatting or presentation rounding. Decimal CSV serialization need not
+#' reproduce every binary floating-point bit; the RDS retains the original
+#' objects. Matrix-valued columns are expanded where possible, list-valued cells
 #' are converted to plain-text representations, and file slugs plus numeric
 #' suffixes prevent case-insensitive name collisions. Multi-outcome results are
 #' partitioned into outcome-specific subdirectories.
@@ -1723,6 +1753,34 @@
 #'     table or matrix.}
 #'   \item{\code{rows}, \code{columns}}{Dimensions of the exported CSV data.}
 #' }
+#'
+#' Outcome-table paths start with \code{outcome$}; the separate \code{outcome}
+#' column identifies the outcome. For example, a performed MMRM coefficient
+#' table has manifest path \code{outcome$advanced_models$mmrm$coefficients} and
+#' is stored in \code{readRDS(report$payload)$result$advanced_models$mmrm$coefficients}
+#' for a single-outcome report. For multiple outcomes, first select
+#' \code{$result$outcomes[[outcome_key]]} in the payload. Use the manifest's
+#' relative \code{file} value rather than reconstructing a filename from its
+#' potentially shortened, collision-resolved slug.
+#'
+#' The corresponding canonical Kenward-Roger and rank table paths are
+#' \code{outcome$advanced_tests$kenward_roger$tidy},
+#' \code{outcome$advanced_tests$rank_longitudinal$effects}, and
+#' \code{outcome$advanced_tests$rank_longitudinal$tests}. MMRM joint tests are at
+#' \code{outcome$advanced_models$mmrm$effect_tests}; its time-pairwise contrasts
+#' are at \code{outcome$advanced_models$mmrm$emmeans$time$pairwise_tidy}.
+#' Multiplicity metadata under \code{$multiplicity$mmrm} point to owning
+#' contrast tables; they do not create duplicate tables or a pooled adjustment
+#' across methods. The single \code{$emmeans$baseline_final$tidy} contrast is
+#' distinct from the \code{baseline_vs_followup} family.
+#'
+#' Visit and arm identifiers, counts, and canonical metric names survive export.
+#' Module analysis data are excluded from report-table traversal and remain in
+#' the payload, where available; they are not promised as separate CSV files.
+#' Native fitted and summary objects, including \code{KRmodcomp},
+#' \code{nparld_fit}, and \code{mmrm}/\code{summary.mmrm}, are terminal print
+#' nodes. Their internals, including TMB machinery, are not recursively
+#' exported. Native contracts and MIRA-standardized tables remain distinct.
 #'
 #' Supplementary \code{extra_objects} are stored in the payload and can be
 #' printed in the appendix, but they are not traversed for CSV export.
@@ -1796,8 +1854,21 @@
 #'   [utils::read.csv()] for inspecting the manifest and table archive.
 #'
 #' @examples
+#' local({
+#' # Keep the example's random-number generation local to this demonstration.
+#' old_seed <- get0(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+#' on.exit({
+#'   if (is.null(old_seed)) {
+#'     if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+#'       rm(".Random.seed", envir = .GlobalEnv)
+#'     }
+#'   } else {
+#'     assign(".Random.seed", old_seed, envir = .GlobalEnv)
+#'   }
+#' }, add = TRUE)
+#'
 #' # ------------------------------------------------------------------
-#' # Example 1: create and inspect a complete source bundle without Quarto
+#' # Example 1: create and inspect a source bundle without invoking Quarto
 #' # ------------------------------------------------------------------
 #' set.seed(202602)
 #' n_subjects <- 24L
@@ -1830,29 +1901,28 @@
 #'
 #' # The stem is normalized, and all reproducibility sources exist even though
 #' # the HTML file was not rendered.
-#' basename(report$source)
-#' file.exists(c(
+#' print(basename(report$source))
+#' print(file.exists(c(
 #'   report$source, report$payload, report$runtime, report$results_manifest
-#' ))
-#' report$rendered
-#' report$expected_files
+#' )))
+#' print(report$rendered)
+#' print(report$expected_files)
 #'
 #' # Section selection controls the document, not the machine-readable archive.
 #' manifest <- utils::read.csv(
 #'   report$results_manifest,
 #'   stringsAsFactors = FALSE
 #' )
-#' manifest[, c("outcome", "path", "file", "rows", "columns")]
+#' print(manifest[, c("outcome", "path", "file", "rows", "columns")])
 #'
 #' # The payload preserves the original result rather than a display-truncated
 #' # copy, so exact objects remain available for audit or deferred rendering.
 #' payload <- readRDS(report$payload)
-#' identical(payload$result$descriptives, analysis$descriptives)
+#' print(identical(payload$result$descriptives, analysis$descriptives))
 #' unlink(report_dir, recursive = TRUE)
 #'
-#' \dontrun{
 #' # ------------------------------------------------------------------
-#' # Example 2: analyse raw data and build the report in one call
+#' # Example 2: analyse raw data and build a source bundle in one call
 #' # ------------------------------------------------------------------
 #' direct_report <- mira_report_freq_long(
 #'   data = report_data,
@@ -1862,12 +1932,15 @@
 #'   output_dir = tempfile("mira-direct-"),
 #'   output_file = "direct_analysis",
 #'   format = "html",
-#'   render = TRUE,
-#'   open = TRUE
+#'   render = FALSE,
+#'   open = FALSE
 #' )
+#' # Declaring the logical outcome forwards its name to the analysis.
+#' direct_payload <- readRDS(direct_report$payload)
+#' print(attr(direct_payload$result$descriptives, "mira_metric_names"))
 #'
 #' # ------------------------------------------------------------------
-#' # Example 3: request every output format with publication metadata
+#' # Example 3: prepare all output targets with publication metadata
 #' # ------------------------------------------------------------------
 #' all_formats <- mira_report_freq_long(
 #'   analysis,
@@ -1878,32 +1951,128 @@
 #'   subtitle = "Frequentist analysis set",
 #'   author = c("A. Analyst", "B. Statistician"),
 #'   date = as.Date("2026-09-15"),
-#'   render = TRUE,
+#'   render = FALSE,
 #'   open = FALSE
 #' )
-#' all_formats$rendered
-#' all_formats$render_errors
-#' all_formats$files
+#' print(all_formats$rendered)
+#' print(all_formats$render_errors)
+#' print(all_formats$files)
+#' # No document has been rendered: expected_files lists targets only.
+#' print(all_formats$expected_files)
 #'
+#' \donttest{
 #' # ------------------------------------------------------------------
-#' # Example 4: make a focused report while retaining every table in CSV
+#' # Example 4: report fitted KR, rank, and MMRM results without refitting
 #' # ------------------------------------------------------------------
+#' # Model modules are optional analyses; their engines are package Imports.
+#' # These real fits are slower than the source-only workflows above.
+#' model_analysis <- mira_info_long(
+#'   report_data,
+#'   id = "subject_id",
+#'   time_vars = list(`Clinical score` = c("score_t0", "score_t1", "score_t2")),
+#'   time_labels = c("Zbaseline", "Amid", "Mfinal"),
+#'   covariates = character(),
+#'   analyses = "model",
+#'   verbose = FALSE
+#' )
+#' modules <- list(
+#'   kenward_roger = model_analysis$advanced_tests$kenward_roger,
+#'   rank_longitudinal = model_analysis$advanced_tests$rank_longitudinal,
+#'   mmrm = model_analysis$advanced_models$mmrm
+#' )
+#' module_status <- data.frame(
+#'   method = names(modules),
+#'   requested = vapply(modules, function(x) isTRUE(x$requested), logical(1L)),
+#'   performed = vapply(modules, function(x) isTRUE(x$performed), logical(1L))
+#' )
+#' print(module_status)
+#' # This non-degenerate fixture is intended to exercise all three engines.
+#' stopifnot(all(module_status$requested), all(module_status$performed))
+#'
 #' focused <- mira_report_freq_long(
-#'   analysis,
+#'   model_analysis,
 #'   output_dir = tempfile("mira-focused-"),
 #'   format = "html",
 #'   sections = c(
 #'     "methods", "data_quality", "descriptives", "missingness",
-#'     "models", "diagnostics"
+#'     "models", "robustness", "diagnostics"
 #'   ),
+#'   include_complete_output = FALSE,
 #'   max_table_rows = 50,
 #'   max_table_columns = 8,
 #'   digits = 4,
 #'   render = FALSE,
 #'   open = FALSE
 #' )
-#' focused_manifest <- utils::read.csv(focused$results_manifest)
-#' file.exists(file.path(focused$output_dir, focused_manifest$file))
+#' focused_manifest <- utils::read.csv(
+#'   focused$results_manifest, stringsAsFactors = FALSE, check.names = FALSE
+#' )
+#' print(file.exists(file.path(focused$output_dir, focused_manifest$file)))
+#' saved_result <- readRDS(focused$payload)$result
+#' print(identical(saved_result$advanced_models$mmrm$coefficients,
+#'                 model_analysis$advanced_models$mmrm$coefficients))
+#' print(saved_result$advanced_tests$kenward_roger$tidy)
+#' rank_effects <- saved_result$advanced_tests$rank_longitudinal$effects
+#' print(rank_effects[, c("time", "time_label", "n_subjects", "n", "missing_n")])
+#' mmrm <- saved_result$advanced_models$mmrm
+#' print(c(observations = mmrm$n, subjects = mmrm$n_subjects))
+#' print(mmrm$pair_coverage)
+#' # Module analysis frames stay in the RDS, outside CSV traversal.
+#' print(nrow(mmrm$data))
+#'
+#' # Find the owning contrast CSV by its canonical path, never a guessed slug.
+#' contrast_path <- "outcome$advanced_models$mmrm$emmeans$time$pairwise_tidy"
+#' contrast_entry <- focused_manifest[
+#'   focused_manifest$path == contrast_path, , drop = FALSE
+#' ]
+#' stopifnot(nrow(contrast_entry) == 1L)
+#' contrast_csv <- utils::read.csv(
+#'   file.path(focused$output_dir, contrast_entry$file),
+#'   stringsAsFactors = FALSE, check.names = FALSE
+#' )
+#' contrast_table <- mmrm$emmeans$time$pairwise_tidy
+#' metric_map <- attr(contrast_table, "mira_metric_names", exact = TRUE)
+#' # The declared name includes a space: preserve exact names when reading CSV.
+#' print(metric_map)
+#' print(contrast_csv[, c("contrast", unname(metric_map[["p_raw"]]))])
+#' print(saved_result$multiplicity$mmrm$time_pairwise$object_path)
+#' # The single final-minus-baseline contrast has its own owning table.
+#' print(mmrm$emmeans$baseline_final$tidy)
+#'
+#' # A requested but unavailable method has a reason, not a fitted table.
+#' empty_visit <- report_data
+#' empty_visit$score_t2 <- NA_real_
+#' unavailable_analysis <- mira_info_long(
+#'   empty_visit,
+#'   id = "subject_id",
+#'   time_vars = list(`Clinical score` = c("score_t0", "score_t1", "score_t2")),
+#'   time_labels = c("Zbaseline", "Amid", "Mfinal"),
+#'   covariates = character(),
+#'   analyses = "model",
+#'   verbose = FALSE
+#' )
+#' unavailable_mmrm <- unavailable_analysis$advanced_models$mmrm
+#' stopifnot(isTRUE(unavailable_mmrm$requested),
+#'           !isTRUE(unavailable_mmrm$performed))
+#' print(unavailable_mmrm$reason_skipped)
+#' print(unavailable_analysis$time_labels)
+#' # The empty final visit remains part of the requested calendar.
+#' unavailable_report <- mira_report_freq_long(
+#'   unavailable_analysis,
+#'   output_dir = tempfile("mira-unavailable-"),
+#'   format = "html",
+#'   sections = c("models", "diagnostics"),
+#'   render = FALSE,
+#'   open = FALSE
+#' )
+#' unavailable_manifest <- utils::read.csv(unavailable_report$results_manifest)
+#' stopifnot(!any(startsWith(unavailable_manifest$path,
+#'                          "outcome$advanced_models$mmrm$")))
+#' # On rendering, diagnostics presents the recorded non-estimability reason.
+#' # Example 1 instead disabled these modules: requested and performed are FALSE.
+#' print(c(requested = analysis$advanced_models$mmrm$requested,
+#'         performed = analysis$advanced_models$mmrm$performed))
+#' }
 #'
 #' # ------------------------------------------------------------------
 #' # Example 5: report multiple outcomes
@@ -1928,8 +2097,8 @@
 #'   open = FALSE
 #' )
 #' multi_manifest <- utils::read.csv(multi_report$results_manifest)
-#' split(multi_manifest$file[nzchar(multi_manifest$outcome)],
-#'       multi_manifest$outcome[nzchar(multi_manifest$outcome)])
+#' print(split(multi_manifest$file[nzchar(multi_manifest$outcome)],
+#'             multi_manifest$outcome[nzchar(multi_manifest$outcome)]))
 #'
 #' # ------------------------------------------------------------------
 #' # Example 6: preserve a fitted object for a future appendix
@@ -1944,7 +2113,7 @@
 #'   render = FALSE,
 #'   open = FALSE
 #' )
-#' names(readRDS(with_appendix$payload)$extra_objects)
+#' print(names(readRDS(with_appendix$payload)$extra_objects))
 #'
 #' # ------------------------------------------------------------------
 #' # Example 7: document detection decisions without running analyses
@@ -1980,12 +2149,20 @@
 #'
 #' # A source-only bundle can also be rendered later while keeping execution
 #' # relative to its companion runtime and payload files.
+#' # The R package quarto, the Quarto CLI, and target prerequisites are needed.
+#' \dontrun{
+#' quarto::quarto_render(
+#'   input = all_formats$source,
+#'   output_format = "all",
+#'   execute_dir = all_formats$output_dir
+#' )
 #' quarto::quarto_render(
 #'   input = updated_report$source,
 #'   output_format = "html",
 #'   execute_dir = updated_report$output_dir
 #' )
 #' }
+#' })
 #' @export
 mira_report_freq_long <- function(
     x = NULL,

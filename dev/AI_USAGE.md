@@ -1,5 +1,24 @@
 # AI assistance record
 
+## Roxygen documentation audit: 2026-11-01
+
+OpenAI Codex and three parallel AI agents assisted with an implementation-based
+audit of the complete `mira_info_long()` and `mira_report_freq_long()` help,
+their inherited documentation, executable examples and directly related output
+contract. Assistance included primary-source methodological review, targeted
+English documentation revisions, regenerated Rd help and local verification.
+The source and current Rd were preserved before regeneration; the initial
+regeneration reproduced both help files exactly. Statistical implementation,
+public signatures, defaults and dependency declarations were preserved.
+
+Detailed commands, fresh verification results and unresolved limits are supplied
+in the separate validation deliverables for this session. Historical test and
+rendering results retain their original provenance. AI cross-review does not
+constitute human scientific or editorial review. The author must review the
+changes and any manuscript disclosure; no JOSS acceptance or publication
+approval is asserted. No commit, staging, push, PR, release, publication or
+communication with third parties was performed.
+
 ## Ophthalmic frequentist examples: 2026-10-30
 
 OpenAI Codex (GPT-6 family; exact deployment identifier not exposed) and three

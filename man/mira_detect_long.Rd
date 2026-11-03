@@ -37,15 +37,11 @@ single safe candidate, it creates an internal row ID named
 in \code{config$id_generated}.}
 
 \item{outcomes}{\code{NULL} (the default), \code{"auto"}, or a character vector of
-outcome names, unique after case-and-punctuation normalization. \code{NULL} and
-\code{"auto"} select all unambiguous detected groups. Explicit names select
-detected groups by normalized name, label an explicitly supplied single
-\code{time_vars} group, or provide labels for an unnamed \code{time_vars} list. As a
-column-selection convenience, when \code{time_vars} is \code{NULL} and \code{outcomes}
-contains at least two values that are all column names, those values are
-treated as \code{time_vars} rather than as outcome-family names. The
-implementation also accepts \code{character(0)} as an explicit selection and
-returns an empty \code{mira_info_multi_long} container.}
+outcome names, unique after case-and-punctuation normalization. Selection,
+explicit naming, and the source-column convenience follow the rules of
+\code{\link[=mira_info_long]{mira_info_long()}}. \code{character(0)} selects no outcome groups and returns a
+\code{mira_detect_long} object with an empty outcome configuration; it does not
+return an analysis container.}
 
 \item{time_vars}{\code{NULL} (the default), a character vector of at least two
 longitudinal column names, or a list of such vectors, one per outcome. All
@@ -71,11 +67,11 @@ permutation. \code{NULL} uses parsed suffixes, or the source column name when
 parsing did not supply a label.}
 
 \item{arm}{\code{NULL} (the default) or a length-one character string naming a
-treatment or grouping column. An explicit name must exist and overrides
-detection. With \code{NULL}, only an unambiguous, plausibly categorical column
-with an arm-like name is selected; otherwise between-group analyses remain
-disabled. The arm is still carried into long-format and trajectory output
-when selected, even if \code{arm_tests} is false.}
+treatment or grouping column. An explicit existing name overrides
+detection; with \code{NULL}, only an unambiguous, plausibly categorical column
+with an arm-like name is selected. The selected name, reference level,
+candidates, and provenance are recorded in the configuration. This function
+does not produce arm comparisons, trajectories, or long-format data.}
 
 \item{reference_arm}{\code{NULL} (the default) or one non-empty character value
 identifying an observed level of \code{arm}. It is an error to supply this
@@ -107,19 +103,13 @@ Automatic covariates are used only when the combined cost does not exceed
 \code{floor(nrow(data) / 10)}; otherwise none are selected and a warning records
 the candidates.}
 
-\item{variable_pattern}{Exactly \code{"auto"} (the default), a non-empty
-regular-expression string, or a parser function called once per column
-name. With \code{"auto"}, the supported suffix rules are described under
-\strong{Input data and longitudinal naming}. A custom regular-expression match
-is recognized only when it yields at least two capture groups: the first is
-the outcome name and the second is the time label; time order is derived
-from that label. A custom function must return \code{NULL} for a non-match or a
-list (a one-row data frame is also accepted) containing \code{outcome}, with
-optional \code{time_label} and \code{time_order}. A missing \code{time_label} defaults to
-the column name, and a missing \code{time_order} is derived from the label.
-Custom regular expressions use the default case-sensitive, non-Perl behavior
-of \code{regexec()}. The first value of each parser field is used, with
-\code{time_order} coerced to numeric.}
+\item{variable_pattern}{Exactly \code{"auto"} (the default), a non-empty regular
+expression, or a column-name parser function, using the rules under
+\strong{Input data and longitudinal naming} in \code{\link[=mira_info_long]{mira_info_long()}}. A regular
+expression uses its first two capture groups for outcome and time label;
+a parser returns \code{NULL} for a non-match or a list with \code{outcome} and
+optional \code{time_label}/\code{time_order}. These rules resolve groups and visit
+order only; they do not run analyses.}
 
 \item{improvement_direction}{\code{NULL}, \code{"auto"} (the default), \code{"higher"},
 \code{"lower"}, or \code{"unknown"}; for multiple outcomes it may be a character
@@ -144,17 +134,15 @@ intervening values are stable. The threshold affects response
 classifications and trajectory labels, not statistical tests; it is not
 estimated or clinically validated by the function.}
 
-\item{strict_id}{A non-missing logical scalar, defaulting to \code{TRUE}. With
-\code{TRUE}, missing or duplicated values in a selected, non-generated ID column
-are fatal because wide input is assumed to contain one row per subject. With
-\code{FALSE}, these conditions generate warnings and duplicated IDs are treated
-as records from the same subject by subject-indexed models. Use \code{FALSE} only
-when that interpretation is intentional.}
+\item{strict_id}{A non-missing logical scalar, defaulting to \code{TRUE}. Missing
+or duplicated values in an explicitly selected ID are errors with \code{TRUE}
+and warnings with \code{FALSE}. Detection still requires a complete unique
+candidate or generates an internal row ID. No aggregation or model fitting
+is performed; see \code{\link[=mira_info_long]{mira_info_long()}} for model-specific duplicate limits.}
 
 \item{verbose}{A non-missing logical scalar, defaulting to \code{TRUE}. If \code{TRUE},
-the appropriate \code{print()} method is called before the result is returned
-invisibly. Assigning the call, for example \code{fit <- mira_info_long(data)}, still
-captures the complete object. If \code{FALSE}, no automatic report is printed;
+print the detection report before invisibly returning the complete
+configuration object. Use \code{configuration <- mira_detect_long(data, verbose = FALSE)} to capture it without automatic printing; configuration
 warnings are unaffected.}
 }
 \value{
@@ -179,6 +167,11 @@ function.
 name source, and display label. It distinguishes naming an outcome from merely
 selecting its temporal source columns; see \code{\link[=mira_info_long]{mira_info_long()}} for the metric
 naming rule used when analyses are requested.
+
+Inherited parameters describe configuration choices shared with
+\code{\link[=mira_info_long]{mira_info_long()}}. Here covariate selection, direction, and threshold
+resolution populate \code{config} only: this function computes no statistical
+estimates, response classifications, fitted models, or metric tables.
 }
 \seealso{
 \code{\link[=mira_info_long]{mira_info_long()}}

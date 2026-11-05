@@ -1,8 +1,20 @@
 # MIRA
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23120183.svg)](https://doi.org/10.5281/zenodo.23120183)
-
 **Bayesian Multilevel Inference for Longitudinal Data**
+
+[![R-CMD-check](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/R-CMD-check.yaml?branch=main&event=push&style=flat&label=R-CMD-check)](https://github.com/davide-celani/MIRA/actions/workflows/R-CMD-check.yaml?query=branch%3Amain+event%3Apush)
+[![CmdStan smoke](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/cmdstan-smoke.yaml?branch=main&event=push&style=flat&label=CmdStan%20smoke)](https://github.com/davide-celani/MIRA/actions/workflows/cmdstan-smoke.yaml?query=branch%3Amain+event%3Apush)
+[![GitHub release](https://img.shields.io/github/v/release/davide-celani/MIRA?style=flat&label=GitHub%20release)](https://github.com/davide-celani/MIRA/releases/latest)
+[![R >= 4.2.0](https://img.shields.io/badge/R-%3E%3D%204.2.0-blue?style=flat)](https://github.com/davide-celani/MIRA/blob/main/DESCRIPTION#L27)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat)](https://github.com/davide-celani/MIRA/blob/main/LICENSE.md)
+
+[![Zenodo DOI](https://img.shields.io/badge/Zenodo%20DOI-10.5281%2Fzenodo.23120183-blue?style=flat)](https://doi.org/10.5281/zenodo.23120183)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange?style=flat)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![GitHub stars](https://img.shields.io/github/stars/davide-celani/MIRA?style=flat&label=GitHub%20stars)](https://github.com/davide-celani/MIRA)
+
+[Installation](#installation) · [Tutorials](#frequentist-longitudinal-tutorials) ·
+[Example](#reproducible-example) · [Documentation and tests](#documentation-and-tests) ·
+[Citation](#citation)
 
 MIRA (**Multilevel Inference and Regression Analysis**) is an R package for
 Bayesian modeling of continuous longitudinal outcomes. It connects repeated
@@ -11,8 +23,10 @@ probabilities of meaningful change through an inspectable Stan model.
 The package also provides frequentist exploration and Quarto report generation.
 
 Version `0.0.1` was released on 2026-10-03 and is archived on
-[Zenodo](https://doi.org/10.5281/zenodo.23120184). MIRA remains under active
-development.
+[Zenodo](https://doi.org/10.5281/zenodo.23120184). MIRA is under active
+development: its API and result structures are experimental and may change.
+The `main` branch includes changes made after the archived release; see
+[NEWS.md](NEWS.md) for development updates.
 
 ## What MIRA does
 
@@ -333,6 +347,15 @@ Choose a validation unit consistent with the scientific prediction task,
 especially when observations are clustered within subjects.
 
 ## Documentation and tests
+
+Continuous integration runs [R CMD check](https://github.com/davide-celani/MIRA/actions/workflows/R-CMD-check.yaml)
+on Linux, Windows, and macOS, with additional Linux profiles for oldrel-1 and
+R 4.2.3. The minimum-R profile uses compatible pinned versions of Matrix and
+Deriv. A separate job renders and checks Quarto HTML and DOCX reports; PDF
+rendering is outside that CI profile.
+
+The [CmdStan smoke workflow](https://github.com/davide-celani/MIRA/actions/workflows/cmdstan-smoke.yaml)
+separately compiles and samples the longitudinal model.
 
 Function documentation is available in R, for example:
 

@@ -2,7 +2,7 @@
 
 devtools::load_all()
 
-# Resolve canonical metric bases for inferred and explicitly declared outcomes.
+# Resolve canonical metric bases for inferred and explicitly declared outcomes..
 metric_columns_long <- function(table, base) {
   map <- attr(table, "mira_metric_names", exact = TRUE)
   index <- match(base, names(map))

@@ -7909,7 +7909,8 @@ mira_detect_long <- function(data,
 #'
 #' # Values are compared between arms at every visit. The column name states the
 #' # direction exactly: mean_difference_b_minus_a is arm_b minus arm_a.
-#' print(arm_fit$arm_analysis$time_pairwise[, metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
+#' print(arm_fit$arm_analysis$time_pairwise[,
+#'   metric_columns_long(arm_fit$arm_analysis$time_pairwise, c(
 #'   "time_label", "arm_a", "arm_b", "n_a", "n_b",
 #'   "mean_difference_b_minus_a", "ci_lower", "ci_upper",
 #'   "welch_t_p", "welch_t_p_adj"
@@ -8169,7 +8170,8 @@ mira_detect_long <- function(data,
 #'   # Effect-size and multiplicity objects point back to their source families.
 #'   paired_dz <- adjusted_fit$effect_sizes$paired_cohens_dz
 #'   if (!is.null(paired_dz)) {
-#'     print(paired_dz[, metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))])
+#'     print(paired_dz[,
+#'       metric_columns_long(paired_dz, c("from_label", "to_label", "n", "cohens_dz"))])
 #'   }
 #'   # Multiplicity metadata references these canonical tables without copies.
 #'   print(adjusted_fit$multiplicity$friedman_posthoc$object_path)
@@ -8185,7 +8187,8 @@ mira_detect_long <- function(data,
 #'   if (isTRUE(adjusted_fit$advanced_tests$emmeans$performed)) {
 #'     time_family <- adjusted_fit$advanced_tests$emmeans$time$pairwise_tidy
 #'     if (!is.null(time_family)) {
-#'       print(time_family[, metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))])
+#'       print(time_family[,
+#'         metric_columns_long(time_family, c("contrast", "p_raw", "p_holm", "p_bh"))])
 #'     }
 #'   }
 #'

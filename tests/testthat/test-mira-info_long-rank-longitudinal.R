@@ -5,6 +5,12 @@ rank_longitudinal_call <- function(...) {
     inherits = FALSE)(...)
 }
 
+rank_longitudinal_native_p_column <- function(table) {
+  columns <- intersect(c("p-value", "p.value"), colnames(table))
+  stopifnot(length(columns) == 1L)
+  columns
+}
+
 rank_longitudinal_small <- function() {
   data.frame(patient = rep(c("P3", "P1", "P2"), 2L),
     time = rep(c("score_t0", "score_t1"), each = 3L),
@@ -59,9 +65,14 @@ test_that("rank relative effects, uncertainty and global tests have a manual mis
     tolerance = 1e-12)
   expect_equal(effects$ci_upper, stats::plogis(stats::qlogis(p) + z * logit_se),
     tolerance = 1e-12)
-  # Native nparLD's field is sqrt(N) times estimator SE. The wrapper must not
-  # mistake that asymptotic scaling for the SE displayed in MIRA/report.
-  expect_equal(result$object$effects$std.error, rep(sqrt(3) / 12, 2L), tolerance = 1e-12)
+  # The native field used sqrt(N)-scaled SEs before the estimator-scale rename.
+  # MIRA reports the estimator-scale SE regardless of the native representation.
+  native_effects <- result$object$effects
+  if ("Std.Error" %in% names(native_effects)) {
+    expect_equal(native_effects[["Std.Error"]], rep(1 / 12, 2L), tolerance = 1e-12)
+  } else {
+    expect_equal(native_effects[["std.error"]], rep(sqrt(3) / 12, 2L), tolerance = 1e-12)
+  }
   tests <- result$tests
   expect_identical(paste(tests$question, tests$method), c("TIME ATS", "TIME WTS"))
   expect_true(all(tests$estimable))
@@ -115,7 +126,8 @@ test_that("rank factorial inference preserves subject-visit keys and ignores nui
     term <- tests$term[[i]]
     expect_identical(sum(rownames(table) == term), 1L)
     expect_equal(c(tests$statistic[[i]], tests$df_num[[i]], tests$p_raw[[i]]),
-      as.numeric(table[term, c("Statistic", "df", "p-value")]), tolerance = 1e-12)
+      as.numeric(table[term, c("Statistic", "df", rank_longitudinal_native_p_column(table))]),
+      tolerance = 1e-12)
   }
 })
 
@@ -214,8 +226,10 @@ test_that("rank inference does not turn nonfinite engine tests into a performed 
     rank_longitudinal_call(data, c("Zbase", "Afinal"), FALSE, character(), .90),
     nparLD = function(...) {
       object <- original(...)
-      object$ATS[, "p-value"] <- NaN
-      object$WTS[, "p-value"] <- NaN
+      for (method in c("ATS", "WTS")) {
+        p_column <- rank_longitudinal_native_p_column(object[[method]])
+        object[[method]][, p_column] <- NaN
+      }
       object
     }, .package = "nparLD")
   expect_false(result$performed)
@@ -223,7 +237,8 @@ test_that("rank inference does not turn nonfinite engine tests into a performed 
   expect_false(any(result$tests$estimable))
   expect_true(all(is.na(as.matrix(result$tests[c("statistic", "df_num", "df_den", "p_raw")]))))
   expect_true(all(grepl("engine returned", result$tests$note, fixed = TRUE)))
-  expect_true(all(is.nan(result$object$ATS[, "p-value"])))
+  native_ats <- result$object$ATS
+  expect_true(all(is.nan(native_ats[, rank_longitudinal_native_p_column(native_ats)])))
   expect_s3_class(result$object, "nparld_fit")
   expect_equal(result$effects$relative_effect, c(5, 7) / 12, tolerance = 1e-12)
 })

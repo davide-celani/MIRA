@@ -1364,7 +1364,7 @@
       "Rank inference assumes responses are missing completely at random (MCAR); general MAR and MNAR mechanisms are not addressed.",
       "Relative effects above 0.5 indicate larger responses, not clinical improvement.",
       "ATS uses the engine's large-denominator F approximation (df_den=1e10).",
-      "SE and covariance describe the effect estimator; native nparLD scaled standard errors are retained only in object."))
+      "SE and covariance describe the effect estimator; object retains the native nparLD output."))
   skip <- function(reason, error = NULL) {
     result$reason_skipped <- reason
     result["error"] <- list(error)
@@ -1487,6 +1487,9 @@
     }
     native_time <- as.character(native$time_factor)
     if (anyNA(match(native_time, time_levels))) stop("nparLD returned an unknown visit.")
+    # nparLD 2.3.4 capitalizes the effect confidence limits.
+    ci_columns <- match(c("lower", "upper"), tolower(names(native)))
+    if (anyNA(ci_columns)) stop("nparLD did not return both effect confidence limits.")
     source_map <- if ("time" %in% names(data)) {
       as.character(data$time[match(time_levels, data$time_label)])
     } else as.character(time_levels)
@@ -1497,7 +1500,8 @@
       n_subjects = as.integer(native$Nsubj), n = as.integer(native$Nobs),
       missing_n = as.integer(native$Nmiss), relative_effect = as.numeric(native$RTE),
       SE = sqrt(diag(Sigma) / result$n_subjects),
-      ci_lower = as.numeric(native$lower), ci_upper = as.numeric(native$upper),
+      ci_lower = as.numeric(native[[ci_columns[[1L]]]]),
+      ci_upper = as.numeric(native[[ci_columns[[2L]]]]),
       stringsAsFactors = FALSE)
     rownames(effects) <- NULL
     terms <- if (isTRUE(arm_enabled)) {
@@ -1513,7 +1517,9 @@
         if (is.na(index)) stop("nparLD returned no unique result for a requested hypothesis.")
         statistic <- as.numeric(table[index, "Statistic"])
         df <- as.numeric(table[index, "df"])
-        p <- as.numeric(table[index, "p-value"])
+        p_column <- intersect(c("p-value", "p.value"), colnames(table))
+        if (length(p_column) != 1L) stop("nparLD did not return a unique p-value column.")
+        p <- as.numeric(table[index, p_column])
         estimable <- all(is.finite(c(statistic, df, p))) && statistic >= 0 && df > 0 && p >= 0 && p <= 1
         no_time_variation <- static_complete && question %in% c("TIME", "TIME_X_ARM")
         note <- if (no_time_variation) {

@@ -2,15 +2,15 @@
 
 **Bayesian Multilevel Inference for Longitudinal Data**
 
-[![R-CMD-check](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/R-CMD-check.yaml?branch=main&event=push&style=flat&label=R-CMD-check)](https://github.com/davide-celani/MIRA/actions/workflows/R-CMD-check.yaml?query=branch%3Amain+event%3Apush)
-[![CmdStan smoke](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/cmdstan-smoke.yaml?branch=main&event=push&style=flat&label=CmdStan%20smoke)](https://github.com/davide-celani/MIRA/actions/workflows/cmdstan-smoke.yaml?query=branch%3Amain+event%3Apush)
-[![GitHub release](https://img.shields.io/github/v/release/davide-celani/MIRA?style=flat&label=GitHub%20release)](https://github.com/davide-celani/MIRA/releases/latest)
-[![R >= 4.2.0](https://img.shields.io/badge/R-%3E%3D%204.2.0-blue?style=flat)](https://github.com/davide-celani/MIRA/blob/main/DESCRIPTION#L27)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat)](https://github.com/davide-celani/MIRA/blob/main/LICENSE.md)
+[![R-CMD-check](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/R-CMD-check.yaml?branch=main&event=push&style=flat&label=R-CMD-check&labelColor=30435A)](https://github.com/davide-celani/MIRA/actions/workflows/R-CMD-check.yaml?query=branch%3Amain+event%3Apush)
+[![CmdStan smoke](https://img.shields.io/github/actions/workflow/status/davide-celani/MIRA/cmdstan-smoke.yaml?branch=main&event=push&style=flat&label=CmdStan%20smoke&labelColor=30435A)](https://github.com/davide-celani/MIRA/actions/workflows/cmdstan-smoke.yaml?query=branch%3Amain+event%3Apush)
+[![GitHub release](https://img.shields.io/github/v/release/davide-celani/MIRA?style=flat&label=GitHub%20release&labelColor=30435A&color=415979)](https://github.com/davide-celani/MIRA/releases/latest)
+[![R >= 4.2.0](https://img.shields.io/badge/R-%3E%3D%204.2.0-415979?style=flat&labelColor=30435A)](https://github.com/davide-celani/MIRA/blob/main/DESCRIPTION#L27)
+[![License: MIT](https://img.shields.io/badge/license-MIT-415979?style=flat&labelColor=30435A)](https://github.com/davide-celani/MIRA/blob/main/LICENSE.md)
 
-[![Zenodo DOI](https://img.shields.io/badge/Zenodo%20DOI-10.5281%2Fzenodo.23120183-blue?style=flat)](https://doi.org/10.5281/zenodo.23120183)
-[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange?style=flat)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
-[![GitHub stars](https://img.shields.io/github/stars/davide-celani/MIRA?style=flat&label=GitHub%20stars)](https://github.com/davide-celani/MIRA)
+[![Zenodo DOI for MIRA (10.5281/zenodo.23120183)](man/figures/badge-zenodo.svg)](https://doi.org/10.5281/zenodo.23120183)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-415979?style=flat&labelColor=30435A)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![GitHub stars](https://img.shields.io/github/stars/davide-celani/MIRA?style=flat&label=GitHub%20stars&labelColor=30435A&color=415979)](https://github.com/davide-celani/MIRA)
 
 [Installation](#installation) · [Tutorials](#frequentist-longitudinal-tutorials) ·
 [Example](#reproducible-example) · [Documentation and tests](#documentation-and-tests) ·

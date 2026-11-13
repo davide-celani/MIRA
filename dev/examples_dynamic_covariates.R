@@ -34,7 +34,7 @@ devtools::load_all(quiet = TRUE)
 source("dev/data_creation.R", local = FALSE)
 
 data <- mira_create_ophthalmology_data(
-  n_per_arm = 10,
+  n_per_arm = 30,
   seed = 2026,
   time_months = c(0, 3, 5, 12, 15)
 )

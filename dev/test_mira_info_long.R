@@ -20,7 +20,7 @@ metric_columns_long <- function(table, base) {
 # The names subject_id and score_t0, score_t1, score_t2 are deliberately
 # conventional, so ID, outcome family, and time order can all be inferred.
 set.seed(202601)
-n_wide <- 48L
+n_wide <- 1000L
 score_baseline <- rnorm(n_wide, mean = 50, sd = 7)
 wide <- data.frame(
   subject_id = sprintf("S%03d", seq_len(n_wide)),
@@ -37,7 +37,7 @@ auto_fit <- mira_info_long(
   wide,
   analyses = "none",
   p_adjust_method = "holm",
-  verbose = FALSE
+  verbose = TRUE
 )
 
 

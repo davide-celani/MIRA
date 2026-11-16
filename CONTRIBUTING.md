@@ -111,13 +111,13 @@ The installed mode uses the MIRA installation selected by the R library paths.
 This outer runner disables all optional profiles, records CSV/RDS results and
 session state, and exits nonzero on failures, warnings or unexpected state
 changes. It is excluded from the built package to avoid automatic recursive
-execution by `R CMD check`. The manually dispatched CI validation job runs the
-long campaigns separately; standard CI retains its regular checks and Quarto
-HTML/DOCX integration.
+execution by `R CMD check`. The extended CI validation job runs the long
+campaigns on pushes to `main`/`master` and on manual dispatch. The regular
+checks and Quarto HTML/DOCX integration also run on pull requests.
 
-Pushes to `main`/`master` and pull requests retain eight automatic checks: five
-R configurations, real Quarto HTML/DOCX integration, CmdStan sampling and citation
-validation. The extended campaigns are an additional manually dispatched job.
+Pushes to `main`/`master` run nine automatic checks: five R configurations,
+real Quarto HTML/DOCX integration, CmdStan sampling, citation validation and
+the extended campaigns. Pull requests retain the eight regular checks.
 Before changing `.github/workflows/`, run `actionlint` from the repository root
 to validate GitHub Actions expressions and context availability as well as YAML.
 

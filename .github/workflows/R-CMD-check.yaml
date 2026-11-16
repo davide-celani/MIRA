@@ -104,7 +104,7 @@ jobs:
           )
 
   extended-validation:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     name: Extended scientific and vignette validation (R release)
     timeout-minutes: 60

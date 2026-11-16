@@ -116,7 +116,6 @@ jobs:
       MIRA_RUN_SCIENCE_TESTS: 'true'
       MIRA_RUN_MUTATION_TESTS: 'true'
       MIRA_RUN_VIGNETTE_TESTS: 'true'
-      MIRA_VALIDATION_OUTPUT_DIR: ${{ runner.temp }}/mira-validation
       QUARTO_TEXLIVE_AUTO_INSTALL: 'false'
       QUARTO_TEXLIVE_AUTO_UPDATE: 'false'
     steps:
@@ -133,6 +132,8 @@ jobs:
       - name: Install MIRA for isolated vignette workers
         run: R CMD INSTALL .
       - name: Run the extended testthat profiles
+        env:
+          MIRA_VALIDATION_OUTPUT_DIR: ${{ runner.temp }}/mira-validation
         shell: Rscript {0}
         run: |
           dir.create(Sys.getenv("MIRA_VALIDATION_OUTPUT_DIR"), recursive = TRUE,

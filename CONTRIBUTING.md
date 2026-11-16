@@ -115,6 +115,16 @@ execution by `R CMD check`. The manually dispatched CI validation job runs the
 long campaigns separately; standard CI retains its regular checks and Quarto
 HTML/DOCX integration.
 
+Pushes to `main`/`master` and pull requests retain eight automatic checks: five
+R configurations, real Quarto HTML/DOCX integration, CmdStan sampling and citation
+validation. The extended campaigns are an additional manually dispatched job.
+Before changing `.github/workflows/`, run `actionlint` from the repository root
+to validate GitHub Actions expressions and context availability as well as YAML.
+
+Workflow definitions belong in `.github/workflows/` and automated tests in
+`tests/`. Development examples in `dev/` remain available in Git, while
+`.Rbuildignore` excludes them from the distributed R package.
+
 Before a release, keep `DESCRIPTION`, `CITATION.cff`, `inst/CITATION` and `NEWS.md`
 consistent, run the applicable profiles and inspect the CI results. Verify the
 native GitHub-Zenodo integration and the archived version/DOI after publishing.

@@ -5,7 +5,7 @@
 ^CITATION\.cff$
 ^CONTRIBUTING\.md$
 ^CODE_OF_CONDUCT\.md$
-^dev$
+^tests/run-validation\.R$
 ^paper$
 ^_pkgdown\.yml$
 ^docs$

@@ -371,7 +371,7 @@ Function documentation is available in R, for example:
 From the repository root, run:
 
 ```r
-devtools::test()
+testthat::test_local(stop_on_failure = TRUE, stop_on_warning = TRUE)
 devtools::check(args = "--no-manual")
 ```
 
@@ -385,8 +385,12 @@ devtools::test(filter = "dynamic-covariates_long")
 ```
 
 The CmdStan smoke test checks software execution; its deliberately short chains
-do not establish inferential accuracy or convergence. Quarto integration tests
-require the CLI and are skipped when it is unavailable.
+do not establish inferential accuracy or convergence. Quarto HTML/DOCX and PDF,
+the extended Monte Carlo study, mutation checks and complete vignette validation
+are separate opt-in `testthat` profiles. Their flags and commands, including
+source/installed-package runs and session-state auditing, are described in
+[CONTRIBUTING.md](CONTRIBUTING.md#validation-profiles). Tests do not install tools
+or dependencies. An explicitly enabled rendering profile requires its tools.
 
 ## Citation
 
@@ -403,8 +407,9 @@ toBibtex(citation("MIRA"))
 GitHub uses [CITATION.cff](CITATION.cff); R uses [inst/CITATION](inst/CITATION).
 The author ORCID is retained in both formats and in `DESCRIPTION`; R's
 `toBibtex()` may omit it from the rendered BibTeX entry. Future Zenodo releases
-use the CFF author metadata when the native integration is enabled; see the
-[release guide](dev/RELEASE.md) for validation and account checks.
+use the CFF author metadata when the native integration is enabled. Repository
+metadata tests check agreement between CFF, DESCRIPTION and the R citation;
+the citation workflow separately validates the CFF schema.
 The citation for the archived `v0.0.1` release is:
 
 > Celani, D. (2026). *MIRA: Bayesian Multilevel Inference for Longitudinal Data*
@@ -427,11 +432,6 @@ Open [an issue](https://github.com/davide-celani/MIRA/issues) for bugs or featur
 requests. Read [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing
 guidance and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
 MIRA is maintained by Davide Celani; response times depend on availability.
-
-The [release guide](dev/RELEASE.md) describes preparation of a GitHub release
-and Zenodo archive. Future JOSS work is tracked in
-[dev/JOSS_READINESS.md](dev/JOSS_READINESS.md). AI assistance during this
-preparation is recorded in [dev/AI_USAGE.md](dev/AI_USAGE.md).
 
 ## License
 

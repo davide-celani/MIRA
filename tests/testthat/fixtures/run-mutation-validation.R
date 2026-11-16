@@ -1,12 +1,22 @@
-# Targeted sensitivity checks on isolated copies of the current working tree.
-# Rscript --vanilla dev/validate-mutations.R <existing-output-dir> [name1,name2,...]
-# Rscript --vanilla dev/validate-mutations.R --list
+# Isolated worker for test-validation-mutations.R; it never mutates an installed
+# package or its source repository. It can also be run directly:
+# Rscript --vanilla tests/testthat/fixtures/run-mutation-validation.R --list
+# Rscript --vanilla tests/testthat/fixtures/run-mutation-validation.R <output-dir> [name1,name2,...] [source-repo]
 # No dependencies are installed; .git is never copied or changed.
 args <- commandArgs(trailingOnly = TRUE)
-repo <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-if (!file.exists(file.path(repo, "DESCRIPTION"))) stop("Run from the MIRA repository root.")
+repo <- if (length(args) == 3L) args[[3L]] else {
+  Sys.getenv("MIRA_VALIDATION_REPO_DIR", unset = getwd())
+}
+repo <- normalizePath(repo, winslash = "/", mustWork = TRUE)
+if (!identical(args, "--list") && !all(file.exists(file.path(repo, c(
+  "DESCRIPTION", "R/mira_info_long.R", "R/mira_report_freq_long.R", "tests/testthat.R"
+))))) stop("Supply the MIRA source repository, not an installed package.")
+# Explicitly disable outer validation profiles in all copied child processes.
+# File filters also select only the predeclared ordinary regression tests.
 Sys.setenv(MIRA_RUN_CMDSTAN_TESTS = "false", MIRA_RUN_QUARTO_TESTS = "false",
-           MIRA_RUN_QUARTO_PDF_TESTS = "false",
+           MIRA_RUN_QUARTO_PDF_TESTS = "false", MIRA_RUN_SCIENCE_TESTS = "false",
+           MIRA_RUN_MUTATION_TESTS = "false", MIRA_RUN_VIGNETTE_TESTS = "false",
+           MIRA_RUN_FREQUENTIST_VIGNETTE_TESTS = "false",
            QUARTO_TEXLIVE_AUTO_INSTALL = "false", QUARTO_TEXLIVE_AUTO_UPDATE = "false")
 
 # The marker is silent and external to the copied repository. It records the
@@ -37,11 +47,13 @@ cases <- list(
     "change$paired_t_p_adj <- adjust_p_long(change$paired_t_p)",
     paste0("change$paired_t_p_adj <- ", marked("change$paired_t_p")),
     "sampling-inference|generated-properties", "bounded finite-pair cases"),
+  # Historical case name: this targets the direct analyzer's automatic fallback,
+  # while the public wrapper supplies an already resolved outcome and chronology.
   mutant("ignore-custom-chronology", info,
     "ord <- if (clear_order) order(parsed_order, time_vars) else seq_along(time_vars)",
     paste0("ord <- if (clear_order) ", marked("seq_along(time_vars)"),
            " else seq_along(time_vars)"),
-    "configuration-contracts|properties", "custom chronology determines baseline and final"),
+    "chronology-fallback", "^the direct analyzer sorts parsed visit chronology without a resolved outcome$"),
   mutant("retain-infinite-observations", info,
     "function(x) {\n      x[!is.finite(x)] <- NA_real_",
     paste0("function(x) {\n      ", marker, "\n      x[is.nan(x)] <- NA_real_"),
@@ -81,12 +93,12 @@ if (identical(args, "--list")) {
   cat(paste(names(cases), collapse = "\n"), "\n")
   quit(status = 0L)
 }
-if (length(args) < 1L || length(args) > 2L || !dir.exists(args[[1L]])) {
-  stop("Supply an existing external output directory and optional comma-separated mutant names.")
+if (length(args) < 1L || length(args) > 3L || !dir.exists(args[[1L]])) {
+  stop("Supply an existing external output directory, optional comma-separated mutant names and optional source repository.")
 }
 # Default is the focused longitudinal campaign. Historical cases, including
 # Stan, remain selectable but are not part of this scoped default profile.
-selection <- if (length(args) == 2L) strsplit(args[[2L]], ",", fixed = TRUE)[[1L]] else {
+selection <- if (length(args) >= 2L) strsplit(args[[2L]], ",", fixed = TRUE)[[1L]] else {
   c("arm-sign", "missing-BH-family", "truncate-scientific-CSV",
     "false-render-success", "parser-ragged", "ignore-custom-chronology")
 }
@@ -95,7 +107,8 @@ if (!length(selection) || anyDuplicated(selection) || any(!selection %in% names(
 }
 cases <- cases[selection]
 output <- normalizePath(args[[1L]], winslash = "/", mustWork = TRUE)
-if (startsWith(paste0(output, "/"), paste0(repo, "/"))) {
+path_key <- function(path) if (.Platform$OS.type == "windows") tolower(path) else path
+if (startsWith(paste0(path_key(output), "/"), paste0(path_key(repo), "/"))) {
   stop("Use an output directory OUTSIDE the repository to avoid recursive copies.")
 }
 runner <- file.path(output, "mutation-runner.R")

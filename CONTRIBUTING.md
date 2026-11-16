@@ -49,10 +49,75 @@ Sys.setenv(MIRA_RUN_CMDSTAN_TESTS = "true")
 devtools::test(filter = "dynamic-covariates_long")
 ```
 
-Some tests skip when external tools or optional analysis engines are
-unavailable. A skipped test does not establish that the corresponding feature
-works. Quarto rendering tests require Quarto; PDF rendering also requires
-LaTeX.
+External integrations are disabled in the ordinary suite. A skipped test does
+not establish that the corresponding feature works. Explicit rendering profiles
+require Quarto; PDF rendering also requires LaTeX. Tests never install tools or
+dependencies.
+
+## Validation profiles
+
+Functional and scientific checks are in `tests/testthat/`; the outer runner
+below also audits the full suite's session state. The longer campaigns use
+the same framework and are enabled explicitly:
+
+| Profile | Environment flag set to `true` | `testthat::test_local()` filter |
+| --- | --- | --- |
+| CmdStan sampling | `MIRA_RUN_CMDSTAN_TESTS` | `dynamic-covariates_long` |
+| Quarto HTML and DOCX | `MIRA_RUN_QUARTO_TESTS` | `mira-report-freq_long-(integration\|rendering-contracts)` |
+| Quarto PDF | `MIRA_RUN_QUARTO_PDF_TESTS` | `mira-report-freq_long-rendering-contracts` |
+| Extended Monte Carlo study | `MIRA_RUN_SCIENCE_TESTS` | `validation-paired-change-monte-carlo` |
+| Targeted mutation campaign | `MIRA_RUN_MUTATION_TESTS` | `validation-mutations` |
+| Rendered, extracted and visible vignette code | `MIRA_RUN_VIGNETTE_TESTS` | `validation-vignettes` |
+
+For example, from the repository root:
+
+```r
+Sys.setenv(MIRA_RUN_SCIENCE_TESTS = "true")
+testthat::test_local(filter = "validation-paired-change-monte-carlo",
+                     stop_on_failure = TRUE, stop_on_warning = TRUE)
+```
+
+Set `MIRA_VALIDATION_OUTPUT_DIR` to an existing output directory outside the repository
+to retain campaign evidence; otherwise campaigns use temporary directories.
+Mutation and vignette campaigns need the source repository. Set
+`MIRA_VALIDATION_REPO_DIR` explicitly when it cannot be inferred from the test
+directory. `MIRA_MUTATION_CASES` selects comma-separated mutant names; its
+default preserves the six-case campaign. Mutation summaries distinguish
+detected, survived, non-reached, invalid and blocked cases: survival or
+non-reach is a coverage limitation, not evidence of detection.
+
+Vignette checks run each article's rendering, extracted R code and reader-visible
+R code in separate clean R processes. `MIRA_RUN_ADVANCED_VIGNETTES=true` enables
+advanced tutorial branches; `MIRA_RENDER_VIGNETTE_FORMATS=html,docx,pdf` requests
+external report formats. `MIRA_VALIDATE_INSTALLED_VIGNETTES=true` additionally
+checks installed vignette files and requires a package built with its vignettes.
+HTML link/anchor checks use the optional `xml2` dependency.
+
+Repository metadata consistency runs in the source suite. CI sets
+`MIRA_REQUIRE_REPOSITORY_METADATA=true` so missing source metadata fails there;
+tests of built packages skip this repository-only check because `CITATION.cff`
+is deliberately excluded from the package archive.
+
+For an ordinary full-suite run with RNG, working-directory, graphics-device,
+environment and existing-option restoration checks, create an output directory
+outside the repository and run:
+
+```text
+Rscript --vanilla tests/run-validation.R <repository> <output-directory>/source source
+Rscript --vanilla tests/run-validation.R <repository> <output-directory>/installed installed
+```
+
+The installed mode uses the MIRA installation selected by the R library paths.
+This outer runner disables all optional profiles, records CSV/RDS results and
+session state, and exits nonzero on failures, warnings or unexpected state
+changes. It is excluded from the built package to avoid automatic recursive
+execution by `R CMD check`. The manually dispatched CI validation job runs the
+long campaigns separately; standard CI retains its regular checks and Quarto
+HTML/DOCX integration.
+
+Before a release, keep `DESCRIPTION`, `CITATION.cff`, `inst/CITATION` and `NEWS.md`
+consistent, run the applicable profiles and inspect the CI results. Verify the
+native GitHub-Zenodo integration and the archived version/DOI after publishing.
 
 ## Pull requests
 
@@ -66,8 +131,7 @@ Document the relevant model assumptions and diagnostics. Passing software
 tests alone does not validate a statistical method.
 
 If AI tools assisted the contribution, describe the tool, scope, and human
-verification in the pull request; see [AI usage](dev/AI_USAGE.md) for the record
-of this release-preparation session. Contributors remain responsible for the
+verification in the pull request. Contributors remain responsible for the
 accuracy and licensing of submitted material.
 
 By contributing, you agree that your contribution can be distributed under

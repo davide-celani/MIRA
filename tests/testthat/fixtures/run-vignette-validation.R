@@ -1,5 +1,7 @@
 # Validate the installed package and the complete frequentist collection.
-# Rscript --vanilla dev/validate_frequentist_vignettes.R <outside-output-dir>
+# Invoked by test-validation-vignettes.R with MIRA_RUN_VIGNETTE_TESTS=true.
+# Direct use from a source checkout:
+# Rscript --vanilla tests/testthat/fixtures/run-vignette-validation.R <outside-output-dir>
 # Optional: MIRA_RUN_ADVANCED_VIGNETTES=true
 # Optional, separate run: MIRA_RENDER_VIGNETTE_FORMATS=html,docx,pdf
 # MIRA_VALIDATION_LIBRARY asserts the installed MIRA location.
@@ -150,8 +152,7 @@ dir.create(evidence, showWarnings = FALSE)
 utils::write.csv(data.frame(order = seq_along(expected), article = expected,
   source = files), file.path(evidence, "architecture.csv"), row.names = FALSE)
 source_files <- c("DESCRIPTION", "NAMESPACE", list.files("R", full.names = TRUE),
-  files, list.files("tests", recursive = TRUE, full.names = TRUE),
-  "dev/validate_frequentist_vignettes.R")
+  files, list.files("tests", recursive = TRUE, full.names = TRUE))
 source_md5 <- unname(tools::md5sum(source_files))
 utils::write.csv(data.frame(file = source_files, md5 = source_md5),
   file.path(evidence, "validated-source-md5.csv"), row.names = FALSE)

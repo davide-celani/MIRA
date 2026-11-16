@@ -1,5 +1,11 @@
 # MIRA (development version)
 
+- Consolidate development validation into `testthat`, with opt-in Monte Carlo,
+  mutation and complete-vignette profiles, repository metadata checks and a
+  regression for relocated report bundles with figures. Preserve the full-suite
+  session-state audit in `tests/run-validation.R`; remove redundant development
+  examples and historical reports and update documentation and CI references.
+
 - Audit and refine the complete help for `mira_info_long()` and
   `mira_report_freq_long()` against their implementation. Clarify model-switch
   resolution, analysis samples, native engine boundaries, rank uncertainty,
@@ -119,7 +125,7 @@ The concept DOI for all MIRA versions is
 - Added package, citation, and CmdStan smoke-test workflows for GitHub Actions.
 - Added contribution guidance, a project Code of Conduct, and GitHub forms
   for bug reports and feature proposals.
-- Recorded AI assistance during release preparation in `dev/AI_USAGE.md`,
+- Recorded AI assistance during release preparation,
   with human review still pending.
 
 ## Installation and verification fixes

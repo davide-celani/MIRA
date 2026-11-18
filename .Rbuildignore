@@ -9,4 +9,5 @@
 ^tests/run-validation\.R$
 ^paper$
 ^_pkgdown\.yml$
+^pkgdown$
 ^docs$

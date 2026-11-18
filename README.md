@@ -1,4 +1,4 @@
-# MIRA
+# MIRA <img src="man/figures/logo.png" align="right" width="120" alt="" />
 
 **Bayesian Multilevel Inference for Longitudinal Data**
 

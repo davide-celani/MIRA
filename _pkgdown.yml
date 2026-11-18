@@ -1,5 +1,17 @@
+url: https://davide-celani.github.io/MIRA/
+
 template:
   bootstrap: 5
+
+home:
+  sidebar:
+    structure: [project-links, license, community, citation, authors, dev]
+    components:
+      project-links:
+        title: Links
+        text: |
+          - [Browse source code](https://github.com/davide-celani/MIRA)
+          - [Report a bug](https://github.com/davide-celani/MIRA/issues)
 
 articles:
 - title: MIRA

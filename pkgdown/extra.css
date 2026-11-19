@@ -1,0 +1,10 @@
+.template-home img.logo {
+  width: 150px;
+  height: auto;
+}
+
+@media (max-width: 575.98px) {
+  .template-home img.logo {
+    width: 96px;
+  }
+}

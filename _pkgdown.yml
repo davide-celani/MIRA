@@ -2,6 +2,14 @@ url: https://davide-celani.github.io/MIRA/
 
 template:
   bootstrap: 5
+  bslib:
+    base_font:
+      google:
+        family: STIX Two Text
+        wght: "400..700"
+        ital: [0, 1]
+    heading_font: STIX Two Text
+    headings-font-weight: 600
 
 home:
   sidebar:

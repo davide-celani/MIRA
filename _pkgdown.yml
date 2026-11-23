@@ -10,6 +10,24 @@ template:
         ital: [0, 1]
     heading_font: STIX Two Text
     headings-font-weight: 600
+    bg: "#FFFFFF"
+    fg: "#263547"
+    primary: "#415979"
+    secondary: &mira-navy "#30435A"
+    headings-color: *mira-navy
+    link-hover-color: *mira-navy
+    light: &mira-tint "#F2F5F8"
+    border-color: "#DEE5ED"
+    code-color: *mira-navy
+    code-bg: *mira-tint
+    table-striped-bg: *mira-tint
+    navbar-dark-color: "#E8EEF5"
+    navbar-dark-hover-color: white
+    pkgdown-footer-bg: *mira-tint
+
+navbar:
+  bg: secondary
+  type: dark
 
 home:
   sidebar:

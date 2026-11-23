@@ -1,3 +1,13 @@
+.navbar[data-bs-theme="dark"] .nav-text {
+  color: var(--bs-navbar-color);
+}
+
+.navbar[data-bs-theme="dark"] .nav-item.active .nav-link,
+.navbar[data-bs-theme="dark"] .nav-item .nav-link:hover,
+.navbar[data-bs-theme="dark"] .nav-item .nav-link:focus-visible {
+  background-color: var(--bs-primary);
+}
+
 .template-home img.logo {
   width: 150px;
   height: auto;

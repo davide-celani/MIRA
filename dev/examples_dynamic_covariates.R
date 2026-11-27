@@ -18,6 +18,12 @@
 # provare un solo scenario, eseguire interattivamente il relativo blocco.
 # ============================================================
 
+
+
+devtools::load_all()
+
+
+
 if (!file.exists("DESCRIPTION") || !file.exists("dev/data_creation.R")) {
   stop(
     "Eseguire `dev/examples_dynamic_covariates.R` dalla root del package MIRA.",
